@@ -79,6 +79,7 @@ class SearchPanel:
         self._directories: List[str] = []
         self._selected_directory: Optional[str] = None
         self._menu_active = False
+        self._delete_in_progress = False
 
         self._bg_color = Gdk.RGBA()
         self._title_color = Gdk.RGBA()
@@ -130,9 +131,12 @@ class SearchPanel:
 
         self._dir_listbox = Gtk.ListBox.new()
         self._dir_listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self._dir_listbox.set_can_focus(True)
         self._dir_listbox.override_background_color(Gtk.StateFlags.NORMAL, self._bg_color)
-        self._dir_listbox.connect("row-activated", self._on_dir_selected)
+        self._dir_listbox.connect("row-selected", self._on_dir_selected)
         self._dir_listbox.connect("key-press-event", self._on_dir_key_press)
+        self._dir_listbox.connect("focus-in-event", self._on_dir_focus_in)
+        self._dir_listbox.connect("focus-out-event", lambda *_: self._update_separator_focus(False))
         self._dir_scrolled.add(self._dir_listbox)
 
         middle_hbox.pack_start(self._dir_scrolled, False, True, 0)
@@ -153,6 +157,8 @@ class SearchPanel:
         self._listbox.set_activate_on_single_click(False)
         self._listbox.connect("key-press-event", self._on_session_key_press)
         self._listbox.connect("button-press-event", self._on_session_button)
+        self._listbox.connect("focus-in-event", self._on_session_focus_in)
+        self._listbox.connect("focus-out-event", lambda *_: self._update_separator_focus(False))
         self._session_scrolled.add(self._listbox)
 
         middle_hbox.pack_start(self._session_scrolled, True, True, 0)
@@ -178,6 +184,7 @@ class SearchPanel:
             self._dir_color = bg(1.0, 1.0, 1.0, 0.55)
             self._snippet_color = bg(1.0, 1.0, 1.0, 0.40)
             self._separator_rgba = (1, 1, 1, 1.0)
+            self._default_separator_rgba = (1, 1, 1, 1.0)
             self._dot_live = (0.67, 1.0, 0.86, 0.9)
             self._dot_recent = (1.0, 0.78, 0.28, 0.7)
             self._dot_closed = (0.5, 0.5, 0.5, 0.3)
@@ -192,6 +199,7 @@ class SearchPanel:
             self._dir_color = bg(0.0, 0.0, 0.0, 0.55)
             self._snippet_color = bg(0.0, 0.0, 0.0, 0.40)
             self._separator_rgba = (0, 0, 0, 0.20)
+            self._default_separator_rgba = (0, 0, 0, 0.20)
             self._dot_live = (0.0, 0.55, 0.30, 0.85)
             self._dot_recent = (0.80, 0.50, 0.0, 0.75)
             self._dot_closed = (0.55, 0.55, 0.55, 0.4)
@@ -273,8 +281,23 @@ class SearchPanel:
         cr.fill()
         return True
 
+    def _update_separator_focus(self, focused: bool):
+        if focused:
+            self._separator_rgba = (0.67, 1.0, 0.86, 0.9)
+        else:
+            self._separator_rgba = self._default_separator_rgba
+        self._separator.queue_draw()
+
+    def _on_dir_focus_in(self, *args):
+        self._update_separator_focus(True)
+        return False
+
+    def _on_session_focus_in(self, *args):
+        self._update_separator_focus(True)
+        return False
+
     def _on_focus_out(self, *_args):
-        if not self._menu_active:
+        if not self._menu_active and not self._delete_in_progress:
             self.hide()
 
     def load_sessions(self, sessions: List[Session]):
@@ -361,7 +384,9 @@ class SearchPanel:
         else:
             base = self._sessions[:]
 
-        if not query:
+        if query.startswith("/"):
+            self._filtered = []
+        elif not query:
             self._filtered = base[:]
         else:
             scored = []
@@ -376,7 +401,7 @@ class SearchPanel:
             self._filtered = [s for _, s in scored]
 
         is_new_intent = query == "/new" or query.startswith("/new ")
-        if is_new_intent:
+        if is_new_intent and "/open" not in query:
             target_dir = self._sessions[0].directory if self._sessions else os.path.expanduser("~")
             project = os.path.basename(target_dir) or "project"
             new_session = Session(
@@ -390,6 +415,20 @@ class SearchPanel:
                 updated_at=0,
             )
             self._filtered = [new_session] + self._filtered
+
+        is_open_intent = query == "/open" or query.startswith("/open ")
+        if is_open_intent:
+            open_session = Session(
+                id="open-folder",
+                title="Open folder…",
+                directory="",
+                project_name="",
+                status="new",
+                snippet="→ Select a directory to start a new OpenCode session",
+                started_at=0,
+                updated_at=0,
+            )
+            self._filtered = [open_session] + self._filtered
 
         self._selected_index = 0
         self._render()
@@ -535,27 +574,59 @@ class SearchPanel:
         return False
 
     def _on_delete(self, session):
+        self._delete_in_progress = True
+        GLib.timeout_add(60000, lambda: setattr(self, '_delete_in_progress', False) or False)
         if self.on_delete_session:
             self.on_delete_session(session)
 
+    def _do_select(self, session):
+        if session.id == "open-folder":
+            dialog = Gtk.FileChooserDialog(
+                title="Select directory",
+                transient_for=self._window,
+                action=Gtk.FileChooserAction.SELECT_FOLDER,
+            )
+            dialog.add_button("_Cancel", Gtk.ResponseType.CANCEL)
+            dialog.add_button("_Open", Gtk.ResponseType.ACCEPT)
+            def _on_dialog_response(dlg, response):
+                if response == Gtk.ResponseType.ACCEPT:
+                    chosen = dlg.get_filename()
+                    dlg.destroy()
+                    self.hide()
+                    if self.on_select:
+                        self.on_select(Session(
+                            id="new-opencode",
+                            title=os.path.basename(chosen),
+                            directory=chosen,
+                            project_name=os.path.basename(chosen),
+                            status="new",
+                            snippet=f"→ {chosen}",
+                            started_at=0,
+                            updated_at=0,
+                        ))
+                else:
+                    dlg.destroy()
+            dialog.connect("response", _on_dialog_response)
+            dialog.show()
+            return
+        self.hide()
+        if self.on_select:
+            self.on_select(session)
+
     def _on_row_activated(self, _listbox, row):
-        if hasattr(row, "session") and self.on_select:
-            self.hide()
-            self.on_select(row.session)
+        if hasattr(row, "session"):
+            self._do_select(row.session)
 
     def _confirm_selection(self):
         if self._filtered and self._selected_index < len(self._filtered):
             session = self._filtered[self._selected_index]
-            self.hide()
-            if self.on_select:
-                self.on_select(session)
+            self._do_select(session)
 
     def _on_key_press(self, _widget, event):
         keyname = Gdk.keyval_name(event.keyval)
         if keyname == "Tab":
-            self._dir_listbox.grab_focus()
-            if self._dir_listbox.get_row_at_index(0):
-                self._dir_listbox.select_row(self._dir_listbox.get_row_at_index(0))
+            self._window.child_focus(Gtk.DirectionType.TAB_FORWARD)
+            GLib.idle_add(self._focus_dir_listbox)
             return True
         if keyname in ("Down", "KP_Down"):
             self._move_selection(1)
@@ -577,6 +648,24 @@ class SearchPanel:
         elif keyname in ("Page_Down", "KP_Page_Down"):
             self._move_selection(self.MAX_VISIBLE)
             return True
+        elif keyname in ("Delete", "KP_Delete"):
+            if self._filtered and self._selected_index < len(self._filtered):
+                session = self._filtered[self._selected_index]
+                if session.id not in ("new-opencode", "open-folder"):
+                    self._on_delete(session)
+            return True
+        return False
+
+    def _focus_dir_listbox(self):
+        self._dir_listbox.grab_focus()
+        selected = self._dir_listbox.get_selected_row()
+        if selected is None:
+            first = self._dir_listbox.get_row_at_index(0)
+            if first:
+                self._dir_listbox.select_row(first)
+                first.grab_focus()
+        else:
+            selected.grab_focus()
         return False
 
     def _on_dir_key_press(self, _widget, event):
@@ -584,12 +673,57 @@ class SearchPanel:
         if keyname == "Tab":
             self._search_entry.grab_focus()
             return True
+        elif keyname in ("Down", "KP_Down"):
+            self._move_dir_selection(1)
+            return True
+        elif keyname in ("Up", "KP_Up"):
+            self._move_dir_selection(-1)
+            return True
+        return False
+
+    def _move_dir_selection(self, direction):
+        rows = self._dir_listbox.get_children()
+        if not rows:
+            return
+        current = self._dir_listbox.get_selected_row()
+        if current is None or current not in rows:
+            target = rows[0] if direction > 0 else rows[-1]
+        else:
+            idx = list(rows).index(current)
+            new_idx = max(0, min(len(rows) - 1, idx + direction))
+            target = rows[new_idx]
+        self._dir_listbox.select_row(target)
+        target.grab_focus()
+        GLib.idle_add(self._scroll_to_dir_row, target)
+
+    def _scroll_to_dir_row(self, row):
+        adj = self._dir_scrolled.get_vadjustment()
+        if adj is None:
+            return False
+        pos = row.translate_coordinates(self._dir_listbox, 0, 0)
+        if pos is None:
+            return False
+        top = pos[1]
+        bottom = top + row.get_allocation().height
+        visible_top = adj.get_value()
+        visible_bottom = visible_top + adj.get_page_size()
+        if top < visible_top:
+            adj.set_value(top)
+        elif bottom > visible_bottom:
+            adj.set_value(bottom - adj.get_page_size())
         return False
 
     def _on_session_key_press(self, _widget, event):
         keyname = Gdk.keyval_name(event.keyval)
         if keyname == "Tab":
             self._search_entry.grab_focus()
+            return True
+        elif keyname in ("Delete", "KP_Delete"):
+            selected = self._listbox.get_selected_row()
+            if selected and hasattr(selected, "session"):
+                session = selected.session
+                if session.id not in ("new-opencode", "open-folder"):
+                    self._on_delete(session)
             return True
         return False
 
@@ -625,6 +759,7 @@ class SearchPanel:
         row = self._listbox.get_row_at_index(self._selected_index)
         if row:
             self._listbox.select_row(row)
+            row.grab_focus()
             GLib.idle_add(self._scroll_to_row, row)
 
     def _move_selection(self, direction: int):

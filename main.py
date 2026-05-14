@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 import json
 import os
+import fcntl
+import sys
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
@@ -169,7 +171,18 @@ class App:
 
 
 if __name__ == "__main__":
-    import sys, traceback
+    import traceback
+
+    # Single-instance lock
+    LOCK_PATH = os.path.join(CONFIG_DIR, "lock")
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    try:
+        lock_fd = open(LOCK_PATH, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (IOError, OSError):
+        print("opencode-switcher: another instance is already running", flush=True)
+        sys.exit(0)
+
     app = App()
     try:
         app.run()
