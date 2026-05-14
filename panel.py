@@ -242,7 +242,11 @@ class SearchPanel:
         self._window.set_focus(self._search_entry)
         display = Gdk.Display.get_default()
         if isinstance(display, GdkX11.X11Display):
-            self._window.present_with_time(display.get_user_time())
+            win = self._window.get_window()
+            if win is not None:
+                self._window.present_with_time(GdkX11.x11_get_server_time(win))
+            else:
+                self._window.present()
         else:
             self._window.present()
         self._search_entry.grab_focus()
@@ -501,6 +505,9 @@ class SearchPanel:
         self._listbox.show_all()
         if self._filtered:
             self._listbox.select_row(self._listbox.get_row_at_index(0))
+            adj = self._session_scrolled.get_vadjustment()
+            if adj:
+                adj.set_value(0)
 
     def _on_activate(self, _entry):
         self._confirm_selection()
@@ -593,18 +600,37 @@ class SearchPanel:
             return True
         return False
 
+    def _scroll_to_row(self, row):
+        adj = self._session_scrolled.get_vadjustment()
+        if adj is None:
+            return
+        pos = row.translate_coordinates(self._listbox, 0, 0)
+        if pos is None:
+            return
+        top = pos[1]
+        bottom = top + row.get_allocation().height
+        visible_top = adj.get_value()
+        visible_bottom = visible_top + adj.get_page_size()
+        if top < visible_top:
+            adj.set_value(top)
+        elif bottom > visible_bottom:
+            adj.set_value(bottom - adj.get_page_size())
+
     def _update_selection(self):
         n = len(self._filtered)
         if n == 0:
             return
-        self._selected_index = max(0, min(n - 1, self._selected_index))
+        visible_limit = min(n, self.MAX_VISIBLE)
+        self._selected_index = max(0, min(visible_limit - 1, self._selected_index))
         row = self._listbox.get_row_at_index(self._selected_index)
         if row:
             self._listbox.select_row(row)
+            GLib.idle_add(self._scroll_to_row, row)
 
     def _move_selection(self, direction: int):
         n = len(self._filtered)
         if n == 0:
             return
-        self._selected_index = max(0, min(n - 1, self._selected_index + direction))
+        visible_limit = min(n, self.MAX_VISIBLE)
+        self._selected_index = max(0, min(visible_limit - 1, self._selected_index + direction))
         self._update_selection()
