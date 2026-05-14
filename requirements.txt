@@ -1,0 +1,7 @@
+PyGObject>=3.42
+pynput>=1.7
+python-xlib>=0.33
+
+# System packages (apt-get):
+# xdotool
+# gir1.2-ayatanaappindicator3-0.1

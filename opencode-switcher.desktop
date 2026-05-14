@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OpenCode Switcher
+Comment=Search and switch between OpenCode sessions
+Exec=/home/hzb/workfiles/opencode-switcher/run.sh
+Terminal=false
+Categories=Utility;Development;
+Icon=/home/hzb/workfiles/opencode-switcher/opencode-switcher.svg
+X-GNOME-Autostart-enabled=false

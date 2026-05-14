@@ -1,0 +1,23 @@
+=== 2026年 05月 14日 星期四 15:14:51 CST ===
+=== 2026年 05月 14日 星期四 15:17:02 CST ===
+=== 2026年 05月 14日 星期四 15:17:55 CST ===
+/home/hzb/workfiles/opencode-switcher/main.py:116: PyGTKDeprecationWarning: The "flags" argument for dialog construction is deprecated. Please use initializer keywords: modal=True and/or destroy_with_parent=True. See: https://wiki.gnome.org/PyGObject/InitializerDeprecations
+  dialog = Gtk.MessageDialog(
+/home/hzb/workfiles/opencode-switcher/main.py:116: PyGTKDeprecationWarning: The "flags" argument for dialog construction is deprecated. Please use initializer keywords: modal=True and/or destroy_with_parent=True. See: https://wiki.gnome.org/PyGObject/InitializerDeprecations
+  dialog = Gtk.MessageDialog(
+/home/hzb/workfiles/opencode-switcher/main.py:116: PyGTKDeprecationWarning: The "flags" argument for dialog construction is deprecated. Please use initializer keywords: modal=True and/or destroy_with_parent=True. See: https://wiki.gnome.org/PyGObject/InitializerDeprecations
+  dialog = Gtk.MessageDialog(
+/home/hzb/workfiles/opencode-switcher/main.py:116: PyGTKDeprecationWarning: The "flags" argument for dialog construction is deprecated. Please use initializer keywords: modal=True and/or destroy_with_parent=True. See: https://wiki.gnome.org/PyGObject/InitializerDeprecations
+  dialog = Gtk.MessageDialog(
+/home/hzb/workfiles/opencode-switcher/main.py:46: PyGTKDeprecationWarning: The "flags" argument for dialog construction is deprecated. Please use initializer keywords: modal=True and/or destroy_with_parent=True. See: https://wiki.gnome.org/PyGObject/InitializerDeprecations
+  dialog = Gtk.MessageDialog(
+=== 2026年 05月 14日 星期四 15:20:01 CST ===
+/home/hzb/workfiles/opencode-switcher/main.py:116: PyGTKDeprecationWarning: The "flags" argument for dialog construction is deprecated. Please use initializer keywords: modal=True and/or destroy_with_parent=True. See: https://wiki.gnome.org/PyGObject/InitializerDeprecations
+  dialog = Gtk.MessageDialog(
+/home/hzb/workfiles/opencode-switcher/main.py:46: PyGTKDeprecationWarning: The "flags" argument for dialog construction is deprecated. Please use initializer keywords: modal=True and/or destroy_with_parent=True. See: https://wiki.gnome.org/PyGObject/InitializerDeprecations
+  dialog = Gtk.MessageDialog(
+=== 2026年 05月 14日 星期四 15:20:59 CST ===
+/home/hzb/workfiles/opencode-switcher/main.py:116: PyGTKDeprecationWarning: The "flags" argument for dialog construction is deprecated. Please use initializer keywords: modal=True and/or destroy_with_parent=True. See: https://wiki.gnome.org/PyGObject/InitializerDeprecations
+  dialog = Gtk.MessageDialog(
+/home/hzb/workfiles/opencode-switcher/main.py:46: PyGTKDeprecationWarning: The "flags" argument for dialog construction is deprecated. Please use initializer keywords: modal=True and/or destroy_with_parent=True. See: https://wiki.gnome.org/PyGObject/InitializerDeprecations
+  dialog = Gtk.MessageDialog(
