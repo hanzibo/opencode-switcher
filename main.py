@@ -1,4 +1,6 @@
 #!/usr/bin/python3
+import json
+import os
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
@@ -9,10 +11,30 @@ from panel import SearchPanel
 from session_store import get_sessions, delete_session
 from launcher import launch_session, launch_new_session
 
+CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+
+
+def _load_config() -> dict:
+    try:
+        with open(CONFIG_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return {"theme": "dark"}
+
+
+def _save_config(config: dict):
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    with open(CONFIG_PATH, "w") as f:
+        json.dump(config, f)
+
 
 class App:
     def __init__(self):
+        config = _load_config()
+        self._theme = config.get("theme", "dark")
         self._panel = SearchPanel()
+        self._panel.set_theme(self._theme)
         self._hotkey = HotkeyManager()
         self._indicator = self._build_indicator()
 
@@ -33,6 +55,20 @@ class App:
         show_item = Gtk.MenuItem.new_with_label("Show / Hide")
         show_item.connect("activate", lambda *_: GLib.idle_add(self._panel.toggle))
         menu.append(show_item)
+
+        theme_menu = Gtk.Menu.new()
+        dark_item = Gtk.RadioMenuItem.new_with_label(None, "Dark")
+        light_item = Gtk.RadioMenuItem.new_with_label_from_widget(dark_item, "Light")
+        if self._theme == "light":
+            light_item.set_active(True)
+        dark_item.connect("toggled", lambda item: self._on_theme_changed("dark") if item.get_active() else None)
+        light_item.connect("toggled", lambda item: self._on_theme_changed("light") if item.get_active() else None)
+        theme_menu.append(dark_item)
+        theme_menu.append(light_item)
+        theme_menu_item = Gtk.MenuItem.new_with_label("Theme")
+        theme_menu_item.set_submenu(theme_menu)
+        menu.append(theme_menu_item)
+
         menu.append(Gtk.SeparatorMenuItem.new())
         quit_item = Gtk.MenuItem.new_with_label("Quit")
         quit_item.connect("activate", lambda *_: GLib.idle_add(self._confirm_quit))
@@ -42,10 +78,17 @@ class App:
         ind.set_menu(menu)
         return ind
 
+    def _on_theme_changed(self, theme: str):
+        self._theme = theme
+        self._panel.set_theme(theme)
+        config = _load_config()
+        config["theme"] = theme
+        _save_config(config)
+
     def _confirm_quit(self):
         dialog = Gtk.MessageDialog(
             transient_for=None,
-            flags=Gtk.DialogFlags.MODAL,
+            modal=True,
             message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.YES_NO,
             text="Quit OpenCode Switcher?",
@@ -93,7 +136,7 @@ class App:
     def _show_error(self, msg: str):
         dialog = Gtk.MessageDialog(
             transient_for=None,
-            flags=Gtk.DialogFlags.MODAL,
+            modal=True,
             message_type=Gtk.MessageType.ERROR,
             buttons=Gtk.ButtonsType.OK,
             text="Failed to launch session",
@@ -115,7 +158,7 @@ class App:
                 self._panel.load_sessions(sessions)
         dialog = Gtk.MessageDialog(
             transient_for=None,
-            flags=Gtk.DialogFlags.MODAL,
+            modal=True,
             message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.YES_NO,
             text=f'Delete "{session.title}"?',

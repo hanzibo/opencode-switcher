@@ -22,8 +22,9 @@ DB_PATH = os.path.expanduser("~/.local/share/opencode/opencode.db")
 SNIPPET_MAX_LEN = 120
 
 
-def _detect_live_dirs() -> set:
-    dirs: set = set()
+def _detect_live_sessions() -> tuple[set, set]:
+    live_dirs: set = set()
+    live_session_ids: set = set()
     try:
         for entry in os.listdir("/proc"):
             if not entry.isdigit():
@@ -41,12 +42,18 @@ def _detect_live_dirs() -> set:
                     continue
                 cwd = os.readlink(f"/proc/{pid}/cwd")
                 if cwd:
-                    dirs.add(cwd)
+                    live_dirs.add(cwd)
+                parts = raw.split(b"\0")
+                for i, part in enumerate(parts):
+                    if part == b"--session" and i + 1 < len(parts):
+                        sid = parts[i + 1].decode("utf-8", errors="replace").strip()
+                        if sid:
+                            live_session_ids.add(sid)
             except (OSError, IOError):
                 continue
     except FileNotFoundError:
         pass
-    return dirs
+    return live_dirs, live_session_ids
 
 
 def _extract_snippet_text(data_json: str) -> Optional[str]:
@@ -83,7 +90,7 @@ def _extract_snippet_text(data_json: str) -> Optional[str]:
 def get_sessions(limit: int = 100) -> List[Session]:
     if not os.path.isfile(DB_PATH):
         return []
-    conn = sqlite3.connect(DB_PATH, uri=True)
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.execute(
@@ -124,7 +131,7 @@ def get_sessions(limit: int = 100) -> List[Session]:
                 snippet_map[sid] = text
 
         now = time.time() * 1000
-        live_dirs = _detect_live_dirs()
+        live_dirs, live_session_ids = _detect_live_sessions()
         results = []
         for r in rows:
             if r["directory"] and not os.path.isdir(r["directory"]):
@@ -135,8 +142,9 @@ def get_sessions(limit: int = 100) -> List[Session]:
             created = r["time_created"] or 0
             delta = now - updated
             is_recent = delta < 86400_000
+            id_match = sid in live_session_ids
             dir_match = r["directory"] in live_dirs if r["directory"] else False
-            is_live = dir_match and is_recent
+            is_live = id_match or (dir_match and is_recent)
             status = "live" if is_live else ("recent" if is_recent else "closed")
             results.append(Session(
                 id=sid,
@@ -158,7 +166,7 @@ def delete_session(session_id: str) -> Optional[str]:
     if not os.path.isfile(DB_PATH):
         return "Database not found"
     try:
-        conn = sqlite3.connect(DB_PATH, uri=True)
+        conn = sqlite3.connect(DB_PATH)
         try:
             now = int(time.time() * 1000)
             conn.execute("UPDATE session SET time_archived=? WHERE id=?", (now, session_id))

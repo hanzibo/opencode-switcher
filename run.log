@@ -21,3 +21,41 @@
   dialog = Gtk.MessageDialog(
 /home/hzb/workfiles/opencode-switcher/main.py:46: PyGTKDeprecationWarning: The "flags" argument for dialog construction is deprecated. Please use initializer keywords: modal=True and/or destroy_with_parent=True. See: https://wiki.gnome.org/PyGObject/InitializerDeprecations
   dialog = Gtk.MessageDialog(
+=== 2026年 05月 14日 星期四 15:30:24 CST ===
+Traceback (most recent call last):
+  File "/home/hzb/workfiles/opencode-switcher/main.py", line 8, in <module>
+    from panel import SearchPanel
+  File "/home/hzb/workfiles/opencode-switcher/panel.py", line 5, in <module>
+    from session_store import Session
+  File "/home/hzb/workfiles/opencode-switcher/session_store.py", line 161
+    conn = sqlite3.connect(DB_PATH)
+    ^
+IndentationError: expected an indented block after 'try' statement on line 160
+=== 2026年 05月 14日 星期四 15:30:31 CST ===
+Traceback (most recent call last):
+  File "/home/hzb/workfiles/opencode-switcher/main.py", line 8, in <module>
+    from panel import SearchPanel
+  File "/home/hzb/workfiles/opencode-switcher/panel.py", line 5, in <module>
+    from session_store import Session
+  File "/home/hzb/workfiles/opencode-switcher/session_store.py", line 161
+    conn = sqlite3.connect(DB_PATH)
+    ^
+IndentationError: expected an indented block after 'try' statement on line 160
+=== 2026年 05月 14日 星期四 15:31:37 CST ===
+=== 2026年 05月 14日 星期四 15:55:02 CST ===
+=== 2026年 05月 14日 星期四 16:16:35 CST ===
+=== 2026年 05月 14日 星期四 16:36:03 CST ===
+=== 2026年 05月 14日 星期四 16:42:45 CST ===
+=== 2026年 05月 14日 星期四 16:44:32 CST ===
+=== 2026年 05月 14日 星期四 16:45:03 CST ===
+=== 2026年 05月 14日 星期四 16:46:25 CST ===
+=== 2026年 05月 14日 星期四 16:52:18 CST ===
+=== 2026年 05月 14日 星期四 17:11:35 CST ===
+=== 2026年 05月 14日 星期四 17:15:22 CST ===
+=== 2026年 05月 14日 星期四 17:22:21 CST ===
+=== 2026年 05月 14日 星期四 17:32:37 CST ===
+=== 2026年 05月 14日 星期四 17:35:22 CST ===
+=== 2026年 05月 14日 星期四 17:36:14 CST ===
+=== 2026年 05月 14日 星期四 17:38:12 CST ===
+=== 2026年 05月 14日 星期四 17:41:12 CST ===
+=== 2026年 05月 14日 星期四 17:43:01 CST ===

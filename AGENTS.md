@@ -33,8 +33,8 @@ No test/lint/typecheck/build commands exist.
 - **Global hotkey** `Ctrl+Shift+Space` registered via `pynput`.
 - **Launcher** hardcodes `gnome-terminal`. Session launch: `cd <dir> && exec opencode --session <id>`. Uses `xdotool` to activate the new window.
 - **`.desktop` / `.service` files contain absolute paths** — update if repo moves.
-- **`run.sh` hardcodes** `~/.nvm/versions/node/v22.22.1/bin` for the `opencode` CLI.
-- **`__pycache__/` and `run.log` are not gitignored.**
+- **`run.sh`** adds `opencode` to PATH via `nvm.sh`, and rotates `run.log` when >10 MB.
+- **`.gitignore`** covers `__pycache__/`, `run.log`, and `*.pyc`.
 - Session list filters out archived sessions and subagent sessions (`title NOT LIKE '%(@%subagent)%'`).
 - Type `/new` in the search box to create a fresh OpenCode session.
 - Status is "live" if an `opencode` process is running from the same directory and updated < 24h.

@@ -1,6 +1,7 @@
+import gc
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk, GLib, Pango
+from gi.repository import Gtk, Gdk, GLib, Pango, GdkX11
 from typing import Optional, Callable, List, Dict
 from session_store import Session
 import difflib
@@ -63,10 +64,10 @@ def _relative_time(ts_ms: int) -> str:
 
 
 class SearchPanel:
-    PANEL_WIDTH = 880
-    SIDEBAR_WIDTH = 220
+    PANEL_WIDTH = 1320
+    SIDEBAR_WIDTH = 330
     MAX_VISIBLE = 10
-    ROW_HEIGHT = 64
+    ROW_HEIGHT = 96
 
     def __init__(self):
         self.on_select: Optional[Callable[[Session], None]] = None
@@ -79,12 +80,10 @@ class SearchPanel:
         self._selected_directory: Optional[str] = None
         self._menu_active = False
 
-        self._bg_color = Gdk.RGBA(0.102, 0.106, 0.118, 1.0)
-        self._title_color = Gdk.RGBA(0.91, 0.91, 0.91, 1.0)
-        self._dir_color = Gdk.RGBA(1.0, 1.0, 1.0, 0.55)
-        self._snippet_color = Gdk.RGBA(1.0, 1.0, 1.0, 0.40)
-        self._search_color = Gdk.RGBA(0.94, 0.94, 0.94, 1.0)
-        self._selection_color = Gdk.RGBA(0.67, 1.0, 0.86, 0.08)
+        self._bg_color = Gdk.RGBA()
+        self._title_color = Gdk.RGBA()
+        self._dir_color = Gdk.RGBA()
+        self._snippet_color = Gdk.RGBA()
 
         self._window = Gtk.Window.new(Gtk.WindowType.TOPLEVEL)
         self._window.set_title("OpenCode Switcher")
@@ -94,55 +93,31 @@ class SearchPanel:
         self._window.set_keep_above(True)
         self._window.set_skip_taskbar_hint(True)
         self._window.set_skip_pager_hint(True)
-        self._window.set_type_hint(Gdk.WindowTypeHint.UTILITY)
+        # self._window.set_type_hint(Gdk.WindowTypeHint.UTILITY)
         self._window.set_position(Gtk.WindowPosition.NONE)
         self._window.set_accept_focus(True)
         self._window.set_app_paintable(True)
         self._window.connect("draw", self._on_window_draw)
 
         screen = self._window.get_screen()
-        provider = Gtk.CssProvider()
-        provider.load_from_data(b"""
-            window { border: 1px solid rgba(255, 255, 255, 0.08); }
-            #searchEntry {
-                font-size: 26px;
-                padding: 14px 18px;
-                background: transparent;
-                border: none;
-                border-bottom: 1px solid rgba(255, 255, 255, 0.10);
-                caret-color: #f0f0f0;
-            }
-            #searchEntry:focus { outline: none; }
-            #resultLabel {
-                font-family: "JetBrains Mono", "monospace";
-                font-size: 15px;
-                padding: 0;
-            }
-            #dirLabel { font-size: 13px; padding: 0; }
-            #snippetLabel { font-size: 13px; padding: 0; }
-            .row { padding: 10px 16px; }
-            .row:hover { background: rgba(255, 255, 255, 0.04); }
-            .row:selected { background: rgba(170, 255, 220, 0.08); }
-            #emptyLabel { font-size: 15px; padding: 0; }
-            #sideLabel { font-size: 13px; padding: 10px 14px; }
-        """)
+        self._css_provider = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_screen(
-            screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
+            screen, self._css_provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
         )
 
-        main_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
-        main_vbox.override_background_color(Gtk.StateFlags.NORMAL, self._bg_color)
-        main_vbox.set_hexpand(True)
-        main_vbox.set_vexpand(True)
+        self._main_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        self._main_vbox.override_background_color(Gtk.StateFlags.NORMAL, self._bg_color)
+        self._main_vbox.set_hexpand(True)
+        self._main_vbox.set_vexpand(True)
 
         self._search_entry = Gtk.SearchEntry.new()
         self._search_entry.set_name("searchEntry")
         self._search_entry.set_placeholder_text("Search sessions…")
-        self._search_entry.override_color(Gtk.StateFlags.NORMAL, self._search_color)
+        self._search_entry.override_color(Gtk.StateFlags.NORMAL, None)
         self._search_entry.connect("search-changed", self._on_search_changed)
         self._search_entry.connect("activate", self._on_activate)
         self._search_entry.connect("key-press-event", self._on_key_press)
-        main_vbox.pack_start(self._search_entry, False, False, 0)
+        self._main_vbox.pack_start(self._search_entry, False, False, 0)
 
         middle_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
         middle_hbox.set_hexpand(True)
@@ -182,11 +157,71 @@ class SearchPanel:
 
         middle_hbox.pack_start(self._session_scrolled, True, True, 0)
 
-        main_vbox.pack_start(middle_hbox, True, True, 0)
+        self._main_vbox.pack_start(middle_hbox, True, True, 0)
 
-        self._window.add(main_vbox)
+        self._window.add(self._main_vbox)
         self._window.connect("key-press-event", self._on_window_key)
         self._window.connect("focus-out-event", self._on_focus_out)
+
+        self._set_theme("dark")
+
+    def set_theme(self, name: str):
+        self._set_theme(name)
+
+    def _set_theme(self, name: str):
+        self._theme = name
+        bg, fg1, fg2, fg3 = Gdk.RGBA, Gdk.RGBA, Gdk.RGBA, Gdk.RGBA
+        sep = self._separator_rgba if hasattr(self, "_separator_rgba") else (1, 1, 1, 1.0)
+        if name == "dark":
+            self._bg_color = bg(0.102, 0.106, 0.118, 1.0)
+            self._title_color = bg(0.91, 0.91, 0.91, 1.0)
+            self._dir_color = bg(1.0, 1.0, 1.0, 0.55)
+            self._snippet_color = bg(1.0, 1.0, 1.0, 0.40)
+            self._separator_rgba = (1, 1, 1, 1.0)
+            self._dot_live = (0.67, 1.0, 0.86, 0.9)
+            self._dot_recent = (1.0, 0.78, 0.28, 0.7)
+            self._dot_closed = (0.5, 0.5, 0.5, 0.3)
+            vals = dict(
+                window_border="rgba(255,255,255,0.08)", hover_bg="rgba(255,255,255,0.04)",
+                sel_bg="rgba(170,255,220,0.18)", sel_border="rgba(170,255,220,0.5)", search_bg="#c0c0c0",
+                search_fg="#000000", caret="#000000", input_border="rgba(255,255,255,0.10)",
+            )
+        else:
+            self._bg_color = bg(0.95, 0.95, 0.95, 1.0)
+            self._title_color = bg(0.1, 0.1, 0.1, 1.0)
+            self._dir_color = bg(0.0, 0.0, 0.0, 0.55)
+            self._snippet_color = bg(0.0, 0.0, 0.0, 0.40)
+            self._separator_rgba = (0, 0, 0, 0.20)
+            self._dot_live = (0.0, 0.55, 0.30, 0.85)
+            self._dot_recent = (0.80, 0.50, 0.0, 0.75)
+            self._dot_closed = (0.55, 0.55, 0.55, 0.4)
+            vals = dict(
+                window_border="rgba(0,0,0,0.08)", hover_bg="rgba(0,0,0,0.04)",
+                sel_bg="rgba(170,255,220,0.28)", sel_border="rgba(170,255,220,0.6)", search_bg="#e0e0e0",
+                search_fg="#000000", caret="#000000", input_border="rgba(0,0,0,0.10)",
+            )
+        css = (
+            "window { border: 1px solid %(window_border)s; }"
+            "#searchEntry { font-size: 39px; padding: 21px 27px; background: %(search_bg)s;"
+            " color: %(search_fg)s; border: none; border-bottom: 1px solid %(input_border)s;"
+            " caret-color: %(caret)s; }"
+            "#searchEntry:focus { outline: none; }"
+            "#resultLabel { font-family: \"JetBrains Mono\",\"monospace\"; font-size: 22px; padding: 0; }"
+            "#dirLabel { font-size: 19px; padding: 0; }"
+            "#snippetLabel { font-size: 19px; padding: 0; }"
+            ".row { padding: 15px 24px; }"
+            ".row:hover { background: %(hover_bg)s; }"
+            ".row:selected { background: %(sel_bg)s; border-left: 3px solid %(sel_border)s; }"
+            "#emptyLabel { font-size: 22px; padding: 0; }"
+            "#sideLabel { font-size: 19px; padding: 15px 21px; }"
+        ) % vals
+        self._css_provider.load_from_data(css.encode("utf-8"))
+        for w in (self._main_vbox, self._dir_scrolled, self._dir_listbox,
+                  self._session_scrolled, self._listbox):
+            w.override_background_color(Gtk.StateFlags.NORMAL, self._bg_color)
+        self._separator.queue_draw()
+        if self._window.is_visible():
+            self._build_all()
 
     def toggle(self):
         if self._window.is_visible():
@@ -204,12 +239,18 @@ class SearchPanel:
         self._window.move(x, y)
         self._build_all()
         self._window.show_all()
-        self._window.present()
+        self._window.set_focus(self._search_entry)
+        display = Gdk.Display.get_default()
+        if isinstance(display, GdkX11.X11Display):
+            self._window.present_with_time(display.get_user_time())
+        else:
+            self._window.present()
         self._search_entry.grab_focus()
 
     def hide(self):
         self._window.hide()
         self._search_entry.set_text("")
+        gc.collect()
 
     def _on_window_draw(self, widget, cr):
         cr.set_source_rgba(
@@ -223,7 +264,7 @@ class SearchPanel:
 
     def _on_separator_draw(self, widget, cr):
         alloc = widget.get_allocation()
-        cr.set_source_rgba(1, 1, 1, 0.06)
+        cr.set_source_rgba(*self._separator_rgba)
         cr.rectangle(alloc.x, alloc.y, alloc.width, alloc.height)
         cr.fill()
         return True
@@ -359,6 +400,7 @@ class SearchPanel:
     def _render(self):
         for child in self._listbox.get_children():
             self._listbox.remove(child)
+        gc.collect()
 
         self._update_all_count()
 
@@ -372,8 +414,8 @@ class SearchPanel:
             label = Gtk.Label.new("No matching sessions")
             label.set_name("emptyLabel")
             label.set_halign(Gtk.Align.CENTER)
-            label.set_margin_top(20)
-            label.set_margin_bottom(20)
+            label.set_margin_top(30)
+            label.set_margin_bottom(30)
             label.override_color(Gtk.StateFlags.NORMAL, self._snippet_color)
             row.add(label)
             self._listbox.add(row)
@@ -385,30 +427,35 @@ class SearchPanel:
             row.get_style_context().add_class("row")
             row.session = session
 
-            hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 10)
-            hbox.set_margin_start(14)
-            hbox.set_margin_end(14)
-            hbox.set_margin_top(8)
-            hbox.set_margin_bottom(8)
+            hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 15)
+            hbox.set_margin_start(21)
+            hbox.set_margin_end(21)
+            hbox.set_margin_top(12)
+            hbox.set_margin_bottom(12)
 
             dot = Gtk.DrawingArea.new()
-            dot.set_size_request(8, 8)
+            dot.set_size_request(12, 12)
             dot.set_valign(Gtk.Align.CENTER)
-            is_active = session.status in ("live", "recent")
-            def on_dot_draw(w, cr, base_active=is_active):
+            status = session.status
+            dot_live = self._dot_live
+            dot_recent = self._dot_recent
+            dot_closed = self._dot_closed
+            def on_dot_draw(w, cr, st=status, dl=dot_live, dr=dot_recent, dc=dot_closed):
                 row = w.get_parent().get_parent()
                 is_sel = isinstance(row, Gtk.ListBoxRow) and bool(row.get_state_flags() & Gtk.StateFlags.SELECTED)
-                if base_active:
-                    cr.set_source_rgba(0.67, 1.0, 0.86, 1.0 if is_sel else 0.9)
+                if st == "live":
+                    cr.set_source_rgba(dl[0], dl[1], dl[2], 1.0 if is_sel else dl[3])
+                elif st == "recent":
+                    cr.set_source_rgba(dr[0], dr[1], dr[2], 0.9 if is_sel else dr[3])
                 else:
-                    cr.set_source_rgba(0.5, 0.5, 0.5, 0.6 if is_sel else 0.3)
-                cr.arc(4, 4, 3.5, 0, 6.2832)
+                    cr.set_source_rgba(dc[0], dc[1], dc[2], 0.6 if is_sel else dc[3])
+                cr.arc(6, 6, 5.25, 0, 6.2832)
                 cr.fill()
                 return True
             dot.connect("draw", on_dot_draw)
             hbox.pack_start(dot, False, False, 0)
 
-            vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 3)
+            vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
             vbox.set_hexpand(True)
 
             title_label = Gtk.Label.new()
@@ -444,7 +491,7 @@ class SearchPanel:
             time_label.set_name("snippetLabel")
             time_label.set_text(_relative_time(session.updated_at))
             time_label.set_valign(Gtk.Align.START)
-            time_label.set_margin_top(2)
+            time_label.set_margin_top(3)
             time_label.override_color(Gtk.StateFlags.NORMAL, self._snippet_color)
             hbox.pack_start(time_label, False, False, 0)
 

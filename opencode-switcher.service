@@ -3,7 +3,7 @@ Description=OpenCode Session Switcher
 After=graphical-session.target
 
 [Service]
-ExecStart=/usr/bin/python3 /home/hzb/workfiles/opencode-switcher/main.py
+ExecStart=/home/hzb/workfiles/opencode-switcher/run.sh
 Restart=on-failure
 RestartSec=3
 

@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
-export PATH="$HOME/.nvm/versions/node/v22.22.1/bin:$PATH"
-LOG="$HOME/workfiles/opencode-switcher/run.log"
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+LOG="$SCRIPT_DIR/run.log"
+
+# Rotate log if larger than 10 MB
+if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 10485760 ]; then
+    mv "$LOG" "$LOG.old"
+fi
+
+# Source nvm so opencode CLI is in PATH
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
 echo "=== $(date) ===" >> "$LOG"
-/usr/bin/python3 "$HOME/workfiles/opencode-switcher/main.py" >> "$LOG" 2>&1
+/usr/bin/python3 "$SCRIPT_DIR/main.py" >> "$LOG" 2>&1
