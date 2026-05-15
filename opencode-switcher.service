@@ -3,7 +3,7 @@ Description=OpenCode Session Switcher
 After=graphical-session.target
 
 [Service]
-ExecStart=/home/hzb/workfiles/opencode-switcher/run.sh
+ExecStart=__INSTALL_DIR__/run.sh
 Restart=on-failure
 RestartSec=3
 
