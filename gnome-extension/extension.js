@@ -83,16 +83,13 @@ function notifyImage() {
 function focusWindow(query) {
     try {
         let queryLower = query.toLowerCase();
-        let actors = global.get_window_actors() || [];
-        for (let actor of actors) {
-            let win = actor.meta_window;
-            if (win) {
-                let wmClass = (win.get_wm_class() || "").toLowerCase();
-                let title = (win.get_title() || "").toLowerCase();
-                if (wmClass.includes(queryLower) || title.includes(queryLower)) {
-                    win.activate(global.get_current_time());
-                    return true;
-                }
+        let windows = global.display.list_all_windows() || [];
+        for (let win of windows) {
+            let wmClass = (win.get_wm_class() || "").toLowerCase();
+            let title = (win.get_title() || "").toLowerCase();
+            if (wmClass.includes(queryLower) || title.includes(queryLower)) {
+                win.activate(global.get_current_time());
+                return true;
             }
         }
     } catch (e) {
@@ -100,6 +97,8 @@ function focusWindow(query) {
     }
     return false;
 }
+
+let isInternalWrite = false;
 
 function setupFocusMonitor() {
     try {
@@ -112,17 +111,23 @@ function setupFocusMonitor() {
         focusMonitor = file.monitor_file(Gio.FileMonitorFlags.NONE, null);
         focusMonitor.connect('changed', (mon, fileObj, otherFile, eventType) => {
             if (eventType === Gio.FileMonitorEvent.CHANGES_DONE_HINT || eventType === Gio.FileMonitorEvent.CHANGED) {
+                if (isInternalWrite) {
+                    isInternalWrite = false;
+                    return;
+                }
                 try {
                     let [ok, bytes] = file.load_contents(null);
                     if (ok && bytes instanceof Uint8Array) {
                         let content = new TextDecoder().decode(bytes).trim();
                         if (content) {
                             focusWindow(content);
+                            isInternalWrite = true;
                             GLib.file_set_contents(FOCUS_REQUEST_PATH, '');
                         }
                     }
                 } catch (e) {
                     console.error('opencode-switcher: focus read error: ' + e);
+                    isInternalWrite = false;
                 }
             }
         });
@@ -130,6 +135,7 @@ function setupFocusMonitor() {
         console.error('opencode-switcher: focus monitor setup error: ' + e);
     }
 }
+
 
 export default class ClipboardMonitor {
     enable() {
