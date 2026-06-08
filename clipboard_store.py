@@ -1,0 +1,223 @@
+import json
+import os
+import subprocess
+import time
+import hashlib
+from dataclasses import dataclass, asdict
+from typing import Optional, List
+from utils import is_wayland
+
+CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
+CLIPBOARD_PATH = os.path.join(CONFIG_DIR, "clipboard_history.json")
+PROMPTS_PATH = os.path.join(CONFIG_DIR, "prompts.json")
+MAX_CLIPBOARD = 150
+
+
+def _content_hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+@dataclass
+class ClipboardItem:
+    text: str
+    timestamp: int
+    hash: str
+    type: str = "text"
+    image_path: Optional[str] = None
+
+
+@dataclass
+class Prompt:
+    title: str
+    text: str
+    timestamp: int
+
+
+class ClipboardStore:
+    def __init__(self):
+        self._items: List[ClipboardItem] = []
+        self._last_written_hash: Optional[str] = None
+        self._load()
+
+    def _load(self):
+        if not os.path.isfile(CLIPBOARD_PATH):
+            return
+        try:
+            with open(CLIPBOARD_PATH) as f:
+                data = json.load(f)
+            self._items = [ClipboardItem(**d) for d in data[-MAX_CLIPBOARD:]]
+        except (json.JSONDecodeError, TypeError):
+            self._items = []
+
+    def _save(self):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CLIPBOARD_PATH, "w") as f:
+            json.dump([asdict(i) for i in self._items], f)
+
+    def add(self, text: str):
+        if not text.strip():
+            return
+        h = _content_hash(text)
+        if h == self._last_written_hash:
+            return
+        if self._items and self._items[-1].hash == h:
+            return
+        self._items.append(ClipboardItem(text=text, timestamp=int(time.time() * 1000), hash=h))
+        if len(self._items) > MAX_CLIPBOARD:
+            self._items = self._items[-MAX_CLIPBOARD:]
+        self._save()
+
+    def add_image(self, image_data: bytes):
+        if not image_data:
+            return
+        h = hashlib.sha256(image_data).hexdigest()[:16]
+        if h == self._last_written_hash:
+            return
+        if self._items and self._items[-1].hash == h:
+            return
+        
+        img_dir = os.path.join(CONFIG_DIR, "images")
+        os.makedirs(img_dir, exist_ok=True)
+        img_path = os.path.join(img_dir, f"{h}.png")
+        
+        if not os.path.exists(img_path):
+            try:
+                with open(img_path, "wb") as f:
+                    f.write(image_data)
+            except Exception:
+                return
+                
+        self._items.append(ClipboardItem(
+            text="[Image]",
+            timestamp=int(time.time() * 1000),
+            hash=h,
+            type="image",
+            image_path=img_path
+        ))
+        if len(self._items) > MAX_CLIPBOARD:
+            self._items = self._items[-MAX_CLIPBOARD:]
+        self._save()
+        
+        # Notify UI by writing marker
+        cache_dir = os.path.expanduser("~/.cache/opencode-switcher")
+        marker_path = os.path.join(cache_dir, "clipboard.updated")
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            with open(marker_path, "w") as f:
+                f.write(str(int(time.time() * 1000)))
+        except Exception:
+            pass
+
+    def delete(self, index: int):
+        if 0 <= index < len(self._items):
+            self._items.pop(index)
+            self._save()
+
+    def clear_all(self):
+        self._items.clear()
+        self._save()
+
+    def get_all(self) -> List[ClipboardItem]:
+        return list(self._items)
+
+    def reload(self):
+        self._load()
+
+    def mark_written(self, text: str, item_hash: Optional[str] = None):
+        h = item_hash if item_hash else _content_hash(text)
+        self._last_written_hash = h
+        # Write to cache file for the GNOME extension to read
+        cache_dir = os.path.expanduser("~/.cache/opencode-switcher")
+        hash_path = os.path.join(cache_dir, "last_written_hash")
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            with open(hash_path, "w") as f:
+                f.write(h)
+        except Exception:
+            pass
+
+
+class PromptStore:
+    def __init__(self):
+        self._prompts: List[Prompt] = []
+        self._load()
+
+    def _load(self):
+        if not os.path.isfile(PROMPTS_PATH):
+            return
+        try:
+            with open(PROMPTS_PATH) as f:
+                data = json.load(f)
+            self._prompts = [Prompt(**d) for d in data]
+        except (json.JSONDecodeError, TypeError):
+            self._prompts = []
+
+    def _save(self):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(PROMPTS_PATH, "w") as f:
+            json.dump([asdict(p) for p in self._prompts], f)
+
+    def create(self, title: str, text: str):
+        self._prompts.append(Prompt(title=title, text=text, timestamp=int(time.time() * 1000)))
+        self._save()
+
+    def update(self, index: int, title: str, text: str):
+        if 0 <= index < len(self._prompts):
+            self._prompts[index] = Prompt(title=title, text=text, timestamp=int(time.time() * 1000))
+            self._save()
+
+    def delete(self, index: int):
+        if 0 <= index < len(self._prompts):
+            self._prompts.pop(index)
+            self._save()
+
+    def get_all(self) -> List[Prompt]:
+        return list(self._prompts)
+
+    def reload(self):
+        self._load()
+
+
+def _capture_image() -> Optional[bytes]:
+    if is_wayland():
+        try:
+            types = subprocess.check_output(["wl-paste", "--list-types"], stderr=subprocess.DEVNULL, timeout=0.5).decode("utf-8", errors="ignore")
+            if "image/png" in types:
+                res = subprocess.run(["wl-paste", "--type", "image/png"], capture_output=True, timeout=1)
+                if res.returncode == 0 and res.stdout:
+                    return res.stdout
+        except Exception:
+            pass
+    else:
+        try:
+            targets = subprocess.check_output(["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"], stderr=subprocess.DEVNULL, timeout=0.5).decode("utf-8", errors="ignore")
+            if "image/png" in targets:
+                res = subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", "-o"], capture_output=True, timeout=1)
+                if res.returncode == 0 and res.stdout:
+                    return res.stdout
+        except Exception:
+            pass
+    return None
+
+
+def _clipboard_cmd() -> list:
+    if is_wayland():
+        return ["wl-paste"]
+    return ["xclip", "-o", "-selection", "clipboard"]
+
+
+def capture_clipboard_once(store: ClipboardStore):
+    try:
+        image_data = _capture_image()
+        if image_data:
+            store.add_image(image_data)
+            return
+
+        result = subprocess.run(_clipboard_cmd(), capture_output=True, timeout=1)
+        text = result.stdout.decode("utf-8", errors="replace").strip()
+        if text:
+            store.add(text)
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass

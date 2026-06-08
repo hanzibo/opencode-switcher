@@ -1,12 +1,18 @@
 import gc
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk, GLib, Pango, GdkX11
+from gi.repository import Gtk, Gdk, GLib, Pango
+try:
+    from gi.repository import GdkX11
+except ImportError:
+    GdkX11 = None
 from typing import Optional, Callable, List, Dict
 from session_store import Session
+from clipboard_panel import ClipboardPanel
 import difflib
 import os
 import time
+from utils import relative_time, is_wayland
 
 
 def _get_active_monitor_geometry():
@@ -41,26 +47,7 @@ def _fuzzy_score(query: str, text: str) -> float:
     return ratio
 
 
-def _relative_time(ts_ms: int) -> str:
-    if not ts_ms:
-        return ""
-    delta = time.time() * 1000 - ts_ms
-    if delta < 0:
-        return "now"
-    secs = delta / 1000
-    if secs < 60:
-        return "now"
-    mins = secs / 60
-    if mins < 60:
-        return f"{int(mins)}m ago"
-    hours = mins / 60
-    if hours < 24:
-        return f"{int(hours)}h ago"
-    days = hours / 24
-    if days < 7:
-        return f"{int(days)}d ago"
-    weeks = days / 7
-    return f"{int(weeks)}w ago"
+
 
 
 class SearchPanel:
@@ -73,6 +60,8 @@ class SearchPanel:
         self.on_select: Optional[Callable[[Session], None]] = None
         self.on_open: Optional[Callable[[], None]] = None
         self.on_delete_session: Optional[Callable[[Session], None]] = None
+        self.on_rename_session: Optional[Callable[[str, str], None]] = None
+        self.on_launch_pure: Optional[Callable[[Session], None]] = None
         self._sessions: List[Session] = []
         self._filtered: List[Session] = []
         self._selected_index = 0
@@ -80,6 +69,11 @@ class SearchPanel:
         self._selected_directory: Optional[str] = None
         self._menu_active = False
         self._delete_in_progress = False
+        self._dialog_active = False
+        self._show_time = 0.0
+        self._active_tab = 0
+        self._clipboard_panel: Optional[ClipboardPanel] = None
+        self._tab_bar = None
 
         self._bg_color = Gdk.RGBA()
         self._title_color = Gdk.RGBA()
@@ -88,13 +82,13 @@ class SearchPanel:
 
         self._window = Gtk.Window.new(Gtk.WindowType.TOPLEVEL)
         self._window.set_title("OpenCode Switcher")
-        self._window.set_default_size(self.PANEL_WIDTH, 1)
+        self._window.set_default_size(self.PANEL_WIDTH, self.MAX_VISIBLE * self.ROW_HEIGHT + 60)
         self._window.set_resizable(False)
         self._window.set_decorated(False)
         self._window.set_keep_above(True)
         self._window.set_skip_taskbar_hint(True)
         self._window.set_skip_pager_hint(True)
-        # self._window.set_type_hint(Gdk.WindowTypeHint.UTILITY)
+        self._window.set_type_hint(Gdk.WindowTypeHint.UTILITY)
         self._window.set_position(Gtk.WindowPosition.NONE)
         self._window.set_accept_focus(True)
         self._window.set_app_paintable(True)
@@ -111,11 +105,33 @@ class SearchPanel:
         self._main_vbox.set_hexpand(True)
         self._main_vbox.set_vexpand(True)
 
+        self._tab_bar = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
+        self._tab_bar.set_can_focus(False)
+        self._tab_labels = []
+        for title in ["Opencode Sessions", "Clipboard"]:
+            eb = Gtk.EventBox.new()
+            eb.set_can_focus(False)
+            lbl = Gtk.Label.new(title)
+            lbl.set_can_focus(False)
+            lbl.set_name("tabLabel")
+            lbl.set_margin_start(16)
+            lbl.set_margin_end(16)
+            lbl.set_margin_top(8)
+            lbl.set_margin_bottom(8)
+            eb.add(lbl)
+            self._tab_labels.append(lbl)
+            self._tab_bar.pack_start(eb, True, True, 0)
+        self._tab_bar.get_children()[0].connect("button-press-event", lambda *_: self._switch_tab(0))
+        self._tab_bar.get_children()[1].connect("button-press-event", lambda *_: self._switch_tab(1))
+        self._tab_bar.get_children()[0].get_style_context().add_class("tab-active")
+        self._tab_bar.get_children()[1].get_style_context().add_class("tab-inactive")
+        self._main_vbox.pack_start(self._tab_bar, False, False, 0)
+
         self._search_entry = Gtk.SearchEntry.new()
         self._search_entry.set_name("searchEntry")
         self._search_entry.set_placeholder_text("Search sessions…")
         self._search_entry.override_color(Gtk.StateFlags.NORMAL, None)
-        self._search_entry.connect("search-changed", self._on_search_changed)
+        self._search_changed_id = self._search_entry.connect("search-changed", self._on_search_changed)
         self._search_entry.connect("activate", self._on_activate)
         self._search_entry.connect("key-press-event", self._on_key_press)
         self._main_vbox.pack_start(self._search_entry, False, False, 0)
@@ -163,7 +179,10 @@ class SearchPanel:
 
         middle_hbox.pack_start(self._session_scrolled, True, True, 0)
 
-        self._main_vbox.pack_start(middle_hbox, True, True, 0)
+        self._content_stack = Gtk.Stack.new()
+        self._content_stack.set_transition_type(Gtk.StackTransitionType.NONE)
+        self._content_stack.add_named(middle_hbox, "sessions")
+        self._main_vbox.pack_start(self._content_stack, True, True, 0)
 
         self._window.add(self._main_vbox)
         self._window.connect("key-press-event", self._on_window_key)
@@ -179,57 +198,132 @@ class SearchPanel:
         bg, fg1, fg2, fg3 = Gdk.RGBA, Gdk.RGBA, Gdk.RGBA, Gdk.RGBA
         sep = self._separator_rgba if hasattr(self, "_separator_rgba") else (1, 1, 1, 1.0)
         if name == "dark":
-            self._bg_color = bg(0.102, 0.106, 0.118, 1.0)
-            self._title_color = bg(0.91, 0.91, 0.91, 1.0)
-            self._dir_color = bg(1.0, 1.0, 1.0, 0.55)
-            self._snippet_color = bg(1.0, 1.0, 1.0, 0.40)
-            self._separator_rgba = (1, 1, 1, 1.0)
-            self._default_separator_rgba = (1, 1, 1, 1.0)
-            self._dot_live = (0.67, 1.0, 0.86, 0.9)
-            self._dot_recent = (1.0, 0.78, 0.28, 0.7)
-            self._dot_closed = (0.5, 0.5, 0.5, 0.3)
+            self._bg_color = bg(0.075, 0.078, 0.090, 1.0)
+            self._title_color = bg(0.96, 0.96, 0.97, 1.0)
+            self._dir_color = bg(0.58, 0.64, 0.72, 1.0)
+            self._snippet_color = bg(0.58, 0.64, 0.72, 0.70)
+            self._separator_rgba = (1, 1, 1, 0.08)
+            self._default_separator_rgba = (1, 1, 1, 0.08)
+            self._dot_live = (0.063, 0.725, 0.506, 0.9)
+            self._dot_recent = (0.960, 0.620, 0.043, 0.8)
+            self._dot_closed = (0.392, 0.455, 0.545, 0.5)
             vals = dict(
-                window_border="rgba(255,255,255,0.08)", hover_bg="rgba(255,255,255,0.04)",
-                sel_bg="rgba(170,255,220,0.18)", sel_border="rgba(170,255,220,0.5)", search_bg="#c0c0c0",
-                search_fg="#000000", caret="#000000", input_border="rgba(255,255,255,0.10)",
+                window_border="rgba(255,255,255,0.06)", hover_bg="rgba(255,255,255,0.04)",
+                sel_bg="rgba(99,102,241,0.12)", sel_border="#6366f1", search_bg="#1c1d21",
+                search_fg="#f5f5f7", caret="#6366f1", input_border="rgba(255,255,255,0.08)",
+                tab_fg="rgba(255,255,255,0.5)", tab_active_fg="#ffffff",
             )
         else:
-            self._bg_color = bg(0.95, 0.95, 0.95, 1.0)
-            self._title_color = bg(0.1, 0.1, 0.1, 1.0)
-            self._dir_color = bg(0.0, 0.0, 0.0, 0.55)
-            self._snippet_color = bg(0.0, 0.0, 0.0, 0.40)
-            self._separator_rgba = (0, 0, 0, 0.20)
-            self._default_separator_rgba = (0, 0, 0, 0.20)
-            self._dot_live = (0.0, 0.55, 0.30, 0.85)
-            self._dot_recent = (0.80, 0.50, 0.0, 0.75)
-            self._dot_closed = (0.55, 0.55, 0.55, 0.4)
+            self._bg_color = bg(0.965, 0.973, 0.980, 1.0)
+            self._title_color = bg(0.09, 0.09, 0.11, 1.0)
+            self._dir_color = bg(0.39, 0.45, 0.55, 1.0)
+            self._snippet_color = bg(0.39, 0.45, 0.55, 0.70)
+            self._separator_rgba = (0, 0, 0, 0.08)
+            self._default_separator_rgba = (0, 0, 0, 0.08)
+            self._dot_live = (0.020, 0.588, 0.412, 0.85)
+            self._dot_recent = (0.850, 0.467, 0.024, 0.75)
+            self._dot_closed = (0.580, 0.639, 0.722, 0.4)
             vals = dict(
-                window_border="rgba(0,0,0,0.08)", hover_bg="rgba(0,0,0,0.04)",
-                sel_bg="rgba(170,255,220,0.28)", sel_border="rgba(170,255,220,0.6)", search_bg="#e0e0e0",
-                search_fg="#000000", caret="#000000", input_border="rgba(0,0,0,0.10)",
+                window_border="rgba(0,0,0,0.06)", hover_bg="rgba(0,0,0,0.03)",
+                sel_bg="rgba(79,70,229,0.08)", sel_border="#4f46e5", search_bg="#ffffff",
+                search_fg="#0f172a", caret="#4f46e5", input_border="rgba(0,0,0,0.08)",
+                tab_fg="rgba(15,23,42,0.55)", tab_active_fg="#0f172a",
             )
         css = (
             "window { border: 1px solid %(window_border)s; }"
-            "#searchEntry { font-size: 39px; padding: 21px 27px; background: %(search_bg)s;"
-            " color: %(search_fg)s; border: none; border-bottom: 1px solid %(input_border)s;"
-            " caret-color: %(caret)s; }"
-            "#searchEntry:focus { outline: none; }"
-            "#resultLabel { font-family: \"JetBrains Mono\",\"monospace\"; font-size: 22px; padding: 0; }"
-            "#dirLabel { font-size: 19px; padding: 0; }"
-            "#snippetLabel { font-size: 19px; padding: 0; }"
-            ".row { padding: 15px 24px; }"
+            "#searchEntry { font-size: 24px; padding: 12px 16px; background: %(search_bg)s;"
+            " color: %(search_fg)s; border: 1px solid %(input_border)s; border-radius: 8px;"
+            " caret-color: %(caret)s; margin: 16px 20px 10px 20px; }"
+            "#searchEntry:focus { border-color: %(sel_border)s; }"
+            "#resultLabel { font-family: \"JetBrains Mono\",\"monospace\"; font-size: 20px; padding: 0; }"
+            "#dirLabel { font-size: 16px; padding: 0; }"
+            "#snippetLabel { font-size: 16px; padding: 0; }"
+            ".row { padding: 12px 18px; border-radius: 6px; margin: 2px 10px; border-left: 4px solid transparent; }"
             ".row:hover { background: %(hover_bg)s; }"
-            ".row:selected { background: %(sel_bg)s; border-left: 3px solid %(sel_border)s; }"
-            "#emptyLabel { font-size: 22px; padding: 0; }"
-            "#sideLabel { font-size: 19px; padding: 15px 21px; }"
+            ".row:selected { background: %(sel_bg)s; border-left: 4px solid %(sel_border)s; }"
+            "#emptyLabel { font-size: 20px; padding: 0; }"
+            "#sideLabel { font-size: 17px; padding: 12px 18px; }"
+            "#tabLabel { font-size: 16px; font-weight: bold; padding: 12px 24px; color: %(tab_fg)s; }"
+            ".tab-active { background: transparent; border-bottom: 3px solid %(sel_border)s; }"
+            ".tab-active #tabLabel { color: %(tab_active_fg)s; }"
+            ".tab-inactive { background: transparent; border-bottom: 3px solid transparent; }"
+            ".tab-inactive:hover { background: %(hover_bg)s; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self._main_vbox, self._dir_scrolled, self._dir_listbox,
                   self._session_scrolled, self._listbox):
             w.override_background_color(Gtk.StateFlags.NORMAL, self._bg_color)
+        if self._tab_bar:
+            for child in self._tab_bar.get_children():
+                child.override_background_color(Gtk.StateFlags.NORMAL, self._bg_color)
         self._separator.queue_draw()
+        if self._clipboard_panel:
+            self._clipboard_panel.set_theme(name)
         if self._window.is_visible():
             self._build_all()
+
+    def set_clipboard_panel(self, panel: ClipboardPanel, clip_store, prompt_store):
+        self._clipboard_panel = panel
+        self._clip_store = clip_store
+        self._prompt_store = prompt_store
+        self._content_stack.add_named(panel, "clipboard")
+        if self._theme:
+            panel.set_theme(self._theme)
+        panel.on_dialog_shown = self._on_clip_dialog_shown
+        panel.on_dialog_hidden = self._on_clip_dialog_hidden
+        panel.on_menu_shown = self._on_clip_menu_shown
+        panel.on_menu_hidden = self._on_clip_menu_hidden
+
+    def _on_clip_dialog_shown(self):
+        self._dialog_active = True
+        self._menu_active = False
+
+    def _on_clip_dialog_hidden(self):
+        self._dialog_active = True
+        GLib.timeout_add(3000, lambda: setattr(self, '_dialog_active', False) or False)
+
+    def _on_clip_menu_shown(self):
+        self._menu_active = True
+
+    def _on_clip_menu_hidden(self):
+        self._menu_active = False
+
+    def _switch_tab(self, index: int):
+        if index == self._active_tab:
+            return
+        self._active_tab = index
+        for i, child in enumerate(self._tab_bar.get_children()):
+            ctx = child.get_style_context()
+            if i == index:
+                ctx.add_class("tab-active")
+                ctx.remove_class("tab-inactive")
+            else:
+                ctx.remove_class("tab-active")
+                ctx.add_class("tab-inactive")
+        self._show_time = time.time()
+
+        # Temporarily block search-changed signal to avoid intermediate filtering/rendering
+        self._search_entry.handler_block(self._search_changed_id)
+        try:
+            if self._search_entry.get_text() != "":
+                self._search_entry.set_text("")
+
+            if index == 0:
+                self._search_entry.set_placeholder_text("Search sessions…")
+                self._build_all()
+                self._content_stack.set_visible_child_name("sessions")
+            else:
+                self._search_entry.set_placeholder_text("Filter clipboard…")
+                if self._clipboard_panel:
+                    self._clipboard_panel.reset_filter()
+                    self._clipboard_panel.load_cached()
+                self._content_stack.set_visible_child_name("clipboard")
+                if self._clipboard_panel and not is_wayland():
+                    self._clipboard_panel.load_data()
+        finally:
+            self._search_entry.handler_unblock(self._search_changed_id)
+
+        self._search_entry.grab_focus()
 
     def toggle(self):
         if self._window.is_visible():
@@ -238,18 +332,25 @@ class SearchPanel:
             self.show()
 
     def show(self):
-        if self.on_open:
-            self.on_open()
+        self._show_time = time.time()
+        if self._active_tab == 0:
+            if self.on_open:
+                self.on_open()
+            self._build_all()
+        elif self._clipboard_panel:
+            if is_wayland():
+                self._clipboard_panel.load_cached()
+            else:
+                self._clipboard_panel.load_data()
 
         mx, my, mw, mh = _get_active_monitor_geometry()
         x = mx + (mw - self.PANEL_WIDTH) // 2
         y = my + int(mh * 0.18)
         self._window.move(x, y)
-        self._build_all()
         self._window.show_all()
         self._window.set_focus(self._search_entry)
         display = Gdk.Display.get_default()
-        if isinstance(display, GdkX11.X11Display):
+        if GdkX11 is not None and isinstance(display, GdkX11.X11Display):
             win = self._window.get_window()
             if win is not None:
                 self._window.present_with_time(GdkX11.x11_get_server_time(win))
@@ -258,6 +359,9 @@ class SearchPanel:
         else:
             self._window.present()
         self._search_entry.grab_focus()
+
+    def is_visible(self) -> bool:
+        return self._window.is_visible()
 
     def hide(self):
         self._window.hide()
@@ -297,8 +401,11 @@ class SearchPanel:
         return False
 
     def _on_focus_out(self, *_args):
-        if not self._menu_active and not self._delete_in_progress:
-            self.hide()
+        if self._menu_active or self._delete_in_progress or self._dialog_active:
+            return
+        if time.time() - self._show_time < 0.5:
+            return
+        self.hide()
 
     def load_sessions(self, sessions: List[Session]):
         self._sessions = sessions
@@ -376,6 +483,11 @@ class SearchPanel:
                 self._search_entry.set_placeholder_text("Search sessions…")
             self._apply_filters()
 
+    _COMMANDS = [
+        ("/new", "Start a new OpenCode session"),
+        ("/open", "Select a directory and start a new session"),
+    ]
+
     def _apply_filters(self):
         query = self._search_entry.get_text().strip()
 
@@ -386,6 +498,34 @@ class SearchPanel:
 
         if query.startswith("/"):
             self._filtered = []
+
+            is_new_intent = query == "/new" or query.startswith("/new ")
+            is_open_intent = query == "/open" or query.startswith("/open ")
+
+            if is_new_intent and "/open" not in query:
+                target_dir = self._sessions[0].directory if self._sessions else os.path.expanduser("~")
+                project = os.path.basename(target_dir) or "project"
+                self._filtered = [Session(
+                    id="new-opencode", title="Start new OpenCode session",
+                    directory=target_dir, project_name=project, status="new",
+                    snippet=f"\u2192 {target_dir}", started_at=0, updated_at=0,
+                )]
+            elif is_open_intent:
+                self._filtered = [Session(
+                    id="open-folder", title="Open folder\u2026",
+                    directory="", project_name="", status="new",
+                    snippet="\u2192 Select a directory to start a new OpenCode session",
+                    started_at=0, updated_at=0,
+                )]
+            else:
+                for cmd, desc in self._COMMANDS:
+                    if query == "/" or cmd.startswith(query):
+                        cmd_id = "new-opencode" if cmd == "/new" else "open-folder"
+                        self._filtered.append(Session(
+                            id=cmd_id, title=cmd,
+                            directory="", project_name="", status="new",
+                            snippet=desc, started_at=0, updated_at=0,
+                        ))
         elif not query:
             self._filtered = base[:]
         else:
@@ -400,41 +540,14 @@ class SearchPanel:
             scored.sort(key=lambda x: -x[0])
             self._filtered = [s for _, s in scored]
 
-        is_new_intent = query == "/new" or query.startswith("/new ")
-        if is_new_intent and "/open" not in query:
-            target_dir = self._sessions[0].directory if self._sessions else os.path.expanduser("~")
-            project = os.path.basename(target_dir) or "project"
-            new_session = Session(
-                id="new-opencode",
-                title=f"Start new OpenCode session",
-                directory=target_dir,
-                project_name=project,
-                status="new",
-                snippet=f"→ {target_dir}",
-                started_at=0,
-                updated_at=0,
-            )
-            self._filtered = [new_session] + self._filtered
-
-        is_open_intent = query == "/open" or query.startswith("/open ")
-        if is_open_intent:
-            open_session = Session(
-                id="open-folder",
-                title="Open folder…",
-                directory="",
-                project_name="",
-                status="new",
-                snippet="→ Select a directory to start a new OpenCode session",
-                started_at=0,
-                updated_at=0,
-            )
-            self._filtered = [open_session] + self._filtered
-
         self._selected_index = 0
         self._render()
 
     def _on_search_changed(self, entry):
-        self._apply_filters()
+        if self._active_tab == 1 and self._clipboard_panel:
+            self._clipboard_panel.set_filter(entry.get_text())
+        else:
+            self._apply_filters()
 
     def _build_all(self):
         self._build_directory_rows()
@@ -448,7 +561,6 @@ class SearchPanel:
         self._update_all_count()
 
         rows_to_show = self._filtered[:self.MAX_VISIBLE]
-        self._window.resize(self.PANEL_WIDTH, self.MAX_VISIBLE * self.ROW_HEIGHT + 60)
 
         if not rows_to_show:
             row = Gtk.ListBoxRow.new()
@@ -532,7 +644,7 @@ class SearchPanel:
 
             time_label = Gtk.Label.new()
             time_label.set_name("snippetLabel")
-            time_label.set_text(_relative_time(session.updated_at))
+            time_label.set_text(relative_time(session.updated_at))
             time_label.set_valign(Gtk.Align.START)
             time_label.set_margin_top(3)
             time_label.override_color(Gtk.StateFlags.NORMAL, self._snippet_color)
@@ -549,7 +661,15 @@ class SearchPanel:
                 adj.set_value(0)
 
     def _on_activate(self, _entry):
-        self._confirm_selection()
+        if self._active_tab == 1 and self._clipboard_panel:
+            self._on_clipboard_activate()
+        else:
+            self._confirm_selection()
+
+    def _on_clipboard_activate(self):
+        if not self._clipboard_panel:
+            return
+        self._clipboard_panel.activate_selected()
 
     def _on_session_button(self, _listbox, event):
         if event.button != 3:
@@ -560,8 +680,14 @@ class SearchPanel:
         self._listbox.select_row(row)
         self._menu_active = True
         menu = Gtk.Menu.new()
-        delete_item = Gtk.MenuItem.new_with_label("Delete session")
         session = row.session
+        rename_item = Gtk.MenuItem.new_with_label("Rename session")
+        rename_item.connect("activate", lambda *_: self._on_rename(session))
+        menu.append(rename_item)
+        pure_item = Gtk.MenuItem.new_with_label("Start without plugins")
+        pure_item.connect("activate", lambda *_: self._on_launch_pure(session))
+        menu.append(pure_item)
+        delete_item = Gtk.MenuItem.new_with_label("Delete session")
         delete_item.connect("activate", lambda *_: self._on_delete(session))
         menu.append(delete_item)
         menu.connect("deactivate", lambda *_: GLib.timeout_add(300, self._clear_menu))
@@ -578,6 +704,46 @@ class SearchPanel:
         GLib.timeout_add(60000, lambda: setattr(self, '_delete_in_progress', False) or False)
         if self.on_delete_session:
             self.on_delete_session(session)
+
+    def _on_launch_pure(self, session):
+        self.hide()
+        if self.on_launch_pure:
+            self.on_launch_pure(session)
+
+    def _on_rename(self, session):
+        self._delete_in_progress = True
+        dialog = Gtk.Dialog(
+            title="Rename session",
+            transient_for=self._window,
+            modal=True,
+        )
+        dialog.add_button("_Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("_Rename", Gtk.ResponseType.ACCEPT)
+        dialog.set_default_response(Gtk.ResponseType.ACCEPT)
+
+        content = dialog.get_content_area()
+        content.set_spacing(10)
+        content.set_margin_start(20)
+        content.set_margin_end(20)
+        content.set_margin_top(20)
+        content.set_margin_bottom(20)
+
+        content.add(Gtk.Label.new("New title:"))
+        entry = Gtk.Entry.new()
+        entry.set_text(session.title)
+        entry.set_activates_default(True)
+        content.add(entry)
+        dialog.show_all()
+
+        def on_response(dlg, response):
+            new_title = entry.get_text().strip() if response == Gtk.ResponseType.ACCEPT else ""
+            dlg.destroy()
+            self._delete_in_progress = False
+            if response == Gtk.ResponseType.ACCEPT and new_title and self.on_rename_session:
+                self.on_rename_session(session.id, new_title)
+
+        dialog.connect("response", on_response)
+        entry.grab_focus()
 
     def _do_select(self, session):
         if session.id == "open-folder":
@@ -624,6 +790,19 @@ class SearchPanel:
 
     def _on_key_press(self, _widget, event):
         keyname = Gdk.keyval_name(event.keyval)
+
+        if self._active_tab == 1 and self._clipboard_panel:
+            if keyname in ("Down", "KP_Down", "Up", "KP_Up"):
+                self._clipboard_panel.move_selection(1 if "Down" in keyname else -1)
+                return True
+            elif keyname in ("Delete", "KP_Delete"):
+                self._clipboard_panel.delete_selected()
+                return True
+            elif keyname in ("Return", "KP_Enter"):
+                self._on_clipboard_activate()
+                return True
+            return False
+
         if keyname == "Tab":
             self._window.child_focus(Gtk.DirectionType.TAB_FORWARD)
             GLib.idle_add(self._focus_dir_listbox)
@@ -653,6 +832,12 @@ class SearchPanel:
                 session = self._filtered[self._selected_index]
                 if session.id not in ("new-opencode", "open-folder"):
                     self._on_delete(session)
+            return True
+        elif event.keyval == Gdk.KEY_r and (event.state & Gdk.ModifierType.CONTROL_MASK):
+            if self._filtered and self._selected_index < len(self._filtered):
+                session = self._filtered[self._selected_index]
+                if session.id not in ("new-opencode", "open-folder"):
+                    self._on_rename(session)
             return True
         return False
 
@@ -725,12 +910,25 @@ class SearchPanel:
                 if session.id not in ("new-opencode", "open-folder"):
                     self._on_delete(session)
             return True
+        elif event.keyval == Gdk.KEY_r and (event.state & Gdk.ModifierType.CONTROL_MASK):
+            selected = self._listbox.get_selected_row()
+            if selected and hasattr(selected, "session"):
+                session = selected.session
+                if session.id not in ("new-opencode", "open-folder"):
+                    self._on_rename(session)
+            return True
         return False
 
     def _on_window_key(self, _widget, event):
         keyname = Gdk.keyval_name(event.keyval)
         if keyname == "Escape":
             self.hide()
+            return True
+        if event.keyval == Gdk.KEY_1 and (event.state & Gdk.ModifierType.CONTROL_MASK):
+            self._switch_tab(0)
+            return True
+        if event.keyval == Gdk.KEY_2 and (event.state & Gdk.ModifierType.CONTROL_MASK):
+            self._switch_tab(1)
             return True
         return False
 

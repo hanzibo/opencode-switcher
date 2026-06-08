@@ -2,3 +2,5 @@ __pycache__/
 run.log
 *.pyc
 .deepseek/
+toggle.sock
+venv/

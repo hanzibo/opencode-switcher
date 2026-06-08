@@ -1,0 +1,7 @@
+{
+  "name": "OpenCode Switcher Clipboard",
+  "description": "Monitors clipboard changes for opencode-switcher",
+  "uuid": "clipboard-monitor@opencode-switcher",
+  "shell-version": ["48", "49", "50"],
+  "version": 1
+}

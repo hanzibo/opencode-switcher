@@ -1,0 +1,682 @@
+import gi
+import subprocess
+import threading
+import os
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gio", "2.0")
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf
+from typing import Optional, Callable, List
+from clipboard_store import ClipboardItem, Prompt, capture_clipboard_once
+from utils import relative_time, is_wayland
+
+
+CATEGORY_WIDTH = 200
+ACTION_WIDTH = 140
+
+
+def _copy_image_to_clipboard(image_path: str):
+    if not os.path.exists(image_path):
+        return
+    if is_wayland():
+        try:
+            with open(image_path, "rb") as f:
+                p = subprocess.Popen(["wl-copy", "--type", "image/png"], stdin=subprocess.PIPE)
+                p.communicate(f.read())
+        except Exception:
+            pass
+    else:
+        try:
+            subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", image_path], stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+
+def _copy_to_clipboard(text: str):
+    if is_wayland():
+        try:
+            p = subprocess.Popen(["wl-copy"], stdin=subprocess.PIPE)
+            p.communicate(text.encode("utf-8"))
+        except FileNotFoundError:
+            pass
+    else:
+        try:
+            p = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
+            p.communicate(text.encode("utf-8"))
+        except FileNotFoundError:
+            pass
+
+
+
+
+
+class ClipboardPanel(Gtk.Box):
+    def __init__(self, clip_store, prompt_store):
+        super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+        self._clip_store = clip_store
+        self._prompt_store = prompt_store
+        self._active_category = 0
+        self._clip_items: List[ClipboardItem] = []
+        self._prompts: List[Prompt] = []
+        self._selected_index = 0
+        self._filter_query = ""
+
+        self.on_copy_clipboard: Optional[Callable[[str], None]] = None
+        self.on_hide_request: Optional[Callable[[], None]] = None
+        self.on_dialog_shown: Optional[Callable[[], None]] = None
+        self.on_dialog_hidden: Optional[Callable[[], None]] = None
+        self.on_menu_shown: Optional[Callable[[], None]] = None
+        self.on_menu_hidden: Optional[Callable[[], None]] = None
+        self._setup_marker_monitor()
+
+        self._bg_color = Gdk.RGBA()
+        self._title_color = Gdk.RGBA()
+        self._dir_color = Gdk.RGBA()
+        self._snippet_color = Gdk.RGBA()
+
+        self._build_ui()
+
+        self._css_provider = Gtk.CssProvider()
+        screen = self.get_screen() or Gdk.Screen.get_default()
+        Gtk.StyleContext.add_provider_for_screen(
+            screen, self._css_provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
+        )
+
+        self._set_theme("dark")
+
+    def _build_ui(self):
+        self._cat_list = Gtk.ListBox.new()
+        self._cat_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self._cat_list.set_size_request(CATEGORY_WIDTH, -1)
+        self._cat_list.connect("row-selected", self._on_category_selected)
+
+        for label in ["Clipboard", "Prompts"]:
+            row = Gtk.ListBoxRow.new()
+            row.get_style_context().add_class("cat-row")
+            lbl = Gtk.Label.new(label)
+            lbl.set_name("catLabel")
+            lbl.set_xalign(0)
+            lbl.set_margin_start(16)
+            lbl.set_margin_top(12)
+            lbl.set_margin_bottom(12)
+            row.add(lbl)
+            self._cat_list.add(row)
+
+        self._cat_sep = Gtk.DrawingArea.new()
+        self._cat_sep.set_size_request(1, -1)
+        self._cat_sep.connect("draw", self._on_sep_draw)
+
+        self._content_scrolled = Gtk.ScrolledWindow.new()
+        self._content_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self._content_scrolled.set_hexpand(True)
+        self._content_scrolled.set_vexpand(True)
+
+        self._content_list = Gtk.ListBox.new()
+        self._content_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self._content_list.set_activate_on_single_click(False)
+        self._content_list.connect("row-activated", self._on_content_activated)
+        self._content_list.connect("button-press-event", self._on_content_button)
+        self._content_list.connect("key-press-event", self._on_content_key)
+        self._content_scrolled.add(self._content_list)
+
+        self._action_sep = Gtk.DrawingArea.new()
+        self._action_sep.set_size_request(1, -1)
+        self._action_sep.connect("draw", self._on_sep_draw)
+
+        self._action_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+        self._action_box.set_size_request(ACTION_WIDTH, -1)
+        self._action_box.set_valign(Gtk.Align.START)
+        self._action_box.set_margin_start(12)
+        self._action_box.set_margin_top(12)
+
+        self._btn_delete = Gtk.Button.new_with_label("Delete")
+        self._btn_delete.connect("clicked", self._on_delete_clicked)
+        self._btn_delete_all = Gtk.Button.new_with_label("Delete All")
+        self._btn_delete_all.connect("clicked", self._on_delete_all_clicked)
+        self._btn_create = Gtk.Button.new_with_label("Create")
+        self._btn_create.connect("clicked", self._on_create_clicked)
+        self._btn_edit = Gtk.Button.new_with_label("Edit")
+        self._btn_edit.connect("clicked", self._on_edit_clicked)
+
+        self.pack_start(self._cat_list, False, True, 0)
+        self.pack_start(self._cat_sep, False, False, 0)
+        self.pack_start(self._content_scrolled, True, True, 0)
+        self.pack_start(self._action_sep, False, False, 0)
+        self.pack_start(self._action_box, False, False, 0)
+
+        self._cat_list.select_row(self._cat_list.get_row_at_index(0))
+
+    def _on_sep_draw(self, widget, cr):
+        alloc = widget.get_allocation()
+        cr.set_source_rgba(*self._sep_rgba)
+        cr.rectangle(alloc.x, alloc.y, alloc.width, alloc.height)
+        cr.fill()
+        return True
+
+    def _set_theme(self, name: str):
+        self._theme = name
+        if name == "dark":
+            self._bg_color = Gdk.RGBA(0.075, 0.078, 0.090, 1.0)
+            self._title_color = Gdk.RGBA(0.96, 0.96, 0.97, 1.0)
+            self._dir_color = Gdk.RGBA(0.58, 0.64, 0.72, 1.0)
+            self._snippet_color = Gdk.RGBA(0.58, 0.64, 0.72, 0.70)
+            self._sep_rgba = (1, 1, 1, 0.08)
+            vals = dict(
+                text_fg="rgba(255,255,255,0.95)",
+                text_secondary="rgba(255,255,255,0.55)",
+                hover_bg="rgba(255,255,255,0.04)",
+                sel_bg="rgba(99,102,241,0.12)",
+                sel_border="#6366f1",
+                cat_hover="rgba(255,255,255,0.03)",
+                cat_sel="rgba(99,102,241,0.10)",
+                cat_sel_border="#6366f1",
+                btn_bg="rgba(255,255,255,0.05)",
+                btn_border="rgba(255,255,255,0.08)",
+                btn_hover="rgba(255,255,255,0.09)",
+                btn_active="rgba(255,255,255,0.14)",
+            )
+        else:
+            self._bg_color = Gdk.RGBA(0.965, 0.973, 0.980, 1.0)
+            self._title_color = Gdk.RGBA(0.09, 0.09, 0.11, 1.0)
+            self._dir_color = Gdk.RGBA(0.39, 0.45, 0.55, 1.0)
+            self._snippet_color = Gdk.RGBA(0.39, 0.45, 0.55, 0.70)
+            self._sep_rgba = (0, 0, 0, 0.08)
+            vals = dict(
+                text_fg="rgba(15,23,42,0.92)",
+                text_secondary="rgba(15,23,42,0.55)",
+                hover_bg="rgba(0,0,0,0.03)",
+                sel_bg="rgba(79,70,229,0.08)",
+                sel_border="#4f46e5",
+                cat_hover="rgba(0,0,0,0.02)",
+                cat_sel="rgba(79,70,229,0.06)",
+                cat_sel_border="#4f46e5",
+                btn_bg="rgba(0,0,0,0.04)",
+                btn_border="rgba(0,0,0,0.08)",
+                btn_hover="rgba(0,0,0,0.06)",
+                btn_active="rgba(0,0,0,0.10)",
+            )
+        css = (
+            ".cat-row { padding: 12px 18px; border-radius: 6px; margin: 2px 8px; border-left: 4px solid transparent; }"
+            ".cat-row:hover { background: %(cat_hover)s; }"
+            ".cat-row:selected { background: %(cat_sel)s; border-left: 4px solid %(cat_sel_border)s; }"
+            ".cat-row #catLabel { color: %(text_secondary)s; }"
+            ".cat-row:selected #catLabel { color: %(text_fg)s; }"
+            ".row { padding: 12px 18px; border-radius: 6px; margin: 2px 8px; border-left: 4px solid transparent; }"
+            ".row:hover { background: %(hover_bg)s; }"
+            ".row:selected { background: %(sel_bg)s; border-left: 4px solid %(sel_border)s; }"
+            "#catLabel { font-size: 16px; font-weight: 500; padding: 0 8px; }"
+            "#clipTitle { font-family: \"JetBrains Mono\",\"monospace\"; font-size: 16px; padding: 0; }"
+            "#clipText { font-size: 14px; padding: 0; }"
+            "#clipTime { font-size: 12px; padding: 0; }"
+            "#promptTitle { font-family: \"JetBrains Mono\",\"monospace\"; font-size: 16px; font-weight: bold; padding: 0; }"
+            "#promptText { font-size: 14px; padding: 0; }"
+            "button { color: %(text_fg)s; background: %(btn_bg)s;"
+            " border: 1px solid %(btn_border)s; border-radius: 6px; padding: 8px 16px; font-size: 14px; font-weight: 500; }"
+            "button:hover { background: %(btn_hover)s; border-color: %(sel_border)s; }"
+            "button:active { background: %(btn_active)s; }"
+        ) % vals
+        self._css_provider.load_from_data(css.encode("utf-8"))
+        for w in (self, self._cat_list, self._content_scrolled, self._content_list):
+            w.override_background_color(Gtk.StateFlags.NORMAL, self._bg_color)
+
+    def set_theme(self, name: str):
+        self._set_theme(name)
+
+    def set_filter(self, query: str):
+        self._filter_query = query.strip().lower()
+        self._rebuild()
+
+    def reset_filter(self):
+        """Public API: Clear filter query without triggering rebuild."""
+        self._filter_query = ""
+
+    def load_cached(self):
+        self._clip_store.reload()
+        self._prompt_store.reload()
+        self._clip_items = list(self._clip_store.get_all())
+        self._prompts = list(self._prompt_store.get_all())
+        self._clip_items.reverse()
+        self._rebuild()
+
+    def load_data(self):
+        def _capture():
+            capture_clipboard_once(self._clip_store)
+            GLib.idle_add(self._finish_load)
+        threading.Thread(target=_capture, daemon=True).start()
+
+    def _finish_load(self):
+        self._clip_store.reload()
+        self._prompt_store.reload()
+        self._clip_items = list(self._clip_store.get_all())
+        self._prompts = list(self._prompt_store.get_all())
+        self._clip_items.reverse()
+        self._rebuild()
+
+    def _rebuild(self):
+        for child in self._content_list.get_children():
+            self._content_list.remove(child)
+        import gc
+        gc.collect()
+
+        if self._active_category == 0:
+            items = self._clip_items
+            if self._filter_query:
+                items = [i for i in items if self._filter_query in i.text.lower()]
+        else:
+            items = self._prompts
+            if self._filter_query:
+                items = [i for i in items
+                         if self._filter_query in i.title.lower()
+                         or self._filter_query in i.text.lower()]
+
+        self._update_actions()
+
+        if not items:
+            row = Gtk.ListBoxRow.new()
+            row.set_sensitive(False)
+            lbl = Gtk.Label.new("No items")
+            lbl.set_name("clipText")
+            lbl.set_halign(Gtk.Align.CENTER)
+            lbl.set_margin_top(30)
+            lbl.set_margin_bottom(30)
+            lbl.override_color(Gtk.StateFlags.NORMAL, self._snippet_color)
+            row.add(lbl)
+            self._content_list.add(row)
+            self._content_list.show_all()
+            return
+
+        for idx, item in enumerate(items):
+            row = Gtk.ListBoxRow.new()
+            row.get_style_context().add_class("row")
+            row.item_index = idx
+            row.store_item = item
+
+            if self._active_category == 0:
+                self._build_clip_row(row, item)
+            else:
+                self._build_prompt_row(row, item)
+
+            self._content_list.add(row)
+
+        self._content_list.show_all()
+        if self._content_list.get_children():
+            self._content_list.select_row(self._content_list.get_row_at_index(0))
+
+    def _build_clip_row(self, row, item: ClipboardItem):
+        hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
+        hbox.set_margin_start(16)
+        hbox.set_margin_end(16)
+        hbox.set_margin_top(10)
+        hbox.set_margin_bottom(10)
+
+        vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
+        vbox.set_hexpand(True)
+
+        if hasattr(item, "type") and item.type == "image" and item.image_path:
+            try:
+                pixbuf = GdkPixbuf.Pixbuf.new_from_file(item.image_path)
+                h = pixbuf.get_height()
+                w = pixbuf.get_width()
+                target_h = 40
+                target_w = int(w * (target_h / h))
+                if target_w > 120:
+                    target_w = 120
+                    target_h = int(h * (target_w / w))
+                scaled = pixbuf.scale_simple(target_w, target_h, GdkPixbuf.InterpType.BILINEAR)
+                img = Gtk.Image.new_from_pixbuf(scaled)
+                preview_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 10)
+                lbl = Gtk.Label.new("[Image]")
+                lbl.override_color(Gtk.StateFlags.NORMAL, self._title_color)
+                preview_box.pack_start(lbl, False, False, 0)
+                preview_box.pack_start(img, False, False, 0)
+                vbox.pack_start(preview_box, False, False, 0)
+            except Exception:
+                text_label = Gtk.Label.new("[Image - Failed to load]")
+                text_label.override_color(Gtk.StateFlags.NORMAL, self._title_color)
+                vbox.pack_start(text_label, False, False, 0)
+        else:
+            text_label = Gtk.Label.new()
+            text_label.set_name("clipText")
+            one_line = " ".join(item.text.split())[:200]
+            text_label.set_text(one_line)
+            text_label.set_halign(Gtk.Align.START)
+            text_label.set_xalign(0)
+            text_label.set_ellipsize(Pango.EllipsizeMode.END)
+            text_label.override_color(Gtk.StateFlags.NORMAL, self._title_color)
+            vbox.pack_start(text_label, False, False, 0)
+
+        hbox.pack_start(vbox, True, True, 0)
+
+        time_label = Gtk.Label.new()
+        time_label.set_name("clipTime")
+        time_label.set_text(relative_time(item.timestamp))
+        time_label.set_valign(Gtk.Align.START)
+        time_label.set_margin_top(2)
+        time_label.override_color(Gtk.StateFlags.NORMAL, self._snippet_color)
+        hbox.pack_start(time_label, False, False, 0)
+
+        row.add(hbox)
+
+    def _build_prompt_row(self, row, item: Prompt):
+        vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
+        vbox.set_margin_start(16)
+        vbox.set_margin_end(16)
+        vbox.set_margin_top(10)
+        vbox.set_margin_bottom(10)
+
+        title_label = Gtk.Label.new()
+        title_label.set_name("promptTitle")
+        title_label.set_text(item.title)
+        title_label.set_halign(Gtk.Align.START)
+        title_label.set_xalign(0)
+        title_label.override_color(Gtk.StateFlags.NORMAL, self._title_color)
+        vbox.pack_start(title_label, False, False, 0)
+
+        text_preview = " ".join(item.text.split())[:300]
+        text_label = Gtk.Label.new()
+        text_label.set_name("promptText")
+        text_label.set_text(text_preview)
+        text_label.set_halign(Gtk.Align.START)
+        text_label.set_xalign(0)
+        text_label.set_ellipsize(Pango.EllipsizeMode.END)
+        text_label.override_color(Gtk.StateFlags.NORMAL, self._snippet_color)
+        vbox.pack_start(text_label, False, False, 0)
+
+        row.add(vbox)
+
+    def _update_actions(self):
+        for child in self._action_box.get_children():
+            self._action_box.remove(child)
+
+        if self._active_category == 0:
+            self._action_box.pack_start(self._btn_delete, False, False, 0)
+            self._action_box.pack_start(self._btn_delete_all, False, False, 0)
+        else:
+            self._action_box.pack_start(self._btn_create, False, False, 0)
+            self._action_box.pack_start(self._btn_edit, False, False, 0)
+            self._action_box.pack_start(self._btn_delete, False, False, 0)
+
+        self._action_box.show_all()
+
+    def _on_category_selected(self, _listbox, row):
+        if row is None:
+            return
+        self._active_category = row.get_index()
+        self._selected_index = 0
+        self._rebuild()
+
+    def _on_content_activated(self, _listbox, row):
+        if hasattr(row, "store_item"):
+            self._activate_item(row.store_item)
+
+    def _on_content_button(self, _listbox, event):
+        if event.button != 3:
+            return False
+        row = self._listbox_at_y(event.y)
+        if not row or not hasattr(row, "store_item"):
+            return False
+        self._content_list.select_row(row)
+
+        menu = Gtk.Menu.new()
+        item = row.store_item
+        if self._active_category == 0:
+            copy_item = Gtk.MenuItem.new_with_label("Copy")
+            copy_item.connect("activate", lambda *_: self._activate_item(item))
+            menu.append(copy_item)
+            del_item = Gtk.MenuItem.new_with_label("Delete")
+            del_item.connect("activate", lambda *_: self._delete_item(item))
+            menu.append(del_item)
+        else:
+            copy_item = Gtk.MenuItem.new_with_label("Copy")
+            copy_item.connect("activate", lambda *_: self._activate_item(item))
+            menu.append(copy_item)
+            edit_item = Gtk.MenuItem.new_with_label("Edit")
+            edit_item.connect("activate", lambda *_: self._edit_prompt(item))
+            menu.append(edit_item)
+            del_item = Gtk.MenuItem.new_with_label("Delete")
+            del_item.connect("activate", lambda *_: self._delete_item(item))
+            menu.append(del_item)
+        if self.on_menu_shown:
+            self.on_menu_shown()
+        menu.connect("deactivate", lambda *_: GLib.timeout_add(300, self._on_menu_deactivated))
+        menu.show_all()
+        menu.popup_at_pointer(event)
+        return True
+
+    def _on_menu_deactivated(self):
+        if self.on_menu_hidden:
+            self.on_menu_hidden()
+        return False
+
+    def _on_content_key(self, _widget, event):
+        keyname = Gdk.keyval_name(event.keyval)
+        if keyname in ("Down", "KP_Down"):
+            self._move_selection(1)
+            return True
+        elif keyname in ("Up", "KP_Up"):
+            self._move_selection(-1)
+            return True
+        elif keyname in ("Delete", "KP_Delete"):
+            self._delete_selected()
+            return True
+        return False
+
+    def _listbox_at_y(self, y):
+        return self._content_list.get_row_at_y(int(y))
+
+    def _move_selection(self, direction: int):
+        rows = self._content_list.get_children()
+        sel = self._content_list.get_selected_row()
+        if sel is None or sel not in rows:
+            idx = 0 if direction > 0 else len(rows) - 1
+        else:
+            idx = list(rows).index(sel)
+            idx = max(0, min(len(rows) - 1, idx + direction))
+        target = rows[idx]
+        self._content_list.select_row(target)
+        target.grab_focus()
+
+    def _delete_selected(self):
+        row = self._content_list.get_selected_row()
+        if row and hasattr(row, "store_item"):
+            self._delete_item(row.store_item)
+
+    def _delete_item(self, item):
+        if self._active_category == 0:
+            idx = next(
+                (i for i, ci in enumerate(self._clip_store.get_all()) if ci.hash == item.hash),
+                None,
+            )
+            if idx is not None:
+                self._clip_store.delete(idx)
+        else:
+            idx = next(
+                (i for i, p in enumerate(self._prompt_store.get_all()) if p.timestamp == item.timestamp),
+                None,
+            )
+            if idx is not None:
+                self._prompt_store.delete(idx)
+        self.load_cached()
+
+    def activate_selected(self):
+        """Public API: activate (copy) the currently selected item."""
+        row = self._content_list.get_selected_row()
+        if row and hasattr(row, "store_item"):
+            self._activate_item(row.store_item)
+
+    def move_selection(self, direction: int):
+        """Public API: move content list selection by *direction* rows."""
+        self._move_selection(direction)
+
+    def delete_selected(self):
+        """Public API: delete the currently selected item."""
+        self._delete_selected()
+
+    def _activate_item(self, item):
+        if self._active_category == 0 and isinstance(item, ClipboardItem):
+            if hasattr(item, "type") and item.type == "image" and item.image_path:
+                _copy_image_to_clipboard(item.image_path)
+                if self.on_copy_clipboard:
+                    self.on_copy_clipboard("[Image]", item.hash)
+                if self.on_hide_request:
+                    self.on_hide_request()
+                return
+            text = item.text
+        elif self._active_category == 1 and isinstance(item, Prompt):
+            text = item.text
+        else:
+            return
+        _copy_to_clipboard(text)
+        if self.on_copy_clipboard:
+            self.on_copy_clipboard(text, item.hash if isinstance(item, ClipboardItem) else None)
+        if self.on_hide_request:
+            self.on_hide_request()
+
+    def _on_delete_clicked(self, _btn):
+        row = self._content_list.get_selected_row()
+        if row and hasattr(row, "store_item"):
+            if self.on_dialog_shown:
+                self.on_dialog_shown()
+            self._delete_item(row.store_item)
+            if self.on_dialog_hidden:
+                self.on_dialog_hidden()
+
+    def _on_delete_all_clicked(self, _btn):
+        if self._active_category != 0:
+            return
+        dialog = Gtk.MessageDialog(
+            transient_for=self.get_toplevel(),
+            modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="Clear clipboard history?",
+        )
+        dialog.format_secondary_text("All clipboard history items will be permanently deleted.")
+        def _on_response(dlg, resp):
+            dlg.destroy()
+            if resp == Gtk.ResponseType.YES:
+                self._clip_store.clear_all()
+                self.load_cached()
+            if self.on_dialog_hidden:
+                self.on_dialog_hidden()
+        dialog.connect("response", _on_response)
+        if self.on_dialog_shown:
+            self.on_dialog_shown()
+        dialog.show_all()
+
+    def _on_create_clicked(self, _btn):
+        self._show_prompt_dialog(create=True)
+
+    def _on_edit_clicked(self, _btn):
+        row = self._content_list.get_selected_row()
+        if not row or not hasattr(row, "store_item"):
+            return
+        item = row.store_item
+        if isinstance(item, Prompt):
+            self._show_prompt_dialog(create=False, existing=item)
+
+    def _edit_prompt(self, item: Prompt):
+        self._show_prompt_dialog(create=False, existing=item)
+
+    def _show_prompt_dialog(self, create: bool, existing: Optional[Prompt] = None):
+        dialog = Gtk.Dialog(
+            title="Create prompt" if create else "Edit prompt",
+            transient_for=self.get_toplevel(),
+            modal=True,
+        )
+        dialog.add_button("_Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("_Save", Gtk.ResponseType.ACCEPT)
+        dialog.set_default_response(Gtk.ResponseType.ACCEPT)
+
+        content = dialog.get_content_area()
+        content.set_spacing(8)
+        content.set_margin_start(16)
+        content.set_margin_end(16)
+        content.set_margin_top(16)
+        content.set_margin_bottom(16)
+
+        content.add(Gtk.Label.new("Title:"))
+        title_entry = Gtk.Entry.new()
+        if existing:
+            title_entry.set_text(existing.title)
+        title_entry.set_activates_default(True)
+        content.add(title_entry)
+
+        content.add(Gtk.Label.new("Text:"))
+        text_view = Gtk.TextView.new()
+        text_view.set_wrap_mode(Gtk.WrapMode.WORD)
+        sw = Gtk.ScrolledWindow.new()
+        sw.set_min_content_height(120)
+        sw.add(text_view)
+        content.add(sw)
+
+        if existing:
+            buf = text_view.get_buffer()
+            buf.set_text(existing.text)
+
+        if self.on_dialog_shown:
+            self.on_dialog_shown()
+        dialog.show_all()
+
+        def on_response(dlg, response):
+            title = title_entry.get_text().strip()
+            buf = text_view.get_buffer()
+            start, end = buf.get_bounds()
+            text = buf.get_text(start, end, False).strip()
+            dlg.destroy()
+            if response != Gtk.ResponseType.ACCEPT or not title or not text:
+                if self.on_dialog_hidden:
+                    self.on_dialog_hidden()
+                return
+            if create:
+                self._prompt_store.create(title, text)
+            else:
+                idx = next(
+                    (i for i, p in enumerate(self._prompt_store.get_all())
+                     if p.timestamp == existing.timestamp),
+                    None,
+                )
+                if idx is not None:
+                    self._prompt_store.update(idx, title, text)
+            self.load_cached()
+            if self.on_dialog_hidden:
+                self.on_dialog_hidden()
+
+        dialog.connect("response", on_response)
+
+    def _setup_marker_monitor(self):
+        marker_dir = os.path.expanduser("~/.cache/opencode-switcher")
+        marker_path = os.path.join(marker_dir, "clipboard.updated")
+        try:
+            os.makedirs(marker_dir, exist_ok=True)
+            if not os.path.isfile(marker_path):
+                with open(marker_path, "w") as f:
+                    f.write("0")
+            gfile = Gio.File.new_for_path(marker_path)
+            self._monitor = gfile.monitor_file(Gio.FileMonitorFlags.NONE, None)
+            self._monitor.connect("changed", self._on_marker_changed)
+        except Exception:
+            pass
+
+    def _on_marker_changed(self, monitor, gfile, other_file, event):
+        if event == Gio.FileMonitorEvent.CHANGES_DONE_HINT:
+            return
+        if self._clip_items is not None:
+            marker_path = os.path.expanduser("~/.cache/opencode-switcher/clipboard.updated")
+            is_image = False
+            try:
+                if os.path.exists(marker_path):
+                    with open(marker_path, "r") as f:
+                        content = f.read().strip()
+                    if content.startswith("image:"):
+                        is_image = True
+            except Exception:
+                pass
+
+            if is_image:
+                def _task():
+                    capture_clipboard_once(self._clip_store)
+                    GLib.idle_add(self._finish_load)
+                threading.Thread(target=_task, daemon=True).start()
+            else:
+                self._finish_load()

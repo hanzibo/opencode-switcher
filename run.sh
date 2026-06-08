@@ -13,4 +13,4 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
 echo "=== $(date) ===" >> "$LOG"
-exec python3 "$SCRIPT_DIR/main.py" >> "$LOG" 2>&1
+exec "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/main.py" >> "$LOG" 2>&1

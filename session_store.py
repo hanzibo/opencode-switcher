@@ -3,7 +3,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Tuple, Dict
 
 
 @dataclass
@@ -22,7 +22,7 @@ DB_PATH = os.path.expanduser("~/.local/share/opencode/opencode.db")
 SNIPPET_MAX_LEN = 120
 
 
-def _detect_live_sessions() -> tuple[set, set]:
+def _detect_live_sessions() -> Tuple[set, set]:
     live_dirs: set = set()
     live_session_ids: set = set()
     try:
@@ -90,7 +90,8 @@ def _extract_snippet_text(data_json: str) -> Optional[str]:
 def get_sessions(limit: int = 100) -> List[Session]:
     if not os.path.isfile(DB_PATH):
         return []
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.execute(
@@ -121,7 +122,7 @@ def get_sessions(limit: int = 100) -> List[Session]:
             session_ids,
         )
 
-        snippet_map: dict[str, str] = {}
+        snippet_map: Dict[str, str] = {}
         for part_row in part_cur.fetchall():
             sid = part_row["session_id"]
             if sid in snippet_map:
@@ -166,10 +167,31 @@ def delete_session(session_id: str) -> Optional[str]:
     if not os.path.isfile(DB_PATH):
         return "Database not found"
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        conn.execute("PRAGMA journal_mode=WAL")
         try:
             now = int(time.time() * 1000)
             conn.execute("UPDATE session SET time_archived=? WHERE id=?", (now, session_id))
+            conn.commit()
+            return None
+        finally:
+            conn.close()
+    except Exception as e:
+        return str(e)
+
+
+def rename_session(session_id: str, new_title: str) -> Optional[str]:
+    if not os.path.isfile(DB_PATH):
+        return "Database not found"
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        conn.execute("PRAGMA journal_mode=WAL")
+        try:
+            now = int(time.time() * 1000)
+            conn.execute(
+                "UPDATE session SET title=?, time_updated=? WHERE id=?",
+                (new_title, now, session_id),
+            )
             conn.commit()
             return None
         finally:

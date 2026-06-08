@@ -3,6 +3,8 @@ import json
 import os
 import fcntl
 import sys
+import threading
+from typing import Optional
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
@@ -10,8 +12,11 @@ from gi.repository import Gtk, GLib, AyatanaAppIndicator3
 
 from hotkey import HotkeyManager
 from panel import SearchPanel
-from session_store import get_sessions, delete_session
-from launcher import launch_session, launch_new_session
+from session_store import get_sessions, delete_session, rename_session
+from launcher import launch_session, launch_new_session, launch_session_pure
+from clipboard_store import ClipboardStore, PromptStore, capture_clipboard_once
+from clipboard_panel import ClipboardPanel
+from utils import is_wayland
 
 CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
@@ -35,14 +40,24 @@ class App:
     def __init__(self):
         config = _load_config()
         self._theme = config.get("theme", "dark")
+        self._clip_store = ClipboardStore()
+        self._prompt_store = PromptStore()
         self._panel = SearchPanel()
         self._panel.set_theme(self._theme)
+
+        clip_panel = ClipboardPanel(self._clip_store, self._prompt_store)
+        clip_panel.on_copy_clipboard = self._on_clipboard_copied
+        clip_panel.on_hide_request = lambda: GLib.idle_add(self._panel.hide)
+        self._panel.set_clipboard_panel(clip_panel, self._clip_store, self._prompt_store)
+
         self._hotkey = HotkeyManager()
         self._indicator = self._build_indicator()
 
         self._panel.on_select = self._on_session_selected
         self._panel.on_open = self._on_panel_opened
         self._panel.on_delete_session = self._on_delete_session
+        self._panel.on_rename_session = self._on_rename_session
+        self._panel.on_launch_pure = self._on_session_launch_pure
         self._hotkey.on_trigger = lambda: self._on_hotkey()
 
     def _build_indicator(self):
@@ -104,11 +119,30 @@ class App:
         if response == Gtk.ResponseType.YES:
             self.stop()
 
+    def _on_clipboard_copied(self, text: str, item_hash: Optional[str] = None):
+        self._clip_store.mark_written(text, item_hash)
+
     def _on_hotkey(self):
         GLib.idle_add(self._panel.toggle)
 
+    def _poll_clipboard(self) -> bool:
+        def _task():
+            capture_clipboard_once(self._clip_store)
+        threading.Thread(target=_task, daemon=True).start()
+        return True
+
     def run(self):
         self._hotkey.start()
+
+        # Capture current clipboard on startup to make sure we are in sync
+        def _initial_sync():
+            capture_clipboard_once(self._clip_store)
+        threading.Thread(target=_initial_sync, daemon=True).start()
+
+        # Poll clipboard in background only on X11.
+        # Under Wayland, we rely on the event-driven GNOME Shell extension marker updates.
+        if not is_wayland():
+            GLib.timeout_add_seconds(3, self._poll_clipboard)
         Gtk.main()
 
     def stop(self):
@@ -135,6 +169,17 @@ class App:
             import traceback
             traceback.print_exc()
 
+    def _on_session_launch_pure(self, session):
+        try:
+            err = launch_session_pure(session.id, session.directory)
+            if err:
+                print(f"opencode-switcher: {err}", flush=True)
+                GLib.idle_add(self._show_error, err)
+        except Exception as e:
+            print(f"opencode-switcher: Crash: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+
     def _show_error(self, msg: str):
         dialog = Gtk.MessageDialog(
             transient_for=None,
@@ -144,8 +189,8 @@ class App:
             text="Failed to launch session",
         )
         dialog.format_secondary_text(msg)
-        dialog.run()
-        dialog.destroy()
+        dialog.connect("response", lambda dlg, _: dlg.destroy())
+        dialog.show_all()
 
     def _on_delete_session(self, session):
         def on_confirm(dialog, response):
@@ -168,6 +213,14 @@ class App:
         dialog.format_secondary_text("This session will be archived and hidden from the list.")
         dialog.connect("response", on_confirm)
         dialog.show_all()
+
+    def _on_rename_session(self, session_id: str, new_title: str):
+        err = rename_session(session_id, new_title)
+        if err:
+            GLib.idle_add(lambda: self._show_error(err))
+        else:
+            sessions = get_sessions()
+            self._panel.load_sessions(sessions)
 
 
 if __name__ == "__main__":
