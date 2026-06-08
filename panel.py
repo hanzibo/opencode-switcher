@@ -983,6 +983,34 @@ class SearchPanel:
             return False
 
         if keyname == "Tab":
+            raw_text = self._search_entry.get_text()
+            text = raw_text.strip()
+            cmds = ["/new", "/open", "/gm", "/google"]
+            
+            # Check if it's already completed (ends with a space after a valid command)
+            is_completed = False
+            for c in cmds:
+                if raw_text.startswith(c + " "):
+                    is_completed = True
+                    break
+                    
+            if not is_completed:
+                search_prefix = text
+                if text and not text.startswith("/"):
+                    search_prefix = "/" + text
+                
+                matched_cmd = None
+                if search_prefix:
+                    for c in cmds:
+                        if c.startswith(search_prefix):
+                            matched_cmd = c
+                            break
+                            
+                if matched_cmd:
+                    self._search_entry.set_text(matched_cmd + " ")
+                    self._search_entry.set_position(-1)
+                    return True
+
             self._window.child_focus(Gtk.DirectionType.TAB_FORWARD)
             GLib.idle_add(self._focus_dir_listbox)
             return True
