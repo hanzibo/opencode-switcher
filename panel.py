@@ -824,10 +824,19 @@ class SearchPanel:
 
     def _handle_google_command(self, prompt_text: str):
         import urllib.parse
+        import os
         encoded = urllib.parse.quote(prompt_text)
         url = f"https://www.google.com/search?udm=50&q={encoded}"
         try:
             Gtk.show_uri_on_window(self._window, url, Gdk.CURRENT_TIME)
+            # Request focus for Firefox via GNOME extension
+            try:
+                cache_dir = os.path.expanduser("~/.cache/opencode-switcher")
+                os.makedirs(cache_dir, exist_ok=True)
+                with open(os.path.join(cache_dir, "focus.request"), "w") as f:
+                    f.write("firefox")
+            except Exception:
+                pass
         except Exception as e:
             print(f"Error launching Google AI search: {e}", flush=True)
         GLib.idle_add(self.hide)
@@ -835,6 +844,7 @@ class SearchPanel:
     def _handle_gm_command(self, prompt_text: str):
         import subprocess
         import threading
+        import os
 
         # 1. Copy prompt to clipboard
         clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
@@ -851,9 +861,20 @@ class SearchPanel:
         except Exception:
             pass
 
+        # Helper to trigger focus via GNOME Shell extension
+        def request_firefox_focus():
+            try:
+                cache_dir = os.path.expanduser("~/.cache/opencode-switcher")
+                os.makedirs(cache_dir, exist_ok=True)
+                with open(os.path.join(cache_dir, "focus.request"), "w") as f:
+                    f.write("firefox")
+            except Exception:
+                pass
+
         # 3. Launch Gemini URL via Gtk.show_uri_on_window (handles focus transfer)
         try:
             Gtk.show_uri_on_window(self._window, "https://gemini.google.com/app", Gdk.CURRENT_TIME)
+            request_firefox_focus()
         except Exception as e:
             print(f"Error launching Gemini: {e}", flush=True)
             self.hide()
@@ -867,6 +888,10 @@ class SearchPanel:
             # Wait for browser and page to load (much shorter delay if already running)
             delay = 1.2 if firefox_running else 4.0
             time.sleep(delay)
+
+            # Request focus again right before injecting keys to be absolutely sure
+            request_firefox_focus()
+            time.sleep(0.1)
 
 
             # Inject Ctrl+V and Enter

@@ -7,10 +7,12 @@ const CACHE_DIR = GLib.get_home_dir() + '/.cache/opencode-switcher';
 const HISTORY_PATH = CONFIG_DIR + '/clipboard_history.json';
 const MARKER_PATH = CACHE_DIR + '/clipboard.updated';
 const IGNORE_HASH_PATH = CACHE_DIR + '/last_written_hash';
+const FOCUS_REQUEST_PATH = CACHE_DIR + '/focus.request';
 const MAX_ITEMS = 150;
 
 let ownerChangedId = 0;
 let lastText = '';
+let focusMonitor = null;
 
 function getTextHash(text) {
     try {
@@ -78,6 +80,57 @@ function notifyImage() {
     }
 }
 
+function focusWindow(query) {
+    try {
+        let queryLower = query.toLowerCase();
+        let actors = global.get_window_actors() || [];
+        for (let actor of actors) {
+            let win = actor.meta_window;
+            if (win) {
+                let wmClass = (win.get_wm_class() || "").toLowerCase();
+                let title = (win.get_title() || "").toLowerCase();
+                if (wmClass.includes(queryLower) || title.includes(queryLower)) {
+                    win.activate(global.get_current_time());
+                    return true;
+                }
+            }
+        }
+    } catch (e) {
+        console.error('opencode-switcher: focusWindow error: ' + e);
+    }
+    return false;
+}
+
+function setupFocusMonitor() {
+    try {
+        let file = Gio.File.new_for_path(FOCUS_REQUEST_PATH);
+        GLib.mkdir_with_parents(CACHE_DIR, 0o755);
+        if (!file.query_exists(null)) {
+            GLib.file_set_contents(FOCUS_REQUEST_PATH, '');
+        }
+
+        focusMonitor = file.monitor_file(Gio.FileMonitorFlags.NONE, null);
+        focusMonitor.connect('changed', (mon, fileObj, otherFile, eventType) => {
+            if (eventType === Gio.FileMonitorEvent.CHANGES_DONE_HINT || eventType === Gio.FileMonitorEvent.CHANGED) {
+                try {
+                    let [ok, bytes] = file.load_contents(null);
+                    if (ok && bytes instanceof Uint8Array) {
+                        let content = new TextDecoder().decode(bytes).trim();
+                        if (content) {
+                            focusWindow(content);
+                            GLib.file_set_contents(FOCUS_REQUEST_PATH, '');
+                        }
+                    }
+                } catch (e) {
+                    console.error('opencode-switcher: focus read error: ' + e);
+                }
+            }
+        });
+    } catch (e) {
+        console.error('opencode-switcher: focus monitor setup error: ' + e);
+    }
+}
+
 export default class ClipboardMonitor {
     enable() {
         lastText = '';
@@ -116,12 +169,19 @@ export default class ClipboardMonitor {
         });
         // Initial sync
         notifyImage();
+
+        // Start watching for window focus requests
+        setupFocusMonitor();
     }
     disable() {
         if (ownerChangedId) {
             let selection = global.display.get_selection();
             selection.disconnect(ownerChangedId);
             ownerChangedId = 0;
+        }
+        if (focusMonitor) {
+            focusMonitor.cancel();
+            focusMonitor = null;
         }
     }
 }
