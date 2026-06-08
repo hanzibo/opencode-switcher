@@ -825,13 +825,13 @@ class SearchPanel:
     def _handle_google_command(self, prompt_text: str):
         import subprocess
         import urllib.parse
-        self.hide()
         encoded = urllib.parse.quote(prompt_text)
         url = f"https://www.google.com/search?udm=50&q={encoded}"
         try:
             subprocess.Popen(["firefox", url])
         except Exception as e:
             print(f"Error launching Firefox for Google AI search: {e}", flush=True)
+        GLib.idle_add(self.hide)
 
     def _handle_gm_command(self, prompt_text: str):
         import subprocess
@@ -844,26 +844,27 @@ class SearchPanel:
         if hasattr(self, "_clip_store") and self._clip_store:
             self._clip_store.mark_written(prompt_text)
 
-        # 2. Hide panel
-        self.hide()
+        # 2. Check if Firefox is already running to decide on a short/long delay
+        firefox_running = False
+        try:
+            subprocess.check_output(["pgrep", "-f", "firefox"])
+            firefox_running = True
+        except Exception:
+            pass
 
-        # 3. Launch Firefox and auto-type in background thread
+        # 3. Launch Firefox first (while switcher panel is still active/focused)
+        try:
+            subprocess.Popen(["firefox", "https://gemini.google.com/app"])
+        except Exception as e:
+            print(f"Error launching Firefox: {e}", flush=True)
+            self.hide()
+            return
+
+        # 4. Hide panel after launching
+        GLib.idle_add(self.hide)
+
+        # 5. Auto-type in background thread
         def automate_typing():
-            # Check if Firefox is already running to decide on a short/long delay
-            firefox_running = False
-            try:
-                subprocess.check_output(["pgrep", "-f", "firefox"])
-                firefox_running = True
-            except Exception:
-                pass
-
-            try:
-                # Open Firefox
-                subprocess.Popen(["firefox", "https://gemini.google.com/app"])
-            except Exception as e:
-                print(f"Error launching Firefox: {e}", flush=True)
-                return
-
             # Wait for browser and page to load (much shorter delay if already running)
             delay = 1.2 if firefox_running else 4.0
             time.sleep(delay)
