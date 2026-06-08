@@ -956,6 +956,32 @@ class SearchPanel:
             session = self._filtered[self._selected_index]
             self._do_select(session)
 
+    def _autocomplete_search_command(self) -> bool:
+        """尝试对当前搜索栏的指令前缀进行 Tab 补全"""
+        raw_text = self._search_entry.get_text()
+        text = raw_text.strip()
+        if not text:
+            return False
+
+        # 统一使用类属性 _COMMANDS 作为单一数据源
+        cmds = [cmd for cmd, _ in self._COMMANDS]
+
+        # 判断是否已经是输入完成的指令（如 "/google " 之后）
+        for c in cmds:
+            if raw_text.startswith(c + " "):
+                return False
+
+        # 标准化补全前缀判断
+        search_prefix = text if text.startswith("/") else "/" + text
+
+        for c in cmds:
+            if c.startswith(search_prefix):
+                self._search_entry.set_text(c + " ")
+                self._search_entry.set_position(-1)
+                return True
+
+        return False
+
     def _on_key_press(self, _widget, event):
         keyname = Gdk.keyval_name(event.keyval)
 
@@ -983,34 +1009,8 @@ class SearchPanel:
             return False
 
         if keyname == "Tab":
-            raw_text = self._search_entry.get_text()
-            text = raw_text.strip()
-            cmds = ["/new", "/open", "/gm", "/google"]
-            
-            # Check if it's already completed (ends with a space after a valid command)
-            is_completed = False
-            for c in cmds:
-                if raw_text.startswith(c + " "):
-                    is_completed = True
-                    break
-                    
-            if not is_completed:
-                search_prefix = text
-                if text and not text.startswith("/"):
-                    search_prefix = "/" + text
-                
-                matched_cmd = None
-                if search_prefix:
-                    for c in cmds:
-                        if c.startswith(search_prefix):
-                            matched_cmd = c
-                            break
-                            
-                if matched_cmd:
-                    self._search_entry.set_text(matched_cmd + " ")
-                    self._search_entry.set_position(-1)
-                    return True
-
+            if self._autocomplete_search_command():
+                return True
             self._window.child_focus(Gtk.DirectionType.TAB_FORWARD)
             GLib.idle_add(self._focus_dir_listbox)
             return True
