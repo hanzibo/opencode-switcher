@@ -486,6 +486,7 @@ class SearchPanel:
     _COMMANDS = [
         ("/new", "Start a new OpenCode session"),
         ("/open", "Select a directory and start a new session"),
+        ("/gm", "Ask Gemini: /gm <query>"),
     ]
 
     def _apply_filters(self):
@@ -501,6 +502,7 @@ class SearchPanel:
 
             is_new_intent = query == "/new" or query.startswith("/new ")
             is_open_intent = query == "/open" or query.startswith("/open ")
+            is_gm_intent = query == "/gm" or query.startswith("/gm ")
 
             if is_new_intent and "/open" not in query:
                 target_dir = self._sessions[0].directory if self._sessions else os.path.expanduser("~")
@@ -517,10 +519,23 @@ class SearchPanel:
                     snippet="\u2192 Select a directory to start a new OpenCode session",
                     started_at=0, updated_at=0,
                 )]
+            elif is_gm_intent:
+                prompt_text = query[4:].strip()
+                snippet_text = f"Ask Gemini: {prompt_text}" if prompt_text else "Ask Gemini: /gm <query>"
+                self._filtered = [Session(
+                    id="gemini-query", title="/gm",
+                    directory="", project_name="", status="new",
+                    snippet=snippet_text, started_at=0, updated_at=0,
+                )]
             else:
                 for cmd, desc in self._COMMANDS:
                     if query == "/" or cmd.startswith(query):
-                        cmd_id = "new-opencode" if cmd == "/new" else "open-folder"
+                        if cmd == "/new":
+                            cmd_id = "new-opencode"
+                        elif cmd == "/open":
+                            cmd_id = "open-folder"
+                        else:
+                            cmd_id = "gemini-query"
                         self._filtered.append(Session(
                             id=cmd_id, title=cmd,
                             directory="", project_name="", status="new",
@@ -678,9 +693,11 @@ class SearchPanel:
         if not row or not hasattr(row, "session"):
             return False
         self._listbox.select_row(row)
+        session = row.session
+        if session.id in ("new-opencode", "open-folder", "gemini-query"):
+            return False
         self._menu_active = True
         menu = Gtk.Menu.new()
-        session = row.session
         rename_item = Gtk.MenuItem.new_with_label("Rename session")
         rename_item.connect("activate", lambda *_: self._on_rename(session))
         menu.append(rename_item)
@@ -775,9 +792,63 @@ class SearchPanel:
             dialog.connect("response", _on_dialog_response)
             dialog.show()
             return
+        if session.id == "gemini-query":
+            query = self._search_entry.get_text().strip()
+            prompt_text = ""
+            if query.startswith("/gm ") or query == "/gm":
+                prompt_text = query[4:].strip()
+            self._handle_gm_command(prompt_text)
+            return
         self.hide()
         if self.on_select:
             self.on_select(session)
+
+    def _handle_gm_command(self, prompt_text: str):
+        import subprocess
+        import threading
+
+        # 1. Copy prompt to clipboard
+        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        clipboard.set_text(prompt_text, -1)
+        clipboard.store()
+        if hasattr(self, "_clip_store") and self._clip_store:
+            self._clip_store.mark_written(prompt_text)
+
+        # 2. Hide panel
+        self.hide()
+
+        # 3. Launch Firefox and auto-type in background thread
+        def automate_typing():
+            try:
+                # Open Firefox
+                subprocess.Popen(["firefox", "https://gemini.google.com/app"])
+            except Exception as e:
+                print(f"Error launching Firefox: {e}", flush=True)
+                return
+
+            # Wait for browser and page to load
+            time.sleep(3.5)
+
+            # Inject Ctrl+V and Enter
+            try:
+                from pynput.keyboard import Controller, Key
+                keyboard = Controller()
+                
+                # Press Ctrl+V
+                with keyboard.pressed(Key.ctrl):
+                    keyboard.press('v')
+                    keyboard.release('v')
+                
+                # Sleep briefly before Enter
+                time.sleep(0.3)
+                
+                # Press Enter
+                keyboard.press(Key.enter)
+                keyboard.release(Key.enter)
+            except Exception as e:
+                print(f"Error simulating keyboard input: {e}", flush=True)
+
+        threading.Thread(target=automate_typing, daemon=True).start()
 
     def _on_row_activated(self, _listbox, row):
         if hasattr(row, "session"):
@@ -790,6 +861,13 @@ class SearchPanel:
 
     def _on_key_press(self, _widget, event):
         keyname = Gdk.keyval_name(event.keyval)
+
+        if keyname in ("Return", "KP_Enter"):
+            query = self._search_entry.get_text().strip()
+            if query.startswith("/gm ") or query == "/gm":
+                prompt_text = query[4:].strip()
+                self._handle_gm_command(prompt_text)
+                return True
 
         if self._active_tab == 1 and self._clipboard_panel:
             if keyname in ("Down", "KP_Down", "Up", "KP_Up"):
@@ -830,13 +908,13 @@ class SearchPanel:
         elif keyname in ("Delete", "KP_Delete"):
             if self._filtered and self._selected_index < len(self._filtered):
                 session = self._filtered[self._selected_index]
-                if session.id not in ("new-opencode", "open-folder"):
+                if session.id not in ("new-opencode", "open-folder", "gemini-query"):
                     self._on_delete(session)
             return True
         elif event.keyval == Gdk.KEY_r and (event.state & Gdk.ModifierType.CONTROL_MASK):
             if self._filtered and self._selected_index < len(self._filtered):
                 session = self._filtered[self._selected_index]
-                if session.id not in ("new-opencode", "open-folder"):
+                if session.id not in ("new-opencode", "open-folder", "gemini-query"):
                     self._on_rename(session)
             return True
         return False
@@ -907,14 +985,14 @@ class SearchPanel:
             selected = self._listbox.get_selected_row()
             if selected and hasattr(selected, "session"):
                 session = selected.session
-                if session.id not in ("new-opencode", "open-folder"):
+                if session.id not in ("new-opencode", "open-folder", "gemini-query"):
                     self._on_delete(session)
             return True
         elif event.keyval == Gdk.KEY_r and (event.state & Gdk.ModifierType.CONTROL_MASK):
             selected = self._listbox.get_selected_row()
             if selected and hasattr(selected, "session"):
                 session = selected.session
-                if session.id not in ("new-opencode", "open-folder"):
+                if session.id not in ("new-opencode", "open-folder", "gemini-query"):
                     self._on_rename(session)
             return True
         return False
