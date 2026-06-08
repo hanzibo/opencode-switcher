@@ -487,6 +487,7 @@ class SearchPanel:
         ("/new", "Start a new OpenCode session"),
         ("/open", "Select a directory and start a new session"),
         ("/gm", "Ask Gemini: /gm <query>"),
+        ("/google", "Google AI Search: /google <query>"),
     ]
 
     def _apply_filters(self):
@@ -503,6 +504,7 @@ class SearchPanel:
             is_new_intent = query == "/new" or query.startswith("/new ")
             is_open_intent = query == "/open" or query.startswith("/open ")
             is_gm_intent = query == "/gm" or query.startswith("/gm ")
+            is_google_intent = query == "/google" or query.startswith("/google ")
 
             if is_new_intent and "/open" not in query:
                 target_dir = self._sessions[0].directory if self._sessions else os.path.expanduser("~")
@@ -527,6 +529,14 @@ class SearchPanel:
                     directory="", project_name="", status="new",
                     snippet=snippet_text, started_at=0, updated_at=0,
                 )]
+            elif is_google_intent:
+                prompt_text = query[8:].strip()
+                snippet_text = f"Google AI Search: {prompt_text}" if prompt_text else "Google AI Search: /google <query>"
+                self._filtered = [Session(
+                    id="google-query", title="/google",
+                    directory="", project_name="", status="new",
+                    snippet=snippet_text, started_at=0, updated_at=0,
+                )]
             else:
                 for cmd, desc in self._COMMANDS:
                     if query == "/" or cmd.startswith(query):
@@ -534,8 +544,10 @@ class SearchPanel:
                             cmd_id = "new-opencode"
                         elif cmd == "/open":
                             cmd_id = "open-folder"
-                        else:
+                        elif cmd == "/gm":
                             cmd_id = "gemini-query"
+                        else:
+                            cmd_id = "google-query"
                         self._filtered.append(Session(
                             id=cmd_id, title=cmd,
                             directory="", project_name="", status="new",
@@ -694,7 +706,7 @@ class SearchPanel:
             return False
         self._listbox.select_row(row)
         session = row.session
-        if session.id in ("new-opencode", "open-folder", "gemini-query"):
+        if session.id in ("new-opencode", "open-folder", "gemini-query", "google-query"):
             return False
         self._menu_active = True
         menu = Gtk.Menu.new()
@@ -799,9 +811,27 @@ class SearchPanel:
                 prompt_text = query[4:].strip()
             self._handle_gm_command(prompt_text)
             return
+        if session.id == "google-query":
+            query = self._search_entry.get_text().strip()
+            prompt_text = ""
+            if query.startswith("/google ") or query == "/google":
+                prompt_text = query[8:].strip()
+            self._handle_google_command(prompt_text)
+            return
         self.hide()
         if self.on_select:
             self.on_select(session)
+
+    def _handle_google_command(self, prompt_text: str):
+        import subprocess
+        import urllib.parse
+        self.hide()
+        encoded = urllib.parse.quote(prompt_text)
+        url = f"https://www.google.com/search?udm=50&q={encoded}"
+        try:
+            subprocess.Popen(["firefox", url])
+        except Exception as e:
+            print(f"Error launching Firefox for Google AI search: {e}", flush=True)
 
     def _handle_gm_command(self, prompt_text: str):
         import subprocess
@@ -919,6 +949,10 @@ class SearchPanel:
                 prompt_text = query[4:].strip()
                 self._handle_gm_command(prompt_text)
                 return True
+            elif query.startswith("/google ") or query == "/google":
+                prompt_text = query[8:].strip()
+                self._handle_google_command(prompt_text)
+                return True
 
         if self._active_tab == 1 and self._clipboard_panel:
             if keyname in ("Down", "KP_Down", "Up", "KP_Up"):
@@ -959,13 +993,13 @@ class SearchPanel:
         elif keyname in ("Delete", "KP_Delete"):
             if self._filtered and self._selected_index < len(self._filtered):
                 session = self._filtered[self._selected_index]
-                if session.id not in ("new-opencode", "open-folder", "gemini-query"):
+                if session.id not in ("new-opencode", "open-folder", "gemini-query", "google-query"):
                     self._on_delete(session)
             return True
         elif event.keyval == Gdk.KEY_r and (event.state & Gdk.ModifierType.CONTROL_MASK):
             if self._filtered and self._selected_index < len(self._filtered):
                 session = self._filtered[self._selected_index]
-                if session.id not in ("new-opencode", "open-folder", "gemini-query"):
+                if session.id not in ("new-opencode", "open-folder", "gemini-query", "google-query"):
                     self._on_rename(session)
             return True
         return False
@@ -1036,14 +1070,14 @@ class SearchPanel:
             selected = self._listbox.get_selected_row()
             if selected and hasattr(selected, "session"):
                 session = selected.session
-                if session.id not in ("new-opencode", "open-folder", "gemini-query"):
+                if session.id not in ("new-opencode", "open-folder", "gemini-query", "google-query"):
                     self._on_delete(session)
             return True
         elif event.keyval == Gdk.KEY_r and (event.state & Gdk.ModifierType.CONTROL_MASK):
             selected = self._listbox.get_selected_row()
             if selected and hasattr(selected, "session"):
                 session = selected.session
-                if session.id not in ("new-opencode", "open-folder", "gemini-query"):
+                if session.id not in ("new-opencode", "open-folder", "gemini-query", "google-query"):
                     self._on_rename(session)
             return True
         return False
