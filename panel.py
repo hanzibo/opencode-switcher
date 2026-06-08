@@ -819,6 +819,14 @@ class SearchPanel:
 
         # 3. Launch Firefox and auto-type in background thread
         def automate_typing():
+            # Check if Firefox is already running to decide on a short/long delay
+            firefox_running = False
+            try:
+                subprocess.check_output(["pgrep", "-f", "firefox"])
+                firefox_running = True
+            except Exception:
+                pass
+
             try:
                 # Open Firefox
                 subprocess.Popen(["firefox", "https://gemini.google.com/app"])
@@ -826,8 +834,10 @@ class SearchPanel:
                 print(f"Error launching Firefox: {e}", flush=True)
                 return
 
-            # Wait for browser and page to load
-            time.sleep(4.5)
+            # Wait for browser and page to load (much shorter delay if already running)
+            delay = 1.2 if firefox_running else 4.0
+            time.sleep(delay)
+
 
             # Inject Ctrl+V and Enter
             try:
