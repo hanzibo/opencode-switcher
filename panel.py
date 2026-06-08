@@ -827,10 +827,49 @@ class SearchPanel:
                 return
 
             # Wait for browser and page to load
-            time.sleep(3.5)
+            time.sleep(4.5)
 
             # Inject Ctrl+V and Enter
             try:
+                # Try evdev (uinput) first for Wayland/X11 hardware-level emulation
+                try:
+                    from evdev import UInput, ecodes as ec
+                    events = {
+                        ec.EV_KEY: [ec.KEY_LEFTCTRL, ec.KEY_V, ec.KEY_ENTER]
+                    }
+                    ui = UInput(events)
+                    
+                    # Press Ctrl+V
+                    ui.write(ec.EV_KEY, ec.KEY_LEFTCTRL, 1)
+                    ui.write(ec.EV_KEY, ec.KEY_V, 1)
+                    ui.syn()
+                    
+                    time.sleep(0.05)
+                    
+                    # Release Ctrl+V
+                    ui.write(ec.EV_KEY, ec.KEY_V, 0)
+                    ui.write(ec.EV_KEY, ec.KEY_LEFTCTRL, 0)
+                    ui.syn()
+                    
+                    time.sleep(0.3)
+                    
+                    # Press Enter
+                    ui.write(ec.EV_KEY, ec.KEY_ENTER, 1)
+                    ui.syn()
+                    
+                    time.sleep(0.05)
+                    
+                    # Release Enter
+                    ui.write(ec.EV_KEY, ec.KEY_ENTER, 0)
+                    ui.syn()
+                    
+                    ui.close()
+                    print("Automated typing successfully via evdev.UInput", flush=True)
+                    return
+                except Exception as evdev_err:
+                    print(f"evdev.UInput failed or not available ({evdev_err}), falling back to pynput...", flush=True)
+
+                # Fallback to pynput
                 from pynput.keyboard import Controller, Key
                 keyboard = Controller()
                 
@@ -845,10 +884,12 @@ class SearchPanel:
                 # Press Enter
                 keyboard.press(Key.enter)
                 keyboard.release(Key.enter)
+                print("Automated typing successfully via pynput", flush=True)
             except Exception as e:
                 print(f"Error simulating keyboard input: {e}", flush=True)
 
         threading.Thread(target=automate_typing, daemon=True).start()
+
 
     def _on_row_activated(self, _listbox, row):
         if hasattr(row, "session"):
