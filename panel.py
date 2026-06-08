@@ -823,14 +823,13 @@ class SearchPanel:
             self.on_select(session)
 
     def _handle_google_command(self, prompt_text: str):
-        import subprocess
         import urllib.parse
         encoded = urllib.parse.quote(prompt_text)
         url = f"https://www.google.com/search?udm=50&q={encoded}"
         try:
-            subprocess.Popen(["firefox", url])
+            Gtk.show_uri_on_window(self._window, url, Gdk.CURRENT_TIME)
         except Exception as e:
-            print(f"Error launching Firefox for Google AI search: {e}", flush=True)
+            print(f"Error launching Google AI search: {e}", flush=True)
         GLib.idle_add(self.hide)
 
     def _handle_gm_command(self, prompt_text: str):
@@ -852,11 +851,11 @@ class SearchPanel:
         except Exception:
             pass
 
-        # 3. Launch Firefox first (while switcher panel is still active/focused)
+        # 3. Launch Gemini URL via Gtk.show_uri_on_window (handles focus transfer)
         try:
-            subprocess.Popen(["firefox", "https://gemini.google.com/app"])
+            Gtk.show_uri_on_window(self._window, "https://gemini.google.com/app", Gdk.CURRENT_TIME)
         except Exception as e:
-            print(f"Error launching Firefox: {e}", flush=True)
+            print(f"Error launching Gemini: {e}", flush=True)
             self.hide()
             return
 
