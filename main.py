@@ -4,6 +4,7 @@ import os
 import fcntl
 import sys
 import threading
+import time
 from typing import Optional
 import gi
 gi.require_version("Gtk", "3.0")
@@ -52,6 +53,7 @@ class App:
         self._panel.set_clipboard_panel(clip_panel, self._clip_store, self._prompt_store, self._cat_store)
 
         self._hotkey = HotkeyManager()
+        self._running = True
         self._indicator = self._build_indicator()
 
         self._panel.on_select = self._on_session_selected
@@ -60,6 +62,14 @@ class App:
         self._panel.on_rename_session = self._on_rename_session
         self._panel.on_launch_pure = self._on_session_launch_pure
         self._hotkey.on_trigger = lambda: self._on_hotkey()
+
+    def _clipboard_loop(self):
+        """Background daemon thread: initial capture + periodic polling on X11."""
+        capture_clipboard_once(self._clip_store)
+        while self._running:
+            if not is_wayland():
+                capture_clipboard_once(self._clip_store)
+            time.sleep(3)
 
     def _build_indicator(self):
         ind = AyatanaAppIndicator3.Indicator.new(
@@ -126,27 +136,13 @@ class App:
     def _on_hotkey(self):
         GLib.idle_add(self._panel.toggle)
 
-    def _poll_clipboard(self) -> bool:
-        def _task():
-            capture_clipboard_once(self._clip_store)
-        threading.Thread(target=_task, daemon=True).start()
-        return True
-
     def run(self):
         self._hotkey.start()
-
-        # Capture current clipboard on startup to make sure we are in sync
-        def _initial_sync():
-            capture_clipboard_once(self._clip_store)
-        threading.Thread(target=_initial_sync, daemon=True).start()
-
-        # Poll clipboard in background only on X11.
-        # Under Wayland, we rely on the event-driven GNOME Shell extension marker updates.
-        if not is_wayland():
-            GLib.timeout_add_seconds(3, self._poll_clipboard)
+        threading.Thread(target=self._clipboard_loop, daemon=True).start()
         Gtk.main()
 
     def stop(self):
+        self._running = False
         self._hotkey.stop()
         self._indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.PASSIVE)
         self._indicator = None

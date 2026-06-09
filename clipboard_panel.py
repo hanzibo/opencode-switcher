@@ -295,10 +295,8 @@ class ClipboardPanel(Gtk.Box):
         self._rebuild()
 
     def load_data(self):
-        def _capture():
-            capture_clipboard_once(self._clip_store)
-            GLib.idle_add(self._finish_load)
-        threading.Thread(target=_capture, daemon=True).start()
+        capture_clipboard_once(self._clip_store)
+        GLib.idle_add(self._finish_load)
 
     def _finish_load(self):
         self._clip_store.reload()
@@ -741,10 +739,8 @@ class ClipboardPanel(Gtk.Box):
                 pass
 
             if is_image:
-                def _task():
-                    capture_clipboard_once(self._clip_store)
-                    GLib.idle_add(self._finish_load)
-                threading.Thread(target=_task, daemon=True).start()
+                capture_clipboard_once(self._clip_store)
+                GLib.idle_add(self._finish_load)
             else:
                 self._finish_load()
 
