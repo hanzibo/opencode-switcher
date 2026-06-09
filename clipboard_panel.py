@@ -173,6 +173,17 @@ class ClipboardPanel(Gtk.Box):
             return None
         return self._cat_store.get(self._active_category_id)
 
+    def _make_category_label(self, name: str, cat_id: str) -> Gtk.Label:
+        lbl = Gtk.Label.new(name)
+        lbl.set_name("catLabel")
+        lbl.set_xalign(0)
+        lbl.set_margin_start(16)
+        lbl.set_margin_top(12)
+        lbl.set_margin_bottom(12)
+        if cat_id == "__clipboard__":
+            lbl.set_markup(f"<b>{name}</b>")
+        return lbl
+
     def _rebuild_category_list(self):
         """Rebuild the sidebar category list from CategoryStore."""
         for child in self._cat_list.get_children():
@@ -181,14 +192,7 @@ class ClipboardPanel(Gtk.Box):
             row = Gtk.ListBoxRow.new()
             row.get_style_context().add_class("cat-row")
             row.cat_id = cat.id
-            lbl = Gtk.Label.new(cat.name)
-            lbl.set_name("catLabel")
-            lbl.set_xalign(0)
-            lbl.set_margin_start(16)
-            lbl.set_margin_top(12)
-            lbl.set_margin_bottom(12)
-            if cat.id == "__clipboard__":
-                lbl.set_markup(f"<b>{cat.name}</b>")
+            lbl = self._make_category_label(cat.name, cat.id)
             row.add(lbl)
             self._cat_list.add(row)
         self._cat_list.show_all()
@@ -767,9 +771,6 @@ class ClipboardPanel(Gtk.Box):
         name_entry.set_activates_default(True)
         content.add(name_entry)
 
-        error_label = Gtk.Label.new("")
-        error_label.override_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(1, 0, 0, 1))
-        content.add(error_label)
 
         if self.on_dialog_shown:
             self.on_dialog_shown()
@@ -863,15 +864,7 @@ class ClipboardPanel(Gtk.Box):
         entry.grab_focus()
 
         def make_lbl(text):
-            lbl = Gtk.Label.new(text)
-            lbl.set_name("catLabel")
-            lbl.set_xalign(0)
-            lbl.set_margin_start(16)
-            lbl.set_margin_top(12)
-            lbl.set_margin_bottom(12)
-            if cat_id == "__clipboard__":
-                lbl.set_markup(f"<b>{text}</b>")
-            return lbl
+            return self._make_category_label(text, cat_id)
 
         def revert():
             if entry.get_parent() == selected_row:

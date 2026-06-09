@@ -227,18 +227,25 @@ class CategoryStore:
         with open(CATEGORIES_PATH, "w") as f:
             json.dump({"version": 1, "categories": [asdict(c) for c in self._categories]}, f, indent=2)
 
-    def get_all(self) -> List[CustomCategory]:
-        clipboard_cat = CustomCategory(
+    @staticmethod
+    def _assert_not_clipboard(cat_id: str):
+        if cat_id == "__clipboard__":
+            raise ValueError("Cannot modify the Clipboard category")
+
+    @staticmethod
+    def _clipboard_category() -> CustomCategory:
+        return CustomCategory(
             id="__clipboard__", name="Clipboard", items=[], pinned=True, created_at=0
         )
+
+    def get_all(self) -> List[CustomCategory]:
+        clipboard_cat = self._clipboard_category()
         sorted_cats = sorted(self._categories, key=lambda c: c.created_at, reverse=True)
         return [clipboard_cat] + [deepcopy(c) for c in sorted_cats]
 
     def get(self, cat_id: str) -> Optional[CustomCategory]:
         if cat_id == "__clipboard__":
-            return CustomCategory(
-                id="__clipboard__", name="Clipboard", items=[], pinned=True, created_at=0
-            )
+            return self._clipboard_category()
         for c in self._categories:
             if c.id == cat_id:
                 return deepcopy(c)
@@ -258,8 +265,7 @@ class CategoryStore:
         return cat_id
 
     def delete(self, cat_id: str):
-        if cat_id == "__clipboard__":
-            raise ValueError("Cannot delete the Clipboard category")
+        self._assert_not_clipboard(cat_id)
         for c in self._categories:
             if c.id == cat_id:
                 if c.pinned:
@@ -267,10 +273,10 @@ class CategoryStore:
                 self._categories.remove(c)
                 self._save()
                 return
+        raise ValueError(f"Category '{cat_id}' not found")
 
     def rename(self, cat_id: str, new_name: str):
-        if cat_id == "__clipboard__":
-            raise ValueError("Cannot rename the Clipboard category")
+        self._assert_not_clipboard(cat_id)
         if not new_name.strip():
             raise ValueError("Category name cannot be empty")
         if any(c.name == new_name for c in self._categories if c.id != cat_id):
@@ -283,8 +289,7 @@ class CategoryStore:
         raise ValueError(f"Category '{cat_id}' not found")
 
     def add_item(self, cat_id: str, title: str, text: str):
-        if cat_id == "__clipboard__":
-            raise ValueError("Cannot add items to the Clipboard category")
+        self._assert_not_clipboard(cat_id)
         for c in self._categories:
             if c.id == cat_id:
                 c.items.append(CategoryItem(
@@ -295,8 +300,7 @@ class CategoryStore:
         raise ValueError(f"Category '{cat_id}' not found")
 
     def update_item(self, cat_id: str, index: int, title: str, text: str):
-        if cat_id == "__clipboard__":
-            raise ValueError("Cannot modify items in the Clipboard category")
+        self._assert_not_clipboard(cat_id)
         for c in self._categories:
             if c.id == cat_id:
                 if 0 <= index < len(c.items):
@@ -309,8 +313,7 @@ class CategoryStore:
         raise ValueError(f"Category '{cat_id}' not found")
 
     def delete_item(self, cat_id: str, index: int):
-        if cat_id == "__clipboard__":
-            raise ValueError("Cannot delete items from the Clipboard category")
+        self._assert_not_clipboard(cat_id)
         for c in self._categories:
             if c.id == cat_id:
                 if 0 <= index < len(c.items):
