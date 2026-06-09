@@ -584,6 +584,7 @@ class ClipboardPanel(Gtk.Box):
             transient_for=self.get_toplevel(),
             modal=True,
         )
+        dialog.set_default_size(520, 420)
         dialog.add_button("_Cancel", Gtk.ResponseType.CANCEL)
         dialog.add_button("_Save", Gtk.ResponseType.ACCEPT)
         dialog.set_default_response(Gtk.ResponseType.ACCEPT)
@@ -606,7 +607,8 @@ class ClipboardPanel(Gtk.Box):
         text_view = Gtk.TextView.new()
         text_view.set_wrap_mode(Gtk.WrapMode.WORD)
         sw = Gtk.ScrolledWindow.new()
-        sw.set_min_content_height(120)
+        sw.set_min_content_height(240)
+        sw.set_min_content_width(460)
         sw.add(text_view)
         content.add(sw)
 
