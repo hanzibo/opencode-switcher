@@ -8,7 +8,7 @@
 |------|-----|
 | 语言 | Python 3 (GTK3) + JavaScript (GNOME Extension) |
 | 核心文件数 | 8 个 Python 模块 |
-| 总代码量 | ~2,250 行 Python + ~90 行 JS |
+| 总代码量 | ~2,600 行 Python + ~90 行 JS |
 | GUI 框架 | GTK3 (python3-gi) |
 | 事件模型 | 纯同步 `Gtk.main()` 事件循环，无 asyncio |
 
@@ -30,7 +30,7 @@ graph TB
     end
     subgraph "数据层"
         SessionStore["session_store.py<br/>SQLite 读写 & 活跃进程扫描"]
-        ClipStore["clipboard_store.py<br/>JSON FIFO & 命令行采集"]
+        ClipStore["clipboard_store.py<br/>JSON FIFO + CategoryStore CRUD"]
     end
     subgraph "系统交互"
         Hotkey["hotkey.py<br/>X11/Wayland 混合热键监听"]
@@ -61,7 +61,8 @@ graph TB
 - **单实例锁**：通过 `fcntl.flock(LOCK_EX | LOCK_NB)` 锁文件 `~/.config/opencode-switcher/lock`，确保仅运行单个实例。
 - **系统托盘**：使用 `AyatanaAppIndicator3`，支持 Show/Hide、亮/暗主题切换、退出确认等功能。
 - **对话框一致性**：移除了阻塞式的 `dialog.run()`，统一为非阻塞/异步的事件回调机制（`dialog.connect("response", ...)` + `dialog.show_all()`），防止 GTK 事件循环挂起。
-- **差异化轮询逻辑**：在启动时执行一次同步。在 Wayland 环境下完全停用后台轮询定时器，改由 GNOME 扩展通过 `owner-changed` 写入 marker 来实时触发 Python 端的一次性数据采集；在 X11 下，则继续使用 3 秒定时器安全轮询。
+- **线程优化 — 持久轮询线程**：将原来每 3 秒创建临时线程的 `GLib.timeout_add_seconds` + `threading.Thread` 模式，改为单一 `_clipboard_loop` 守护线程（`while self._running / time.sleep(3)` 循环），消除约 28,800 次/天的线程创建/销毁开销。同时移除了启动时、`load_data()`、marker 回调中不必要的线程包装，RSS 降低约 36%（166MB → 107MB）。
+- **差异化轮询逻辑**：在启动时执行一次同步。在 Wayland 环境下完全停用后台轮询，改由 GNOME 扩展通过 `owner-changed` 写入 marker 来实时触发采集；在 X11 下，由 `_clipboard_loop` 守护线程每 3 秒轮询一次。
 
 ### 2. [panel.py](file:///home/hzb/Work/opencode-switcher/panel.py) — 搜索面板 ⭐ 核心 UI
 - **窗口特性**：无装饰器 (`set_decorated(False)`)、置顶显示并跳过任务栏。
@@ -72,13 +73,15 @@ graph TB
 - **会话操作**：支持对列表行进行右键菜单操作（“Rename”、“Delete” 以及 “Start without plugins” 纯净启动）。
 - **主题应用**：基于动态配置构造 CSS 数据，通过 `CssProvider` 载入。添加了 Provider 资源清理逻辑防止主题切换时的内存泄漏。
 
-### 3. [clipboard_panel.py](file:///home/hzb/Work/opencode-switcher/clipboard_panel.py) — 剪贴板/提示词面板
+### 3. [clipboard_panel.py](file:///home/hzb/Work/opencode-switcher/clipboard_panel.py) — 剪贴板/自定义分类面板
 - **布局结构**：三分栏设计（分类侧边栏 | 内容列表 | 动作操作栏）。
-- **Prompts 功能**：支持右键弹出菜单。新增了 **Copy** 选项，允许右键复制选中的 Prompt 全文，并在复制完成后自动隐藏面板，交互行为与剪贴板历史模式保持一致。
+- **自定义分类管理**：侧边栏顶部新增 "+ New"、"⌫ Delete"、"✎ Rename" 三个工具栏按钮。用户可以创建自定义分类（每个分类拥有独立的项目列表，与 Prompts 模式行为一致）、删除（含确认对话框）、重命名（内联编辑，Enter 确认，点击外部取消）。
+- **分类数据持久化**：自定义分类及其项目存储在 `~/.config/opencode-switcher/categories.json` 中。首次运行时自动从旧版 `prompts.json` 迁移数据。
+- **Clipboard 模式保护**：系统剪贴板模式始终固定在分类列表首位，不允许删除或重命名。
+- **图片缩略图缓存优化**：`_build_clip_row()` 中生成的 `GdkPixbuf` 缩略图现在缓存到 `ClipboardItem._thumb_pixbuf`，避免每次面板重建（切换分类、搜索过滤）都从磁盘重新加载和解码图片。
 - **图片历史显示与载入**：利用 `GdkPixbuf.Pixbuf` 从本地缓存路径读取图片并做等比例缩放（限制高度在 40px 内），生成行内预览缩略图。
 - **图片写回与防二次捕获**：当用户在历史列表中选中或双击图片行时，将其写回系统剪贴板（Wayland 环境下使用 `wl-copy`，X11 环境下使用 `xclip`）。此外，通过将该项的唯一哈希传导给 `_on_clipboard_copied` 并保存到 `_last_written_hash`，能有效防止轮询线程发生二次捕获。
 - **文件监控**：通过 `Gio.FileMonitor` 监听更新 marker 文件 `clipboard.updated`，实现免轮询的剪贴板即时响应。
-- **提示词刷新优化**：创建或编辑 Prompt 时使用 `load_cached()` 代替原来的 `load_data()`，避免在不涉及剪贴板更新的场景下触发冗余的系统剪贴板探测动作。
 
 ### 4. [utils.py](file:///home/hzb/Work/opencode-switcher/utils.py) — 共享工具
 - 承载原本在 `panel.py` 和 `clipboard_panel.py` 中重复定义的 `relative_time(ts_ms)` 相对时间转换算法，降低代码重复度。
@@ -102,7 +105,9 @@ graph TB
 - **静默依赖检测**：在执行安装命令时，先使用 `dpkg -s` 检查系统包（如 `python3-gi`、`wl-clipboard`）是否已满足。如果全部满足，则直接**跳过** `sudo apt` 提权步骤，避免阻碍非交互式脚本的执行或频繁打扰用户输入密码。
 - **部署维护**：将新加入的 `utils.py` 加入到文件复制清单中。
 
-### 9. [clipboard_store.py](file:///home/hzb/Work/opencode-switcher/clipboard_store.py) — 剪贴板存储数据层
+### 9. [clipboard_store.py](file:///home/hzb/Work/opencode-switcher/clipboard_store.py) — 剪贴板存储 + 分类数据层
+- **CategoryStore**：新增 `CategoryStore` 类管理自定义分类，支持完整 CRUD（create/delete/rename 分类，add_item/update_item/delete_item 项目）。数据持久化到 `categories.json`（version 1 格式），首次运行自动从 `prompts.json` 迁移旧数据。`get_all()` 返回合成 `__clipboard__` 固定分类 + 按创建时间降序排列的自定义分类（深拷贝）。
+- **防护守卫**：`_assert_not_clipboard()` 静态方法统一拦截对 `__clipboard__` 的修改操作，避免 5 处重复守卫逻辑。
 - **图片数据结构适配**：扩展 `ClipboardItem` 实体类，新增 `type: str = "text"` 和 `image_path: Optional[str] = None` 字段。
 - **多平台图片剪贴板采集**：在 `capture_clipboard_once` 轮询时，检测系统环境（Wayland 环境读取 `wl-paste --list-types`，X11 环境读取 `xclip -t TARGETS`），当包含 `image/png` 目标格式时，提取原始 PNG 字节。
 - **高效文件物理持久化**：计算图片哈希值，并将图片以 PNG 文件格式物理存储至 `~/.config/opencode-switcher/images/<hash>.png`。而在 JSON 历史中仅保存文件路径和元信息，避免因 Base64 大数据严重拖慢 JSON 序列化和磁盘 I/O 效率。
@@ -132,6 +137,9 @@ graph TB
 | 🟢 **Low** | Wayland 热键监听 Unix 套接字未作报文验证 | 对收到的数据做 `strip() == b"toggle"` 严格校验。 |
 | 🟢 **Low** | 安装脚本无论系统依赖是否满足都强制请求 sudo 权限 | 用 `dpkg -s` 优先检测本地状态，依赖全部满足时直接跳过 `apt install` 提权流程。 |
 | 🟢 **Low** | Python 3.9+ 专属类型别名语法影响旧版解释器兼容性 | 从 `typing` 模块导入 `Tuple` 与 `Dict` 重构结构定义。 |
+| 🟡 **Medium** | 自定义分类项目双击/右键复制无响应 | 缺少 `CategoryItem` 导入导致 `isinstance` 检查引发静默 `NameError`。在 import 中添加 `CategoryItem`。 |
+| 🟡 **Medium** | 系统剪贴板面板每 3 秒创建临时线程，24h 约 28,800 次线程创建/销毁 | 改为单一 `_clipboard_loop` 守护线程，内存 RSS 降低 36%。 |
+| 🟢 **Low** | 图片缩略图每次面板重建都从磁盘重新加载解码 | Pixbuf 缓存到 `ClipboardItem._thumb_pixbuf`，避免重复 I/O。 |
 
 ---
 
