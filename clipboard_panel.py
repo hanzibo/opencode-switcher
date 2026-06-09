@@ -59,6 +59,7 @@ class ClipboardPanel(Gtk.Box):
         self._clip_items: List[ClipboardItem] = []
         self._selected_index = 0
         self._filter_query = ""
+        self._in_category_button = False
 
         self.on_copy_clipboard: Optional[Callable[[str], None]] = None
         self.on_hide_request: Optional[Callable[[], None]] = None
@@ -463,7 +464,8 @@ class ClipboardPanel(Gtk.Box):
             return
         self._active_category_id = row.cat_id
         self._selected_index = 0
-        self._rebuild()
+        if not self._in_category_button:
+            self._rebuild()
 
     def _on_category_button(self, _listbox, event):
         if event.button != 3:
@@ -475,7 +477,9 @@ class ClipboardPanel(Gtk.Box):
         if cat_id == "__clipboard__":
             return False
 
+        self._in_category_button = True
         self._cat_list.select_row(row)
+        self._in_category_button = False
 
         cat = self._cat_store.get(cat_id)
         if cat is None:
