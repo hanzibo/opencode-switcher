@@ -85,12 +85,46 @@ class ClipboardPanel(Gtk.Box):
         self._set_theme("dark")
 
     def _build_ui(self):
+        self._cat_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+
+        self._cat_toolbar = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 2)
+        self._cat_toolbar.set_margin_start(4)
+        self._cat_toolbar.set_margin_end(4)
+        self._cat_toolbar.set_margin_top(6)
+        self._cat_toolbar.set_margin_bottom(2)
+
+        self._btn_new_cat = Gtk.Button.new_with_label("+ New")
+        self._btn_new_cat.set_tooltip_text("new")
+        self._btn_new_cat.set_relief(Gtk.ReliefStyle.NONE)
+        self._btn_new_cat.get_style_context().add_class("cat-tool-btn")
+
+        self._btn_delete_cat = Gtk.Button.new_with_label("\u232b Delete")
+        self._btn_delete_cat.set_tooltip_text("delete")
+        self._btn_delete_cat.set_relief(Gtk.ReliefStyle.NONE)
+        self._btn_delete_cat.get_style_context().add_class("cat-tool-btn")
+
+        self._btn_rename_cat = Gtk.Button.new_with_label("\u270e Rename")
+        self._btn_rename_cat.set_tooltip_text("rename")
+        self._btn_rename_cat.set_relief(Gtk.ReliefStyle.NONE)
+        self._btn_rename_cat.get_style_context().add_class("cat-tool-btn")
+
+        self._btn_new_cat.connect("clicked", self._on_new_category_clicked)
+        self._btn_delete_cat.connect("clicked", self._on_delete_category_clicked)
+        self._btn_rename_cat.connect("clicked", self._on_rename_category_clicked)
+
         self._cat_list = Gtk.ListBox.new()
         self._cat_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self._cat_list.set_size_request(CATEGORY_WIDTH, -1)
         self._cat_list.connect("row-selected", self._on_category_selected)
 
         self._rebuild_category_list()
+
+        self._cat_toolbar.pack_start(self._btn_new_cat, False, False, 0)
+        self._cat_toolbar.pack_start(self._btn_delete_cat, False, False, 0)
+        self._cat_toolbar.pack_start(self._btn_rename_cat, False, False, 0)
+
+        self._cat_vbox.pack_start(self._cat_toolbar, False, False, 0)
+        self._cat_vbox.pack_start(self._cat_list, True, True, 0)
 
         self._cat_sep = Gtk.DrawingArea.new()
         self._cat_sep.set_size_request(1, -1)
@@ -128,7 +162,7 @@ class ClipboardPanel(Gtk.Box):
         self._btn_edit = Gtk.Button.new_with_label("Edit")
         self._btn_edit.connect("clicked", self._on_edit_clicked)
 
-        self.pack_start(self._cat_list, False, True, 0)
+        self.pack_start(self._cat_vbox, False, True, 0)
         self.pack_start(self._cat_sep, False, False, 0)
         self.pack_start(self._content_scrolled, True, True, 0)
         self.pack_start(self._action_sep, False, False, 0)
@@ -232,6 +266,9 @@ class ClipboardPanel(Gtk.Box):
             " border: 1px solid %(btn_border)s; border-radius: 6px; padding: 8px 16px; font-size: 14px; font-weight: 500; }"
             "button:hover { background: %(btn_hover)s; border-color: %(sel_border)s; }"
             "button:active { background: %(btn_active)s; }"
+            ".cat-tool-btn { font-size: 12px; padding: 4px 6px; border: none; border-radius: 4px; }"
+            ".cat-tool-btn:hover { background: %(btn_hover)s; }"
+            ".cat-tool-btn:active { background: %(btn_active)s; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self, self._cat_list, self._content_scrolled, self._content_list):
@@ -412,6 +449,11 @@ class ClipboardPanel(Gtk.Box):
             self._action_box.pack_start(self._btn_delete, False, False, 0)
 
         self._action_box.show_all()
+
+        is_clipboard = self._active_category_id == "__clipboard__"
+        has_custom_cats = any(c.id != "__clipboard__" for c in self._cat_store.get_all())
+        self._btn_delete_cat.set_sensitive(not is_clipboard and has_custom_cats)
+        self._btn_rename_cat.set_sensitive(not is_clipboard)
 
     def _on_category_selected(self, _listbox, row):
         if row is None:
@@ -702,3 +744,12 @@ class ClipboardPanel(Gtk.Box):
                 threading.Thread(target=_task, daemon=True).start()
             else:
                 self._finish_load()
+
+    def _on_new_category_clicked(self, _btn):
+        pass
+
+    def _on_delete_category_clicked(self, _btn):
+        pass
+
+    def _on_rename_category_clicked(self, _btn):
+        pass
