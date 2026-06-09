@@ -240,8 +240,9 @@ class CategoryStore:
 
     def get_all(self) -> List[CustomCategory]:
         clipboard_cat = self._clipboard_category()
-        sorted_cats = sorted(self._categories, key=lambda c: c.created_at, reverse=True)
-        return [clipboard_cat] + [deepcopy(c) for c in sorted_cats]
+        pinned = sorted([c for c in self._categories if c.pinned], key=lambda c: c.created_at, reverse=True)
+        unpinned = sorted([c for c in self._categories if not c.pinned], key=lambda c: c.created_at, reverse=True)
+        return [clipboard_cat] + [deepcopy(c) for c in pinned] + [deepcopy(c) for c in unpinned]
 
     def get(self, cat_id: str) -> Optional[CustomCategory]:
         if cat_id == "__clipboard__":
@@ -284,6 +285,17 @@ class CategoryStore:
         for c in self._categories:
             if c.id == cat_id:
                 c.name = new_name
+                self._save()
+                return
+        raise ValueError(f"Category '{cat_id}' not found")
+
+    def set_pinned(self, cat_id: str, pinned: bool):
+        self._assert_not_clipboard(cat_id)
+        for c in self._categories:
+            if c.id == cat_id:
+                if c.pinned == pinned:
+                    return
+                c.pinned = pinned
                 self._save()
                 return
         raise ValueError(f"Category '{cat_id}' not found")

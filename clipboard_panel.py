@@ -115,6 +115,7 @@ class ClipboardPanel(Gtk.Box):
         self._cat_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self._cat_list.set_size_request(CATEGORY_WIDTH, -1)
         self._cat_list.connect("row-selected", self._on_category_selected)
+        self._cat_list.connect("button-press-event", self._on_category_button)
 
         self._rebuild_category_list()
 
@@ -463,6 +464,40 @@ class ClipboardPanel(Gtk.Box):
         self._active_category_id = row.cat_id
         self._selected_index = 0
         self._rebuild()
+
+    def _on_category_button(self, _listbox, event):
+        if event.button != 3:
+            return False
+        row = self._cat_list.get_row_at_y(int(event.y))
+        if row is None or not hasattr(row, 'cat_id'):
+            return False
+        cat_id = row.cat_id
+        if cat_id == "__clipboard__":
+            return False
+
+        self._cat_list.select_row(row)
+
+        cat = self._cat_store.get(cat_id)
+        if cat is None:
+            return False
+
+        menu = Gtk.Menu.new()
+        if cat.pinned:
+            item = Gtk.MenuItem.new_with_label("Remove from Top")
+        else:
+            item = Gtk.MenuItem.new_with_label("Show at Top")
+        item.connect("activate", lambda *_: self._toggle_pin(cat_id, not cat.pinned))
+        menu.append(item)
+        menu.show_all()
+        menu.popup_at_pointer(event)
+        return True
+
+    def _toggle_pin(self, cat_id: str, pinned: bool):
+        try:
+            self._cat_store.set_pinned(cat_id, pinned)
+            self._rebuild_category_list()
+        except ValueError:
+            pass
 
     def _on_content_activated(self, _listbox, row):
         if hasattr(row, "store_item"):
