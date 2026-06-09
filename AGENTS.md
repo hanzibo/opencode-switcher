@@ -18,8 +18,8 @@ Linux desktop tray app that switches between OpenCode (CLI) sessions via a Spotl
 |------|------|
 | `main.py` | Entry point. `App` class: single-instance lock (`fcntl.flock`), tray indicator (Ayatana AppIndicator3), wires hotkey ↔ panel ↔ launcher ↔ clipboard |
 | `panel.py` | GTK3 panel (~1176 lines). Tab bar (Sessions / Clipboard) + `Gtk.Stack`. Sessions: two-pane directory sidebar + session list with fuzzy search. |
-| `clipboard_panel.py` | Three-column Clipboard/Prompts view: category sidebar, content list, action button bar. Gio file monitor watches `clipboard.updated` marker file for clipboard changes. |
-| `clipboard_store.py` | Data layer: `ClipboardStore` (FIFO 150, hash-dedup, image support), `PromptStore` (CRUD), `capture_clipboard_once()` polls `wl-paste`/`xclip`. |
+| `clipboard_panel.py` | Three-column view: dynamic category sidebar (+ New/⌫ Delete/✎ Rename toolbar), content list, action button bar. Custom categories behave like Prompts with Create/Edit/Delete. Gio file monitor watches `clipboard.updated` marker file. |
+| `clipboard_store.py` | Data layer: `ClipboardStore` (FIFO 150, hash-dedup, image support), `CategoryStore` (user-defined custom categories with CRUD), `capture_clipboard_once()`. |
 | `session_store.py` | Reads OpenCode's SQLite DB (`~/.local/share/opencode/opencode.db`). `/proc` live-session detection (excludes self). Soft-delete and rename via SQL UPDATE. |
 | `hotkey.py` | X11: `pynput` global hotkey `Ctrl+Shift+Space`. Wayland: Unix socket at `~/.cache/opencode-switcher/toggle.sock` triggered by `opencode-switcher-toggle` script. |
 | `launcher.py` | Auto-detects terminal (ptyxis → gnome-terminal → kgx → blackbox). Wayland: skips `xdotool` window activation. Terminal WM_CLASS mapped dynamically (e.g., `ptyxis|org.gnome.Ptyxis`). |
@@ -29,11 +29,11 @@ Linux desktop tray app that switches between OpenCode (CLI) sessions via a Spotl
 | `inspect_db.py` | Standalone debug script that dumps OpenCode's SQLite schema and recent sessions. Useful when upstream schema changes break `session_store.py`. |
 | `codebase_analysis.md` | Detailed Chinese-language analysis doc (~155 lines) covering architecture, historical bugs, and critical flow logic. Read this for deep understanding. |
 
-**Data files:** `~/.config/opencode-switcher/clipboard_history.json` (FIFO 150, includes image metadata), `prompts.json`, `images/<hash>.png`
+**Data files:** `~/.config/opencode-switcher/clipboard_history.json` (FIFO 150, includes image metadata), `categories.json` (custom categories with items), `images/<hash>.png`
 
 ## Platform & Display Server Dual-Mode
 
-- **X11**: `pynput` global hotkey, `xdotool` window activation, 3-second timer polling clipboard via `xclip`.
+- **X11**: `pynput` global hotkey, `xdotool` window activation, single `_clipboard_loop` daemon thread polls clipboard every 3s via `xclip`.
 - **Wayland**: Unix socket hotkey listener (triggered by `opencode-switcher-toggle` script), GNOME Shell extension for clipboard monitoring, NO window activation (skipped). No polling timer — the extension's `owner-changed` signal drives updates.
 - **Session detection**: `/proc` scanning and `fcntl.flock` are Linux-specific. Self-exclusion: skips processes where `cmdline` contains both `b"python3"` and `b"opencode-switcher"`.
 
@@ -86,6 +86,7 @@ Communication between the GNOME Shell extension and Python app uses marker files
 - **Ctrl+1 / Ctrl+2** — switch tab (Sessions / Clipboard)
 - **Sessions tab**: Up/Down/Enter navigate, Ctrl+R rename, Delete archive, Tab focus cycle (search → dir sidebar → list)
 - **Clipboard tab**: Up/Down/Enter navigate, Delete remove item, search entry filters visible items; images shown as 40px-tall thumbnails via `GdkPixbuf`
-- **Right-click** — context menu (rename/archive/start-pure for sessions; copy/delete for clipboard; edit/delete for prompts)
+- **Category toolbar** (above sidebar): "+ New" creates category, "⌫ Delete" removes (with confirmation), "✎ Rename" enables inline editing of the label
+- **Right-click** — context menu (rename/archive/start-pure for sessions; copy/delete for clipboard; copy/edit/delete for prompts and custom category items)
 - **Escape** — close panel
 - Special session IDs: `new-opencode` (launch new), `open-folder` (file picker), `gemini-query`/`google-query` (slash commands) — these cannot be deleted/renamed
