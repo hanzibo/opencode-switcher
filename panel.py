@@ -198,20 +198,24 @@ class SearchPanel:
         bg, fg1, fg2, fg3 = Gdk.RGBA, Gdk.RGBA, Gdk.RGBA, Gdk.RGBA
         sep = self._separator_rgba if hasattr(self, "_separator_rgba") else (1, 1, 1, 1.0)
         if name == "dark":
-            self._bg_color = bg(0.075, 0.078, 0.090, 1.0)
-            self._title_color = bg(0.96, 0.96, 0.97, 1.0)
-            self._dir_color = bg(0.58, 0.64, 0.72, 1.0)
-            self._snippet_color = bg(0.58, 0.64, 0.72, 0.70)
-            self._separator_rgba = (1, 1, 1, 0.08)
-            self._default_separator_rgba = (1, 1, 1, 0.08)
+            self._bg_color = bg(0.039, 0.043, 0.063, 1.0)
+            self._title_color = bg(0.95, 0.96, 0.98, 1.0)
+            self._dir_color = bg(0.39, 0.45, 0.55, 1.0)
+            self._snippet_color = bg(0.28, 0.33, 0.41, 1.0)
+            self._separator_rgba = (1, 1, 1, 0.05)
+            self._default_separator_rgba = (1, 1, 1, 0.05)
             self._dot_live = (0.063, 0.725, 0.506, 0.9)
             self._dot_recent = (0.960, 0.620, 0.043, 0.8)
             self._dot_closed = (0.392, 0.455, 0.545, 0.5)
             vals = dict(
-                window_border="rgba(255,255,255,0.06)", hover_bg="rgba(255,255,255,0.04)",
-                sel_bg="rgba(99,102,241,0.12)", sel_border="#6366f1", search_bg="#1c1d21",
-                search_fg="#f5f5f7", caret="#6366f1", input_border="rgba(255,255,255,0.08)",
-                tab_fg="rgba(255,255,255,0.5)", tab_active_fg="#ffffff",
+                window_border="rgba(255,255,255,0.04)", hover_bg="rgba(255,255,255,0.03)",
+                sel_bg="rgba(129,140,248,0.10)", sel_border="#818cf8", search_bg="#12131a",
+                search_fg="#f1f5f9", caret="#818cf8", input_border="rgba(255,255,255,0.06)",
+                tab_fg="rgba(255,255,255,0.45)", tab_active_fg="#ffffff",
+                dialog_bg="#0a0b10", text_fg="#f1f5f9",
+                input_bg="#12131a", input_fg="#f1f5f9",
+                btn_bg="rgba(255,255,255,0.04)", btn_border="rgba(255,255,255,0.06)",
+                btn_hover="rgba(129,140,248,0.12)", btn_active="rgba(129,140,248,0.18)",
             )
         else:
             self._bg_color = bg(0.965, 0.973, 0.980, 1.0)
@@ -228,6 +232,10 @@ class SearchPanel:
                 sel_bg="rgba(79,70,229,0.08)", sel_border="#4f46e5", search_bg="#ffffff",
                 search_fg="#0f172a", caret="#4f46e5", input_border="rgba(0,0,0,0.08)",
                 tab_fg="rgba(15,23,42,0.55)", tab_active_fg="#0f172a",
+                dialog_bg="#ffffff", text_fg="#0f172a",
+                input_bg="#ffffff", input_fg="#0f172a",
+                btn_bg="rgba(0,0,0,0.04)", btn_border="rgba(0,0,0,0.08)",
+                btn_hover="rgba(0,0,0,0.06)", btn_active="rgba(0,0,0,0.10)",
             )
         css = (
             "window { border: 1px solid %(window_border)s; }"
@@ -248,6 +256,41 @@ class SearchPanel:
             ".tab-active #tabLabel { color: %(tab_active_fg)s; }"
             ".tab-inactive { background: transparent; border-bottom: 3px solid transparent; }"
             ".tab-inactive:hover { background: %(hover_bg)s; }"
+            "dialog, messagedialog, GtkDialog, GtkMessageDialog, "
+            "dialog box, messagedialog box, dialog grid, messagedialog grid, "
+            ".dialog-vbox, .dialog-action-area, .dialog-content-area { "
+            "background-color: %(dialog_bg)s; color: %(text_fg)s; border: none; box-shadow: none; }"
+            "dialog scrolledwindow, messagedialog scrolledwindow, dialog viewport, messagedialog viewport { "
+            "background-color: transparent; border: none; }"
+            "dialog label, messagedialog label { color: %(text_fg)s; background-color: transparent; }"
+            "dialog entry, messagedialog entry, dialog textview, messagedialog textview, "
+            "dialog textview text, messagedialog textview text { "
+            "background-color: %(input_bg)s; color: %(input_fg)s; "
+            "border: 1px solid %(input_border)s; border-radius: 6px; "
+            "caret-color: %(caret)s; }"
+            "dialog entry:focus, messagedialog entry:focus, dialog textview:focus, messagedialog textview:focus { "
+            "border-color: %(sel_border)s; }"
+            "dialog button, messagedialog button { "
+            "background-color: %(btn_bg)s; color: %(text_fg)s; "
+            "border: 1px solid %(btn_border)s; border-radius: 6px; "
+            "padding: 8px 16px; font-size: 14px; font-weight: 500; "
+            "box-shadow: none; text-shadow: none; }"
+            "dialog button:hover, messagedialog button:hover { background-color: %(btn_hover)s; border-color: %(sel_border)s; }"
+            "dialog button:active, messagedialog button:active { background-color: %(btn_active)s; }"
+            "dialog headerbar, messagedialog headerbar, "
+            "dialog headerbar.titlebar, messagedialog headerbar.titlebar { "
+            "background-color: %(dialog_bg)s; background-image: none; box-shadow: none; border-style: none; border-color: %(dialog_bg)s; color: %(text_fg)s; }"
+            "dialog headerbar *, messagedialog headerbar * { "
+            "background-color: transparent; background-image: none; box-shadow: none; color: %(text_fg)s; }"
+            "dialog headerbar button, messagedialog headerbar button { "
+            "background-color: transparent; background-image: none; border: none; box-shadow: none; color: %(text_fg)s; }"
+            "dialog headerbar button:hover, messagedialog headerbar button:hover { background-color: %(btn_hover)s; }"
+            "menu, menuitem { background-color: %(dialog_bg)s; background-image: none; }"
+            "menu { border: 1px solid %(input_border)s; border-radius: 6px; padding: 4px 0; }"
+            "menuitem { color: %(text_fg)s; padding: 4px 16px; }"
+            "menuitem:hover, menuitem:selected { background-color: %(btn_hover)s; color: %(text_fg)s; }"
+            "menuitem label { color: %(text_fg)s; }"
+            "menuitem:hover label, menuitem:selected label { color: %(text_fg)s; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self._main_vbox, self._dir_scrolled, self._dir_listbox,
@@ -281,7 +324,11 @@ class SearchPanel:
 
     def _on_clip_dialog_hidden(self):
         self._dialog_active = True
-        GLib.timeout_add(3000, lambda: setattr(self, '_dialog_active', False) or False)
+        GLib.timeout_add(300, self._clear_dialog_active)
+
+    def _clear_dialog_active(self):
+        self._dialog_active = False
+        return False
 
     def _on_clip_menu_shown(self):
         self._menu_active = True

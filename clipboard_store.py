@@ -205,7 +205,6 @@ class CategoryStore:
 
     def _load(self):
         if not os.path.isfile(CATEGORIES_PATH):
-            self.migrate_from_prompts()
             self._save()
             return
         try:

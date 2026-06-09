@@ -117,9 +117,6 @@ class ClipboardPanel(Gtk.Box):
         self._cat_list.set_size_request(CATEGORY_WIDTH, -1)
         self._cat_list.connect("row-selected", self._on_category_selected)
         self._cat_list.connect("button-press-event", self._on_category_button)
-
-        self._rebuild_category_list()
-
         self._cat_toolbar.pack_start(self._btn_new_cat, False, False, 0)
         self._cat_toolbar.pack_start(self._btn_delete_cat, False, False, 0)
         self._cat_toolbar.pack_start(self._btn_rename_cat, False, False, 0)
@@ -169,6 +166,9 @@ class ClipboardPanel(Gtk.Box):
         self.pack_start(self._action_sep, False, False, 0)
         self.pack_start(self._action_box, False, False, 0)
 
+        # Rebuild category list after all UI components (especially _content_list) are initialized
+        self._rebuild_category_list()
+
     def _get_active_category(self):
         """Return the CustomCategory object for the active category, or None if Clipboard."""
         if self._active_category_id == "__clipboard__":
@@ -190,13 +190,33 @@ class ClipboardPanel(Gtk.Box):
         """Rebuild the sidebar category list from CategoryStore."""
         for child in self._cat_list.get_children():
             self._cat_list.remove(child)
-        for cat in self._cat_store.get_all():
+        cats = self._cat_store.get_all()
+        last_pinned = True
+        for cat in cats:
+            if last_pinned and not cat.pinned:
+                # Insert a clear horizontal separator row between pinned and unpinned categories
+                sep_row = Gtk.ListBoxRow.new()
+                sep_row.set_selectable(False)
+                sep_row.set_activatable(False)
+                sep_row.set_can_focus(False)
+                sep_row.get_style_context().add_class("cat-sep-row")
+
+                sep = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+                sep.set_margin_start(12)
+                sep.set_margin_end(12)
+                sep.set_margin_top(8)
+                sep.set_margin_bottom(8)
+                sep_row.add(sep)
+                self._cat_list.add(sep_row)
+
             row = Gtk.ListBoxRow.new()
             row.get_style_context().add_class("cat-row")
             row.cat_id = cat.id
             lbl = self._make_category_label(cat.name, cat.id)
             row.add(lbl)
             self._cat_list.add(row)
+            last_pinned = cat.pinned
+
         self._cat_list.show_all()
         for row in self._cat_list.get_children():
             if hasattr(row, 'cat_id') and row.cat_id == self._active_category_id:
@@ -213,24 +233,29 @@ class ClipboardPanel(Gtk.Box):
     def _set_theme(self, name: str):
         self._theme = name
         if name == "dark":
-            self._bg_color = Gdk.RGBA(0.075, 0.078, 0.090, 1.0)
-            self._title_color = Gdk.RGBA(0.96, 0.96, 0.97, 1.0)
-            self._dir_color = Gdk.RGBA(0.58, 0.64, 0.72, 1.0)
-            self._snippet_color = Gdk.RGBA(0.58, 0.64, 0.72, 0.70)
-            self._sep_rgba = (1, 1, 1, 0.08)
+            self._bg_color = Gdk.RGBA(0.039, 0.043, 0.063, 1.0)
+            self._title_color = Gdk.RGBA(0.95, 0.96, 0.98, 1.0)
+            self._dir_color = Gdk.RGBA(0.39, 0.45, 0.55, 1.0)
+            self._snippet_color = Gdk.RGBA(0.28, 0.33, 0.41, 1.0)
+            self._sep_rgba = (1, 1, 1, 0.05)
             vals = dict(
                 text_fg="rgba(255,255,255,0.95)",
-                text_secondary="rgba(255,255,255,0.55)",
-                hover_bg="rgba(255,255,255,0.04)",
-                sel_bg="rgba(99,102,241,0.12)",
-                sel_border="#6366f1",
+                text_secondary="rgba(255,255,255,0.45)",
+                hover_bg="rgba(255,255,255,0.03)",
+                sel_bg="rgba(129,140,248,0.10)",
+                sel_border="#818cf8",
                 cat_hover="rgba(255,255,255,0.03)",
-                cat_sel="rgba(99,102,241,0.10)",
-                cat_sel_border="#6366f1",
-                btn_bg="rgba(255,255,255,0.05)",
-                btn_border="rgba(255,255,255,0.08)",
-                btn_hover="rgba(255,255,255,0.09)",
-                btn_active="rgba(255,255,255,0.14)",
+                cat_sel="rgba(129,140,248,0.10)",
+                cat_sel_border="#818cf8",
+                btn_bg="rgba(255,255,255,0.04)",
+                btn_border="rgba(255,255,255,0.06)",
+                btn_hover="rgba(129,140,248,0.12)",
+                btn_active="rgba(129,140,248,0.18)",
+                cat_sep_color="rgba(129,140,248,0.25)",
+                dialog_bg="#0a0b10",
+                input_bg="#12131a",
+                input_fg="#f1f5f9",
+                input_border="rgba(255,255,255,0.06)",
             )
         else:
             self._bg_color = Gdk.RGBA(0.965, 0.973, 0.980, 1.0)
@@ -251,6 +276,11 @@ class ClipboardPanel(Gtk.Box):
                 btn_border="rgba(0,0,0,0.08)",
                 btn_hover="rgba(0,0,0,0.06)",
                 btn_active="rgba(0,0,0,0.10)",
+                cat_sep_color="rgba(0,0,0,0.08)",
+                dialog_bg="#ffffff",
+                input_bg="#ffffff",
+                input_fg="#0f172a",
+                input_border="rgba(0,0,0,0.08)",
             )
         css = (
             ".cat-row { padding: 12px 18px; border-radius: 6px; margin: 2px 8px; border-left: 4px solid transparent; }"
@@ -274,6 +304,44 @@ class ClipboardPanel(Gtk.Box):
             ".cat-tool-btn { font-size: 12px; padding: 4px 6px; border: none; border-radius: 4px; }"
             ".cat-tool-btn:hover { background: %(btn_hover)s; }"
             ".cat-tool-btn:active { background: %(btn_active)s; }"
+            ".cat-sep-row separator { background: %(cat_sep_color)s; min-height: 1px; }"
+            "dialog, messagedialog, GtkDialog, GtkMessageDialog, "
+            "dialog box, messagedialog box, dialog grid, messagedialog grid, "
+            ".dialog-vbox, .dialog-action-area, .dialog-content-area { "
+            "background-color: %(dialog_bg)s; color: %(text_fg)s; border: none; box-shadow: none; }"
+            "dialog scrolledwindow, messagedialog scrolledwindow, dialog viewport, messagedialog viewport { "
+            "background-color: transparent; border: none; }"
+            "dialog label, messagedialog label { color: %(text_fg)s; background-color: transparent; }"
+            "dialog entry, messagedialog entry, dialog textview, messagedialog textview, "
+            "dialog textview text, messagedialog textview text { "
+            "background-color: %(input_bg)s; color: %(input_fg)s; "
+            "border: 1px solid %(input_border)s; border-radius: 6px; "
+            "caret-color: %(sel_border)s; }"
+            "dialog entry:focus, messagedialog entry:focus, dialog textview:focus, messagedialog textview:focus { "
+            "border-color: %(sel_border)s; }"
+            "dialog button, messagedialog button { "
+            "background-color: %(btn_bg)s; color: %(text_fg)s; "
+            "border: 1px solid %(btn_border)s; border-radius: 6px; "
+            "padding: 8px 16px; font-size: 14px; font-weight: 500; "
+            "box-shadow: none; text-shadow: none; }"
+            "dialog button:hover, messagedialog button:hover { background-color: %(btn_hover)s; border-color: %(sel_border)s; }"
+            "dialog button:active, messagedialog button:active { background-color: %(btn_active)s; }"
+            "dialog headerbar, messagedialog headerbar, "
+            "dialog headerbar.titlebar, messagedialog headerbar.titlebar { "
+            "background-color: %(dialog_bg)s; background-image: none; box-shadow: none; border-style: none; border-color: %(dialog_bg)s; color: %(text_fg)s; }"
+            "dialog headerbar *, messagedialog headerbar * { "
+            "background-color: transparent; background-image: none; box-shadow: none; color: %(text_fg)s; }"
+            "dialog headerbar button, messagedialog headerbar button { "
+            "background-color: transparent; background-image: none; border: none; box-shadow: none; color: %(text_fg)s; }"
+            "dialog headerbar button:hover, messagedialog headerbar button:hover { background-color: %(btn_hover)s; }"
+            "entry, textview, textview text { background-color: %(input_bg)s; color: %(input_fg)s; border: 1px solid %(input_border)s; border-radius: 6px; }"
+            "textview { padding: 4px; }"
+            "menu, menuitem { background-color: %(dialog_bg)s; background-image: none; }"
+            "menu { border: 1px solid %(input_border)s; border-radius: 6px; padding: 4px 0; }"
+            "menuitem { color: %(text_fg)s; padding: 4px 16px; }"
+            "menuitem:hover, menuitem:selected { background-color: %(btn_hover)s; color: %(text_fg)s; }"
+            "menuitem label { color: %(text_fg)s; }"
+            "menuitem:hover label, menuitem:selected label { color: %(text_fg)s; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self, self._cat_list, self._content_scrolled, self._content_list):
@@ -307,6 +375,8 @@ class ClipboardPanel(Gtk.Box):
         self._rebuild()
 
     def _rebuild(self):
+        if not hasattr(self, '_content_list'):
+            return
         for child in self._content_list.get_children():
             self._content_list.remove(child)
         import gc
@@ -460,7 +530,7 @@ class ClipboardPanel(Gtk.Box):
         self._btn_rename_cat.set_sensitive(not is_clipboard)
 
     def _on_category_selected(self, _listbox, row):
-        if row is None:
+        if row is None or not hasattr(row, 'cat_id'):
             return
         self._active_category_id = row.cat_id
         self._selected_index = 0
@@ -492,6 +562,9 @@ class ClipboardPanel(Gtk.Box):
             item = Gtk.MenuItem.new_with_label("Show at Top")
         item.connect("activate", lambda *_: self._toggle_pin(cat_id, not cat.pinned))
         menu.append(item)
+        if self.on_menu_shown:
+            self.on_menu_shown()
+        menu.connect("deactivate", lambda *_: GLib.timeout_add(300, self._on_menu_deactivated))
         menu.show_all()
         menu.popup(None, None, None, None, event.button, event.time)
         return True
@@ -839,6 +912,21 @@ class ClipboardPanel(Gtk.Box):
 
         dialog.connect("response", on_response)
 
+    def _show_warning_dialog(self, title: str, secondary_text: str):
+        """展示带焦点保护的通用模态警告/提示框 (OK 按钮)"""
+        if self.on_dialog_shown:
+            self.on_dialog_shown()
+        dialog = Gtk.MessageDialog(
+            transient_for=self.get_toplevel(),
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK,
+            text=title,
+        )
+        dialog.format_secondary_text(secondary_text)
+        dialog.connect("response", lambda dlg, _: dlg.destroy() or (self.on_dialog_hidden() if self.on_dialog_hidden else None))
+        dialog.show_all()
+
     def _on_delete_category_clicked(self, _btn):
         cat_id = self._active_category_id
         if cat_id == "__clipboard__":
@@ -846,6 +934,14 @@ class ClipboardPanel(Gtk.Box):
         cat = self._cat_store.get(cat_id)
         if cat is None:
             return
+
+        if cat.pinned:
+            self._show_warning_dialog(
+                "Cannot delete pinned category",
+                "This category is pinned at the top. Please remove it from the top before deleting."
+            )
+            return
+
         if self.on_dialog_shown:
             self.on_dialog_shown()
         dialog = Gtk.MessageDialog(
