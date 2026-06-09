@@ -7,7 +7,7 @@ gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf
 from typing import Optional, Callable, List
-from clipboard_store import ClipboardItem, Prompt, CategoryStore, capture_clipboard_once
+from clipboard_store import ClipboardItem, CategoryStore, capture_clipboard_once
 from utils import relative_time, is_wayland
 
 
@@ -54,7 +54,6 @@ class ClipboardPanel(Gtk.Box):
     def __init__(self, clip_store, prompt_store, cat_store):
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self._clip_store = clip_store
-        self._prompt_store = prompt_store
         self._cat_store = cat_store
         self._active_category_id = "__clipboard__"
         self._clip_items: List[ClipboardItem] = []
