@@ -7,7 +7,7 @@ gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf
 from typing import Optional, Callable, List
-from clipboard_store import ClipboardItem, CategoryStore, capture_clipboard_once
+from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, capture_clipboard_once
 from utils import relative_time, is_wayland
 
 
