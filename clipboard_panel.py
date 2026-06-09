@@ -746,7 +746,62 @@ class ClipboardPanel(Gtk.Box):
                 self._finish_load()
 
     def _on_new_category_clicked(self, _btn):
-        pass
+        dialog = Gtk.Dialog(
+            title="New Category",
+            transient_for=self.get_toplevel(),
+            modal=True,
+        )
+        dialog.set_default_size(350, 150)
+        dialog.add_button("_Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("_Create", Gtk.ResponseType.ACCEPT)
+        dialog.set_default_response(Gtk.ResponseType.ACCEPT)
+
+        content = dialog.get_content_area()
+        content.set_spacing(8)
+        content.set_margin_start(16)
+        content.set_margin_end(16)
+        content.set_margin_top(16)
+        content.set_margin_bottom(16)
+
+        content.add(Gtk.Label.new("Category Name:"))
+        name_entry = Gtk.Entry.new()
+        name_entry.set_activates_default(True)
+        content.add(name_entry)
+
+        error_label = Gtk.Label.new("")
+        error_label.override_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(1, 0, 0, 1))
+        content.add(error_label)
+
+        if self.on_dialog_shown:
+            self.on_dialog_shown()
+        dialog.show_all()
+
+        def on_response(dlg, response):
+            name = name_entry.get_text().strip()
+            dlg.destroy()
+            if response != Gtk.ResponseType.ACCEPT:
+                if self.on_dialog_hidden:
+                    self.on_dialog_hidden()
+                return
+            if not name:
+                if self.on_dialog_hidden:
+                    self.on_dialog_hidden()
+                return
+            try:
+                new_id = self._cat_store.create(name)
+                self._rebuild_category_list()
+                # Select the newly created category
+                for row in self._cat_list.get_children():
+                    if hasattr(row, 'cat_id') and row.cat_id == new_id:
+                        self._cat_list.select_row(row)
+                        break
+            except ValueError as e:
+                # Name conflict — silently ignore (could show error_label but dialog is gone)
+                pass
+            if self.on_dialog_hidden:
+                self.on_dialog_hidden()
+
+        dialog.connect("response", on_response)
 
     def _on_delete_category_clicked(self, _btn):
         pass
