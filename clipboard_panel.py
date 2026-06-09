@@ -804,7 +804,97 @@ class ClipboardPanel(Gtk.Box):
         dialog.connect("response", on_response)
 
     def _on_delete_category_clicked(self, _btn):
-        pass
+        cat_id = self._active_category_id
+        if cat_id == "__clipboard__":
+            return
+        cat = self._cat_store.get(cat_id)
+        if cat is None:
+            return
+        if self.on_dialog_shown:
+            self.on_dialog_shown()
+        dialog = Gtk.MessageDialog(
+            transient_for=self.get_toplevel(),
+            modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text=f'Delete "{cat.name}"?',
+        )
+        dialog.format_secondary_text("All items in this category will be permanently deleted.")
+
+        def on_response(dlg, resp):
+            dlg.destroy()
+            if resp == Gtk.ResponseType.YES:
+                try:
+                    self._cat_store.delete(cat_id)
+                except ValueError:
+                    pass
+                self._active_category_id = "__clipboard__"
+                self._rebuild_category_list()
+                self._rebuild()
+            if self.on_dialog_hidden:
+                self.on_dialog_hidden()
+
+        dialog.connect("response", on_response)
+        dialog.show_all()
 
     def _on_rename_category_clicked(self, _btn):
-        pass
+        cat_id = self._active_category_id
+        if cat_id == "__clipboard__":
+            return
+        cat = self._cat_store.get(cat_id)
+        if cat is None:
+            return
+
+        selected_row = self._cat_list.get_selected_row()
+        if selected_row is None:
+            return
+
+        label = selected_row.get_child()
+        if label is None or not isinstance(label, Gtk.Label):
+            return
+
+        old_name = label.get_text()
+
+        entry = Gtk.Entry.new()
+        entry.set_text(old_name)
+        entry.select_region(0, -1)
+        selected_row.remove(label)
+        selected_row.add(entry)
+        entry.show()
+        entry.grab_focus()
+
+        def make_lbl(text):
+            lbl = Gtk.Label.new(text)
+            lbl.set_name("catLabel")
+            lbl.set_xalign(0)
+            lbl.set_margin_start(16)
+            lbl.set_margin_top(12)
+            lbl.set_margin_bottom(12)
+            if cat_id == "__clipboard__":
+                lbl.set_markup(f"<b>{text}</b>")
+            return lbl
+
+        def revert():
+            if entry.get_parent() == selected_row:
+                selected_row.remove(entry)
+                lbl = make_lbl(old_name)
+                selected_row.add(lbl)
+                lbl.show()
+
+        def on_activate(ent):
+            new_name = ent.get_text().strip()
+            if new_name and new_name != old_name:
+                try:
+                    self._cat_store.rename(cat_id, new_name)
+                    self._rebuild_category_list()
+                except ValueError:
+                    revert()
+            else:
+                revert()
+
+        def on_focus_out(ent, ev):
+            revert()
+            return False
+
+        entry.connect("activate", on_activate)
+        entry.connect("focus-out-event", on_focus_out)
