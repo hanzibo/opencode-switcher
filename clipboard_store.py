@@ -3,14 +3,18 @@ import os
 import subprocess
 import time
 import hashlib
+from copy import deepcopy
 from dataclasses import dataclass, asdict
 from typing import Optional, List
+from uuid import uuid4
+
 from utils import is_wayland
 
 CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
 CLIPBOARD_PATH = os.path.join(CONFIG_DIR, "clipboard_history.json")
 PROMPTS_PATH = os.path.join(CONFIG_DIR, "prompts.json")
 MAX_CLIPBOARD = 150
+CATEGORIES_PATH = os.path.join(CONFIG_DIR, "categories.json")
 
 
 def _content_hash(text: str) -> str:
@@ -31,6 +35,22 @@ class Prompt:
     title: str
     text: str
     timestamp: int
+
+
+@dataclass
+class CategoryItem:
+    title: str
+    text: str
+    timestamp: int
+
+
+@dataclass
+class CustomCategory:
+    id: str
+    name: str
+    items: List[CategoryItem]
+    pinned: bool = False
+    created_at: int = 0
 
 
 class ClipboardStore:
@@ -176,6 +196,146 @@ class PromptStore:
 
     def reload(self):
         self._load()
+
+
+class CategoryStore:
+    def __init__(self):
+        self._categories: List[CustomCategory] = []
+        self._load()
+
+    def _load(self):
+        if not os.path.isfile(CATEGORIES_PATH):
+            self.migrate_from_prompts()
+            self._save()
+            return
+        try:
+            with open(CATEGORIES_PATH) as f:
+                data = json.load(f)
+            self._categories = []
+            for c in data.get("categories", []):
+                items = [CategoryItem(**i) for i in c.get("items", [])]
+                cat = CustomCategory(
+                    id=c["id"], name=c["name"], items=items,
+                    pinned=c.get("pinned", False), created_at=c.get("created_at", 0)
+                )
+                self._categories.append(cat)
+        except (json.JSONDecodeError, TypeError, KeyError):
+            self._categories = []
+
+    def _save(self):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CATEGORIES_PATH, "w") as f:
+            json.dump({"version": 1, "categories": [asdict(c) for c in self._categories]}, f, indent=2)
+
+    def get_all(self) -> List[CustomCategory]:
+        clipboard_cat = CustomCategory(
+            id="__clipboard__", name="Clipboard", items=[], pinned=True, created_at=0
+        )
+        sorted_cats = sorted(self._categories, key=lambda c: c.created_at, reverse=True)
+        return [clipboard_cat] + [deepcopy(c) for c in sorted_cats]
+
+    def get(self, cat_id: str) -> Optional[CustomCategory]:
+        if cat_id == "__clipboard__":
+            return CustomCategory(
+                id="__clipboard__", name="Clipboard", items=[], pinned=True, created_at=0
+            )
+        for c in self._categories:
+            if c.id == cat_id:
+                return deepcopy(c)
+        return None
+
+    def create(self, name: str) -> str:
+        if not name.strip():
+            raise ValueError("Category name cannot be empty")
+        if any(c.name == name for c in self._categories):
+            raise ValueError(f"Category '{name}' already exists")
+        cat_id = uuid4().hex[:12]
+        self._categories.append(CustomCategory(
+            id=cat_id, name=name, items=[], pinned=False,
+            created_at=int(time.time() * 1000)
+        ))
+        self._save()
+        return cat_id
+
+    def delete(self, cat_id: str):
+        if cat_id == "__clipboard__":
+            raise ValueError("Cannot delete the Clipboard category")
+        for c in self._categories:
+            if c.id == cat_id:
+                if c.pinned:
+                    raise ValueError("Cannot delete a pinned category")
+                self._categories.remove(c)
+                self._save()
+                return
+
+    def rename(self, cat_id: str, new_name: str):
+        if cat_id == "__clipboard__":
+            raise ValueError("Cannot rename the Clipboard category")
+        if not new_name.strip():
+            raise ValueError("Category name cannot be empty")
+        if any(c.name == new_name for c in self._categories if c.id != cat_id):
+            raise ValueError(f"Category '{new_name}' already exists")
+        for c in self._categories:
+            if c.id == cat_id:
+                c.name = new_name
+                self._save()
+                return
+        raise ValueError(f"Category '{cat_id}' not found")
+
+    def add_item(self, cat_id: str, title: str, text: str):
+        if cat_id == "__clipboard__":
+            raise ValueError("Cannot add items to the Clipboard category")
+        for c in self._categories:
+            if c.id == cat_id:
+                c.items.append(CategoryItem(
+                    title=title, text=text, timestamp=int(time.time() * 1000)
+                ))
+                self._save()
+                return
+        raise ValueError(f"Category '{cat_id}' not found")
+
+    def update_item(self, cat_id: str, index: int, title: str, text: str):
+        if cat_id == "__clipboard__":
+            raise ValueError("Cannot modify items in the Clipboard category")
+        for c in self._categories:
+            if c.id == cat_id:
+                if 0 <= index < len(c.items):
+                    c.items[index] = CategoryItem(
+                        title=title, text=text, timestamp=int(time.time() * 1000)
+                    )
+                    self._save()
+                    return
+                raise IndexError("Item index out of range")
+        raise ValueError(f"Category '{cat_id}' not found")
+
+    def delete_item(self, cat_id: str, index: int):
+        if cat_id == "__clipboard__":
+            raise ValueError("Cannot delete items from the Clipboard category")
+        for c in self._categories:
+            if c.id == cat_id:
+                if 0 <= index < len(c.items):
+                    c.items.pop(index)
+                    self._save()
+                    return
+                raise IndexError("Item index out of range")
+        raise ValueError(f"Category '{cat_id}' not found")
+
+    def migrate_from_prompts(self):
+        if not os.path.isfile(PROMPTS_PATH):
+            return
+        try:
+            with open(PROMPTS_PATH) as f:
+                data = json.load(f)
+            prompts = [Prompt(**d) for d in data]
+        except (json.JSONDecodeError, TypeError):
+            return
+        if not prompts:
+            return
+        items = [CategoryItem(title=p.title, text=p.text, timestamp=p.timestamp) for p in prompts]
+        self._categories.append(CustomCategory(
+            id=uuid4().hex[:12], name="Prompts", items=items,
+            pinned=False, created_at=int(time.time() * 1000)
+        ))
 
 
 def _capture_image() -> Optional[bytes]:

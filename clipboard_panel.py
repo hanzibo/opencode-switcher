@@ -7,7 +7,7 @@ gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf
 from typing import Optional, Callable, List
-from clipboard_store import ClipboardItem, Prompt, capture_clipboard_once
+from clipboard_store import ClipboardItem, Prompt, CategoryStore, capture_clipboard_once
 from utils import relative_time, is_wayland
 
 
@@ -51,13 +51,13 @@ def _copy_to_clipboard(text: str):
 
 
 class ClipboardPanel(Gtk.Box):
-    def __init__(self, clip_store, prompt_store):
+    def __init__(self, clip_store, prompt_store, cat_store):
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self._clip_store = clip_store
         self._prompt_store = prompt_store
-        self._active_category = 0
+        self._cat_store = cat_store
+        self._active_category_id = "__clipboard__"
         self._clip_items: List[ClipboardItem] = []
-        self._prompts: List[Prompt] = []
         self._selected_index = 0
         self._filter_query = ""
 
@@ -90,17 +90,7 @@ class ClipboardPanel(Gtk.Box):
         self._cat_list.set_size_request(CATEGORY_WIDTH, -1)
         self._cat_list.connect("row-selected", self._on_category_selected)
 
-        for label in ["Clipboard", "Prompts"]:
-            row = Gtk.ListBoxRow.new()
-            row.get_style_context().add_class("cat-row")
-            lbl = Gtk.Label.new(label)
-            lbl.set_name("catLabel")
-            lbl.set_xalign(0)
-            lbl.set_margin_start(16)
-            lbl.set_margin_top(12)
-            lbl.set_margin_bottom(12)
-            row.add(lbl)
-            self._cat_list.add(row)
+        self._rebuild_category_list()
 
         self._cat_sep = Gtk.DrawingArea.new()
         self._cat_sep.set_size_request(1, -1)
@@ -144,7 +134,35 @@ class ClipboardPanel(Gtk.Box):
         self.pack_start(self._action_sep, False, False, 0)
         self.pack_start(self._action_box, False, False, 0)
 
-        self._cat_list.select_row(self._cat_list.get_row_at_index(0))
+    def _get_active_category(self):
+        """Return the CustomCategory object for the active category, or None if Clipboard."""
+        if self._active_category_id == "__clipboard__":
+            return None
+        return self._cat_store.get(self._active_category_id)
+
+    def _rebuild_category_list(self):
+        """Rebuild the sidebar category list from CategoryStore."""
+        for child in self._cat_list.get_children():
+            self._cat_list.remove(child)
+        for cat in self._cat_store.get_all():
+            row = Gtk.ListBoxRow.new()
+            row.get_style_context().add_class("cat-row")
+            row.cat_id = cat.id
+            lbl = Gtk.Label.new(cat.name)
+            lbl.set_name("catLabel")
+            lbl.set_xalign(0)
+            lbl.set_margin_start(16)
+            lbl.set_margin_top(12)
+            lbl.set_margin_bottom(12)
+            if cat.id == "__clipboard__":
+                lbl.set_markup(f"<b>{cat.name}</b>")
+            row.add(lbl)
+            self._cat_list.add(row)
+        self._cat_list.show_all()
+        for row in self._cat_list.get_children():
+            if hasattr(row, 'cat_id') and row.cat_id == self._active_category_id:
+                self._cat_list.select_row(row)
+                break
 
     def _on_sep_draw(self, widget, cr):
         alloc = widget.get_allocation()
@@ -232,9 +250,7 @@ class ClipboardPanel(Gtk.Box):
 
     def load_cached(self):
         self._clip_store.reload()
-        self._prompt_store.reload()
         self._clip_items = list(self._clip_store.get_all())
-        self._prompts = list(self._prompt_store.get_all())
         self._clip_items.reverse()
         self._rebuild()
 
@@ -246,9 +262,7 @@ class ClipboardPanel(Gtk.Box):
 
     def _finish_load(self):
         self._clip_store.reload()
-        self._prompt_store.reload()
         self._clip_items = list(self._clip_store.get_all())
-        self._prompts = list(self._prompt_store.get_all())
         self._clip_items.reverse()
         self._rebuild()
 
@@ -258,12 +272,13 @@ class ClipboardPanel(Gtk.Box):
         import gc
         gc.collect()
 
-        if self._active_category == 0:
+        if self._active_category_id == "__clipboard__":
             items = self._clip_items
             if self._filter_query:
                 items = [i for i in items if self._filter_query in i.text.lower()]
         else:
-            items = self._prompts
+            cat = self._cat_store.get(self._active_category_id)
+            items = cat.items if cat else []
             if self._filter_query:
                 items = [i for i in items
                          if self._filter_query in i.title.lower()
@@ -291,7 +306,7 @@ class ClipboardPanel(Gtk.Box):
             row.item_index = idx
             row.store_item = item
 
-            if self._active_category == 0:
+            if self._active_category_id == "__clipboard__":
                 self._build_clip_row(row, item)
             else:
                 self._build_prompt_row(row, item)
@@ -357,7 +372,7 @@ class ClipboardPanel(Gtk.Box):
 
         row.add(hbox)
 
-    def _build_prompt_row(self, row, item: Prompt):
+    def _build_prompt_row(self, row, item: CategoryItem):
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
         vbox.set_margin_start(16)
         vbox.set_margin_end(16)
@@ -388,7 +403,7 @@ class ClipboardPanel(Gtk.Box):
         for child in self._action_box.get_children():
             self._action_box.remove(child)
 
-        if self._active_category == 0:
+        if self._active_category_id == "__clipboard__":
             self._action_box.pack_start(self._btn_delete, False, False, 0)
             self._action_box.pack_start(self._btn_delete_all, False, False, 0)
         else:
@@ -401,7 +416,7 @@ class ClipboardPanel(Gtk.Box):
     def _on_category_selected(self, _listbox, row):
         if row is None:
             return
-        self._active_category = row.get_index()
+        self._active_category_id = row.cat_id
         self._selected_index = 0
         self._rebuild()
 
@@ -419,7 +434,7 @@ class ClipboardPanel(Gtk.Box):
 
         menu = Gtk.Menu.new()
         item = row.store_item
-        if self._active_category == 0:
+        if self._active_category_id == "__clipboard__":
             copy_item = Gtk.MenuItem.new_with_label("Copy")
             copy_item.connect("activate", lambda *_: self._activate_item(item))
             menu.append(copy_item)
@@ -482,7 +497,7 @@ class ClipboardPanel(Gtk.Box):
             self._delete_item(row.store_item)
 
     def _delete_item(self, item):
-        if self._active_category == 0:
+        if self._active_category_id == "__clipboard__":
             idx = next(
                 (i for i, ci in enumerate(self._clip_store.get_all()) if ci.hash == item.hash),
                 None,
@@ -490,12 +505,15 @@ class ClipboardPanel(Gtk.Box):
             if idx is not None:
                 self._clip_store.delete(idx)
         else:
-            idx = next(
-                (i for i, p in enumerate(self._prompt_store.get_all()) if p.timestamp == item.timestamp),
-                None,
-            )
-            if idx is not None:
-                self._prompt_store.delete(idx)
+            cat = self._cat_store.get(self._active_category_id)
+            if cat:
+                idx = next(
+                    (i for i, ci in enumerate(cat.items)
+                     if ci.title == item.title and ci.text == item.text),
+                    None,
+                )
+                if idx is not None:
+                    self._cat_store.delete_item(self._active_category_id, idx)
         self.load_cached()
 
     def activate_selected(self):
@@ -513,7 +531,7 @@ class ClipboardPanel(Gtk.Box):
         self._delete_selected()
 
     def _activate_item(self, item):
-        if self._active_category == 0 and isinstance(item, ClipboardItem):
+        if self._active_category_id == "__clipboard__" and isinstance(item, ClipboardItem):
             if hasattr(item, "type") and item.type == "image" and item.image_path:
                 _copy_image_to_clipboard(item.image_path)
                 if self.on_copy_clipboard:
@@ -522,7 +540,7 @@ class ClipboardPanel(Gtk.Box):
                     self.on_hide_request()
                 return
             text = item.text
-        elif self._active_category == 1 and isinstance(item, Prompt):
+        elif isinstance(item, CategoryItem):
             text = item.text
         else:
             return
@@ -542,7 +560,7 @@ class ClipboardPanel(Gtk.Box):
                 self.on_dialog_hidden()
 
     def _on_delete_all_clicked(self, _btn):
-        if self._active_category != 0:
+        if self._active_category_id != "__clipboard__":
             return
         dialog = Gtk.MessageDialog(
             transient_for=self.get_toplevel(),
@@ -572,13 +590,13 @@ class ClipboardPanel(Gtk.Box):
         if not row or not hasattr(row, "store_item"):
             return
         item = row.store_item
-        if isinstance(item, Prompt):
+        if isinstance(item, CategoryItem):
             self._show_prompt_dialog(create=False, existing=item)
 
-    def _edit_prompt(self, item: Prompt):
+    def _edit_prompt(self, item: CategoryItem):
         self._show_prompt_dialog(create=False, existing=item)
 
-    def _show_prompt_dialog(self, create: bool, existing: Optional[Prompt] = None):
+    def _show_prompt_dialog(self, create: bool, existing: Optional[CategoryItem] = None):
         dialog = Gtk.Dialog(
             title="Create prompt" if create else "Edit prompt",
             transient_for=self.get_toplevel(),
@@ -631,15 +649,17 @@ class ClipboardPanel(Gtk.Box):
                     self.on_dialog_hidden()
                 return
             if create:
-                self._prompt_store.create(title, text)
+                self._cat_store.add_item(self._active_category_id, title, text)
             else:
-                idx = next(
-                    (i for i, p in enumerate(self._prompt_store.get_all())
-                     if p.timestamp == existing.timestamp),
-                    None,
-                )
-                if idx is not None:
-                    self._prompt_store.update(idx, title, text)
+                cat = self._cat_store.get(self._active_category_id)
+                if cat:
+                    idx = next(
+                        (i for i, ci in enumerate(cat.items)
+                         if ci.timestamp == existing.timestamp),
+                        None,
+                    )
+                    if idx is not None:
+                        self._cat_store.update_item(self._active_category_id, idx, title, text)
             self.load_cached()
             if self.on_dialog_hidden:
                 self.on_dialog_hidden()
