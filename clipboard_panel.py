@@ -481,19 +481,15 @@ class ClipboardPanel(Gtk.Box):
         if cat is None:
             return False
 
-        def _show_menu():
-            menu = Gtk.Menu.new()
-            if cat.pinned:
-                item = Gtk.MenuItem.new_with_label("Remove from Top")
-            else:
-                item = Gtk.MenuItem.new_with_label("Show at Top")
-            item.connect("activate", lambda *_: self._toggle_pin(cat_id, not cat.pinned))
-            menu.append(item)
-            menu.show_all()
-            menu.popup_at_pointer(event)
-            return False
-
-        GLib.idle_add(_show_menu)
+        menu = Gtk.Menu.new()
+        if cat.pinned:
+            item = Gtk.MenuItem.new_with_label("Remove from Top")
+        else:
+            item = Gtk.MenuItem.new_with_label("Show at Top")
+        item.connect("activate", lambda *_: self._toggle_pin(cat_id, not cat.pinned))
+        menu.append(item)
+        menu.show_all()
+        menu.popup(None, None, None, None, event.button, event.time)
         return True
 
     def _toggle_pin(self, cat_id: str, pinned: bool):
