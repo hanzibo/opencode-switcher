@@ -1051,13 +1051,14 @@ class ClipboardPanel(Gtk.Box):
         dialog.set_default_response(Gtk.ResponseType.ACCEPT)
 
         def on_response(dlg, resp):
+            selected_path = dlg.get_filename()
             dlg.destroy()
-            if resp != Gtk.ResponseType.ACCEPT:
+            if resp != Gtk.ResponseType.ACCEPT or not selected_path:
                 if self.on_dialog_hidden:
                     self.on_dialog_hidden()
                 return
 
-            success, msg = _backup_config(dlg.get_filename())
+            success, msg = _backup_config(selected_path)
             if success:
                 self._show_info_dialog(
                     "Backup Complete",
@@ -1092,14 +1093,9 @@ class ClipboardPanel(Gtk.Box):
         dialog.add_filter(filt)
 
         def on_response(dlg, resp):
-            dlg.destroy()
-            if resp != Gtk.ResponseType.ACCEPT:
-                if self.on_dialog_hidden:
-                    self.on_dialog_hidden()
-                return
-
             archive_path = dlg.get_filename()
-            if not archive_path:
+            dlg.destroy()
+            if resp != Gtk.ResponseType.ACCEPT or not archive_path:
                 if self.on_dialog_hidden:
                     self.on_dialog_hidden()
                 return
