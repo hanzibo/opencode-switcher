@@ -412,9 +412,20 @@ class SearchPanel:
         return self._window.is_visible()
 
     def hide(self):
+        # Cancel category rename editing state if any
+        if self._clipboard_panel:
+            self._clipboard_panel.cancel_rename()
+
+        # Hide and defer-destroy all transient dialogs to release input grabs
+        for win in Gtk.Window.list_toplevels():
+            if win != self._window and isinstance(win, Gtk.Dialog) and win.get_transient_for() == self._window:
+                win.hide()
+                GLib.idle_add(win.destroy)
+
         self._window.hide()
         self._search_entry.set_text("")
-        gc.collect()
+        self._dialog_active = False
+        self._menu_active = False
 
     def _on_window_draw(self, widget, cr):
         cr.set_source_rgba(

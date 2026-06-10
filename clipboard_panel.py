@@ -68,6 +68,12 @@ class ClipboardPanel(Gtk.Box):
         self.on_dialog_hidden: Optional[Callable[[], None]] = None
         self.on_menu_shown: Optional[Callable[[], None]] = None
         self.on_menu_hidden: Optional[Callable[[], None]] = None
+        self._editing_rename_row = None
+        self._editing_rename_entry = None
+        self._editing_rename_old_name = None
+        self._editing_rename_cat_id = None
+        self._rename_activate_id = 0
+        self._rename_focus_out_id = 0
         self._setup_marker_monitor()
 
         self._bg_color = Gdk.RGBA()
@@ -390,8 +396,6 @@ class ClipboardPanel(Gtk.Box):
             return
         for child in self._content_list.get_children():
             self._content_list.remove(child)
-        import gc
-        gc.collect()
 
         if self._active_category_id == "__clipboard__":
             items = self._clip_items
@@ -985,7 +989,57 @@ class ClipboardPanel(Gtk.Box):
         dialog.connect("response", on_response)
         dialog.show_all()
 
+    def cancel_rename(self):
+        if self._editing_rename_entry:
+            entry = self._editing_rename_entry
+            self._editing_rename_entry = None
+
+            # Disconnect handlers by ID
+            if hasattr(self, '_rename_focus_out_id') and self._rename_focus_out_id:
+                try:
+                    entry.disconnect(self._rename_focus_out_id)
+                except Exception:
+                    pass
+                self._rename_focus_out_id = 0
+            if hasattr(self, '_rename_activate_id') and self._rename_activate_id:
+                try:
+                    entry.disconnect(self._rename_activate_id)
+                except Exception:
+                    pass
+                self._rename_activate_id = 0
+
+            # Shift focus away from the entry to avoid GTK focus destruction crashes
+            toplevel = self.get_toplevel()
+            if toplevel and hasattr(toplevel, 'set_focus'):
+                try:
+                    toplevel.set_focus(None)
+                except Exception:
+                    pass
+
+            self._editing_rename_row = None
+            self._editing_rename_old_name = None
+            self._editing_rename_cat_id = None
+            self._rebuild_category_list()
+        return False
+
+    def _on_rename_activate(self, ent):
+        old_name = self._editing_rename_old_name
+        cat_id = self._editing_rename_cat_id
+        new_name = ent.get_text().strip()
+        if new_name and new_name != old_name and cat_id:
+            try:
+                self._cat_store.rename(cat_id, new_name)
+            except ValueError:
+                pass
+        self.cancel_rename()
+
+    def _on_rename_focus_out(self, ent, ev):
+        GLib.idle_add(self.cancel_rename)
+        return False
+
     def _on_rename_category_clicked(self, _btn):
+        self.cancel_rename()
+
         cat_id = self._active_category_id
         if cat_id == "__clipboard__":
             return
@@ -1011,33 +1065,13 @@ class ClipboardPanel(Gtk.Box):
         entry.show()
         entry.grab_focus()
 
-        def make_lbl(text):
-            return self._make_category_label(text, cat_id)
+        self._editing_rename_row = selected_row
+        self._editing_rename_entry = entry
+        self._editing_rename_old_name = old_name
+        self._editing_rename_cat_id = cat_id
 
-        def revert():
-            if entry.get_parent() == selected_row:
-                selected_row.remove(entry)
-                lbl = make_lbl(old_name)
-                selected_row.add(lbl)
-                lbl.show()
-
-        def on_activate(ent):
-            new_name = ent.get_text().strip()
-            if new_name and new_name != old_name:
-                try:
-                    self._cat_store.rename(cat_id, new_name)
-                    self._rebuild_category_list()
-                except ValueError:
-                    revert()
-            else:
-                revert()
-
-        def on_focus_out(ent, ev):
-            revert()
-            return False
-
-        entry.connect("activate", on_activate)
-        entry.connect("focus-out-event", on_focus_out)
+        self._rename_activate_id = entry.connect("activate", self._on_rename_activate)
+        self._rename_focus_out_id = entry.connect("focus-out-event", self._on_rename_focus_out)
 
     def _on_backup_clicked(self, _btn):
         if self.on_dialog_shown:
