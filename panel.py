@@ -285,6 +285,7 @@ class SearchPanel:
             "dialog headerbar button, messagedialog headerbar button { "
             "background-color: transparent; background-image: none; border: none; box-shadow: none; color: %(text_fg)s; }"
             "dialog headerbar button:hover, messagedialog headerbar button:hover { background-color: %(btn_hover)s; }"
+            "/* File Chooser Styles */ "
             "filechooser, GtkFileChooserWidget, filechooser box, filechooser grid { "
             "background-color: %(dialog_bg)s; color: %(text_fg)s; }"
             "filechooser scrolledwindow, filechooser viewport { background-color: transparent; border: none; }"
