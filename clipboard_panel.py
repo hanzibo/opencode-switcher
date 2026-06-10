@@ -995,13 +995,13 @@ class ClipboardPanel(Gtk.Box):
             self._editing_rename_entry = None
 
             # Disconnect handlers by ID
-            if hasattr(self, '_rename_focus_out_id') and self._rename_focus_out_id:
+            if self._rename_focus_out_id:
                 try:
                     entry.disconnect(self._rename_focus_out_id)
                 except Exception:
                     pass
                 self._rename_focus_out_id = 0
-            if hasattr(self, '_rename_activate_id') and self._rename_activate_id:
+            if self._rename_activate_id:
                 try:
                     entry.disconnect(self._rename_activate_id)
                 except Exception:

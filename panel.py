@@ -417,6 +417,7 @@ class SearchPanel:
             self._clipboard_panel.cancel_rename()
 
         # Hide and defer-destroy all transient dialogs to release input grabs
+        # Only destroy Gtk.Dialog instances to avoid destroying GTK internal windows like GtkTooltipWindow
         for win in Gtk.Window.list_toplevels():
             if win != self._window and isinstance(win, Gtk.Dialog) and win.get_transient_for() == self._window:
                 win.hide()
