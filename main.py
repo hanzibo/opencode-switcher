@@ -2,6 +2,7 @@
 import json
 import os
 import fcntl
+import subprocess
 import sys
 import threading
 import time
@@ -54,6 +55,7 @@ class App:
 
         self._hotkey = HotkeyManager()
         self._running = True
+        self._restart_requested = False
         self._indicator = self._build_indicator()
 
         self._panel.on_select = self._on_session_selected
@@ -98,6 +100,9 @@ class App:
         menu.append(theme_menu_item)
 
         menu.append(Gtk.SeparatorMenuItem.new())
+        restart_item = Gtk.MenuItem.new_with_label("Restart")
+        restart_item.connect("activate", lambda *_: GLib.idle_add(self._on_restart))
+        menu.append(restart_item)
         quit_item = Gtk.MenuItem.new_with_label("Quit")
         quit_item.connect("activate", lambda *_: GLib.idle_add(self._confirm_quit))
         menu.append(quit_item)
@@ -129,6 +134,10 @@ class App:
         dialog.destroy()
         if response == Gtk.ResponseType.YES:
             self.stop()
+
+    def _on_restart(self):
+        self._restart_requested = True
+        self.stop()
 
     def _on_clipboard_copied(self, text: str, item_hash: Optional[str] = None):
         self._clip_store.mark_written(text, item_hash)
@@ -241,3 +250,7 @@ if __name__ == "__main__":
     except Exception:
         traceback.print_exc()
         sys.exit(1)
+
+    if app._restart_requested:
+        lock_fd.close()
+        subprocess.Popen([sys.executable] + sys.argv)
