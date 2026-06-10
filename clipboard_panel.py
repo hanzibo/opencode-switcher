@@ -8,6 +8,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf
 from typing import Optional, Callable, List
 from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, capture_clipboard_once
+import time
 from utils import relative_time, is_wayland
 
 
@@ -1022,3 +1023,36 @@ class ClipboardPanel(Gtk.Box):
 
         entry.connect("activate", on_activate)
         entry.connect("focus-out-event", on_focus_out)
+
+
+def _backup_config(target_dir: str) -> tuple[bool, str]:
+    """Backup ~/.config/opencode-switcher/ to a .tar.gz archive.
+
+    Returns (success, message). On success, message is the archive path.
+    """
+    import tarfile
+    config_dir = os.path.expanduser("~/.config/opencode-switcher")
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    archive_name = f"opencode-switcher-backup-{timestamp}.tar.gz"
+    archive_path = os.path.join(target_dir, archive_name)
+    try:
+        with tarfile.open(archive_path, "w:gz") as tar:
+            tar.add(config_dir, arcname="opencode-switcher")
+        return (True, archive_path)
+    except Exception as e:
+        return (False, str(e))
+
+
+def _restore_config(archive_path: str) -> tuple[bool, str]:
+    """Restore opencode-switcher config from a .tar.gz archive.
+
+    Returns (success, message).
+    """
+    import tarfile
+    config_parent = os.path.dirname(os.path.expanduser("~/.config/opencode-switcher"))
+    try:
+        with tarfile.open(archive_path, "r:gz") as tar:
+            tar.extractall(config_parent)
+        return (True, "Restore completed. Refreshing data...")
+    except Exception as e:
+        return (False, str(e))
