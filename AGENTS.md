@@ -17,8 +17,8 @@ Linux desktop tray app that switches between OpenCode (CLI) sessions via a Spotl
 | File | Role |
 |------|------|
 | `main.py` | Entry point. `App` class: single-instance lock (`fcntl.flock`), tray indicator (Ayatana AppIndicator3), wires hotkey ↔ panel ↔ launcher ↔ clipboard |
-| `panel.py` | GTK3 panel (~1176 lines). Tab bar (Sessions / Clipboard) + `Gtk.Stack`. Sessions: two-pane directory sidebar + session list with fuzzy search. |
-| `clipboard_panel.py` | Three-column view: dynamic category sidebar (+ New/⌫ Delete/✎ Rename toolbar), content list, action button bar. Custom categories behave like Prompts with Create/Edit/Delete. Gio file monitor watches `clipboard.updated` marker file. |
+| `panel.py` | GTK3 panel (~1220 lines). Tab bar (Sessions / Clipboard) + `Gtk.Stack`. Sessions: two-pane directory sidebar + session list with fuzzy search. |
+| `clipboard_panel.py` | Three-column view (~1024 lines): dynamic category sidebar (+ New/⌫ Delete/✎ Rename toolbar), content list, action button bar. Custom categories behave like Prompts with Create/Edit/Delete. Gio file monitor watches `clipboard.updated` marker file. |
 | `clipboard_store.py` | Data layer: `ClipboardStore` (FIFO 150, hash-dedup, image support), `CategoryStore` (user-defined custom categories with CRUD), `capture_clipboard_once()`. |
 | `session_store.py` | Reads OpenCode's SQLite DB (`~/.local/share/opencode/opencode.db`). `/proc` live-session detection (excludes self). Soft-delete and rename via SQL UPDATE. |
 | `hotkey.py` | X11: `pynput` global hotkey `Ctrl+Shift+Space`. Wayland: Unix socket at `~/.cache/opencode-switcher/toggle.sock` triggered by `opencode-switcher-toggle` script. |
@@ -61,17 +61,18 @@ Communication between the GNOME Shell extension and Python app uses marker files
 - Error returns as `Optional[str]` (None = success, string = error message)
 - UI callbacks from non-main threads use `GLib.idle_add()`
 - `gc.collect()` called on panel hide
-- Panel focus guards: `_menu_active` and `_delete_in_progress` flags suppress `hide()` on focus-out during menus/dialogs
+- Panel focus guards: `_menu_active`, `_delete_in_progress`, and `_dialog_active` flags suppress `hide()` on focus-out during menus/dialogs. ClipboardPanel also has `on_dialog_shown`/`on_dialog_hidden`/`on_menu_shown`/`on_menu_hidden` callbacks wired to these guards.
 - Tab-switch anti-flicker: `handler_block(_search_changed_id)` while updating search text/placeholder, then `handler_unblock()` — prevents redundant redraws
 - Wayland panel loads: `load_cached()` instead of `load_data()` to avoid Xwayland focus sync
 - `typing` module (`Tuple`, `Dict`) used instead of Python 3.9+ lowercase generics for compatibility
 - `requirements.txt` lists PyGObject but it comes from apt (`python3-gi`); pip-installed deps are only `pynput>=1.7` and `python-xlib>=0.33`
+- All `Gtk.MessageDialog` instances use the deprecated `buttons=` keyword (known PyGTKDeprecationWarning in logs). If modernizing, switch to `modal=True, destroy_with_parent=True` keyword args.
 
 ## Key Dependencies
 
 - **Python (apt):** `python3-gi`, `python3-pip`, `python3-venv`
 - **Python (venv pip):** `pynput>=1.7`, `python-xlib>=0.33`
-- **System:** `gir1.2-ayatanaappindicator3-0.1`, `wl-clipboard` (Wayland) / `xclip` (X11)
+- **System:** `gir1.2-ayatanaappindicator3-0.1`, `wl-clipboard` (Wayland) / `xclip` (X11), `xdotool` (X11, optional for window activation)
 - **Runtime:** `opencode` CLI (npm); `run.sh` loads nvm so it's in PATH
 
 ## Service & Toggle
