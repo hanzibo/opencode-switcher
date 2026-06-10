@@ -161,6 +161,16 @@ class ClipboardPanel(Gtk.Box):
         self._btn_edit = Gtk.Button.new_with_label("Edit")
         self._btn_edit.connect("clicked", self._on_edit_clicked)
 
+        self._action_sep2 = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        self._action_sep2.set_margin_top(8)
+        self._action_sep2.set_margin_bottom(8)
+
+        self._btn_backup = Gtk.Button.new_with_label("Backup")
+        self._btn_backup.connect("clicked", self._on_backup_clicked)
+
+        self._btn_restore = Gtk.Button.new_with_label("Restore")
+        self._btn_restore.connect("clicked", self._on_restore_clicked)
+
         self.pack_start(self._cat_vbox, False, True, 0)
         self.pack_start(self._cat_sep, False, False, 0)
         self.pack_start(self._content_scrolled, True, True, 0)
@@ -522,6 +532,10 @@ class ClipboardPanel(Gtk.Box):
             self._action_box.pack_start(self._btn_create, False, False, 0)
             self._action_box.pack_start(self._btn_edit, False, False, 0)
             self._action_box.pack_start(self._btn_delete, False, False, 0)
+
+        self._action_box.pack_start(self._action_sep2, False, False, 0)
+        self._action_box.pack_start(self._btn_backup, False, False, 0)
+        self._action_box.pack_start(self._btn_restore, False, False, 0)
 
         self._action_box.show_all()
 
@@ -1023,6 +1037,132 @@ class ClipboardPanel(Gtk.Box):
 
         entry.connect("activate", on_activate)
         entry.connect("focus-out-event", on_focus_out)
+
+    def _on_backup_clicked(self, _btn):
+        if self.on_dialog_shown:
+            self.on_dialog_shown()
+        dialog = Gtk.FileChooserDialog(
+            title="Select backup destination",
+            transient_for=self.get_toplevel(),
+            action=Gtk.FileChooserAction.SELECT_FOLDER,
+        )
+        dialog.add_button("_Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("_Backup", Gtk.ResponseType.ACCEPT)
+        dialog.set_default_response(Gtk.ResponseType.ACCEPT)
+
+        def on_response(dlg, resp):
+            dlg.destroy()
+            if resp != Gtk.ResponseType.ACCEPT:
+                if self.on_dialog_hidden:
+                    self.on_dialog_hidden()
+                return
+
+            success, msg = _backup_config(dlg.get_filename())
+            if success:
+                self._show_info_dialog(
+                    "Backup Complete",
+                    "Backup saved to:\n" + msg,
+                )
+            else:
+                self._show_warning_dialog(
+                    "Backup Failed",
+                    "Could not create backup:\n" + msg,
+                )
+            if self.on_dialog_hidden:
+                self.on_dialog_hidden()
+
+        dialog.connect("response", on_response)
+        dialog.show_all()
+
+    def _on_restore_clicked(self, _btn):
+        if self.on_dialog_shown:
+            self.on_dialog_shown()
+        dialog = Gtk.FileChooserDialog(
+            title="Select backup archive to restore",
+            transient_for=self.get_toplevel(),
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        dialog.add_button("_Cancel", Gtk.ResponseType.CANCEL)
+        dialog.add_button("_Restore", Gtk.ResponseType.ACCEPT)
+        dialog.set_default_response(Gtk.ResponseType.ACCEPT)
+
+        filt = Gtk.FileFilter.new()
+        filt.set_name("Backup archives (*.tar.gz)")
+        filt.add_pattern("*.tar.gz")
+        dialog.add_filter(filt)
+
+        def on_response(dlg, resp):
+            dlg.destroy()
+            if resp != Gtk.ResponseType.ACCEPT:
+                if self.on_dialog_hidden:
+                    self.on_dialog_hidden()
+                return
+
+            archive_path = dlg.get_filename()
+            if not archive_path:
+                if self.on_dialog_hidden:
+                    self.on_dialog_hidden()
+                return
+
+            self._confirm_restore(archive_path)
+
+        dialog.connect("response", on_response)
+        dialog.show_all()
+
+    def _confirm_restore(self, archive_path: str):
+        if self.on_dialog_shown:
+            self.on_dialog_shown()
+        dialog = Gtk.MessageDialog(
+            transient_for=self.get_toplevel(),
+            modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="Restore backup?",
+        )
+        dialog.format_secondary_text(
+            "This will overwrite all current clipboard history, categories, "
+            "and settings with the data from the backup archive.\n\n"
+            "This action cannot be undone."
+        )
+
+        def on_resp(dlg, resp):
+            dlg.destroy()
+            if resp != Gtk.ResponseType.YES:
+                if self.on_dialog_hidden:
+                    self.on_dialog_hidden()
+                return
+
+            success, msg = _restore_config(archive_path)
+            if success:
+                self._show_info_dialog(
+                    "Restore Complete",
+                    msg,
+                )
+                self.load_cached()
+            else:
+                self._show_warning_dialog(
+                    "Restore Failed",
+                    "Could not restore backup:\n" + msg,
+                )
+            if self.on_dialog_hidden:
+                self.on_dialog_hidden()
+
+        dialog.connect("response", on_resp)
+        dialog.show_all()
+
+    def _show_info_dialog(self, title: str, text: str):
+        if self.on_dialog_shown:
+            self.on_dialog_shown()
+        dialog = Gtk.MessageDialog(
+            transient_for=self.get_toplevel(),
+            modal=True,
+            message_type=Gtk.MessageType.INFO,
+            buttons=Gtk.ButtonsType.OK,
+            text=title,
+        )
+        dialog.format_secondary_text(text)
+        dialog.connect("response", lambda dlg, _: dlg.destroy() or (self.on_dialog_hidden() if self.on_dialog_hidden else None))
+        dialog.show_all()
 
 
 def _backup_config(target_dir: str) -> tuple[bool, str]:
