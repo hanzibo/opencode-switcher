@@ -253,4 +253,4 @@ if __name__ == "__main__":
 
     if app._restart_requested:
         lock_fd.close()
-        subprocess.Popen([sys.executable] + sys.argv)
+        subprocess.Popen([sys.executable] + sys.argv, stderr=subprocess.DEVNULL)

@@ -927,18 +927,18 @@ class ClipboardPanel(Gtk.Box):
 
         dialog.connect("response", on_response)
 
-    def _show_warning_dialog(self, title: str, secondary_text: str):
-        """展示带焦点保护的通用模态警告/提示框 (OK 按钮)"""
+    def _show_message_dialog(self, msg_type: Gtk.MessageType, title: str, text: str):
+        """Show a modal message dialog with focus guard (OK button)."""
         if self.on_dialog_shown:
             self.on_dialog_shown()
         dialog = Gtk.MessageDialog(
             transient_for=self.get_toplevel(),
             modal=True,
-            message_type=Gtk.MessageType.WARNING,
+            message_type=msg_type,
             buttons=Gtk.ButtonsType.OK,
             text=title,
         )
-        dialog.format_secondary_text(secondary_text)
+        dialog.format_secondary_text(text)
         dialog.connect("response", lambda dlg, _: dlg.destroy() or (self.on_dialog_hidden() if self.on_dialog_hidden else None))
         dialog.show_all()
 
@@ -951,7 +951,8 @@ class ClipboardPanel(Gtk.Box):
             return
 
         if cat.pinned:
-            self._show_warning_dialog(
+            self._show_message_dialog(
+                Gtk.MessageType.WARNING,
                 "Cannot delete pinned category",
                 "This category is pinned at the top. Please remove it from the top before deleting."
             )
@@ -1058,16 +1059,18 @@ class ClipboardPanel(Gtk.Box):
                     self.on_dialog_hidden()
                 return
 
-            success, msg = _backup_config(selected_path)
-            if success:
-                self._show_info_dialog(
+            err, path_or_msg = _backup_config(selected_path)
+            if err is None:
+                self._show_message_dialog(
+                    Gtk.MessageType.INFO,
                     "Backup Complete",
-                    "Backup saved to:\n" + msg,
+                    "Backup saved to:\n" + path_or_msg,
                 )
             else:
-                self._show_warning_dialog(
+                self._show_message_dialog(
+                    Gtk.MessageType.WARNING,
                     "Backup Failed",
-                    "Could not create backup:\n" + msg,
+                    "Could not create backup:\n" + err,
                 )
             if self.on_dialog_hidden:
                 self.on_dialog_hidden()
@@ -1128,17 +1131,19 @@ class ClipboardPanel(Gtk.Box):
                     self.on_dialog_hidden()
                 return
 
-            success, msg = _restore_config(archive_path)
-            if success:
-                self._show_info_dialog(
+            err = _restore_config(archive_path)
+            if err is None:
+                self._show_message_dialog(
+                    Gtk.MessageType.INFO,
                     "Restore Complete",
-                    msg,
+                    "Restore completed. Refreshing data...",
                 )
                 self.load_cached()
             else:
-                self._show_warning_dialog(
+                self._show_message_dialog(
+                    Gtk.MessageType.WARNING,
                     "Restore Failed",
-                    "Could not restore backup:\n" + msg,
+                    "Could not restore backup:\n" + err,
                 )
             if self.on_dialog_hidden:
                 self.on_dialog_hidden()
@@ -1146,25 +1151,14 @@ class ClipboardPanel(Gtk.Box):
         dialog.connect("response", on_resp)
         dialog.show_all()
 
-    def _show_info_dialog(self, title: str, text: str):
-        if self.on_dialog_shown:
-            self.on_dialog_shown()
-        dialog = Gtk.MessageDialog(
-            transient_for=self.get_toplevel(),
-            modal=True,
-            message_type=Gtk.MessageType.INFO,
-            buttons=Gtk.ButtonsType.OK,
-            text=title,
-        )
-        dialog.format_secondary_text(text)
-        dialog.connect("response", lambda dlg, _: dlg.destroy() or (self.on_dialog_hidden() if self.on_dialog_hidden else None))
-        dialog.show_all()
 
 
-def _backup_config(target_dir: str) -> tuple[bool, str]:
+
+def _backup_config(target_dir: str) -> tuple[Optional[str], str]:
     """Backup ~/.config/opencode-switcher/ to a .tar.gz archive.
 
-    Returns (success, message). On success, message is the archive path.
+    Returns (error, path_or_msg). On success, error=None and path_or_msg is the archive path.
+    On failure, error is the error string and path_or_msg is empty.
     """
     import tarfile
     config_dir = os.path.expanduser("~/.config/opencode-switcher")
@@ -1174,21 +1168,21 @@ def _backup_config(target_dir: str) -> tuple[bool, str]:
     try:
         with tarfile.open(archive_path, "w:gz") as tar:
             tar.add(config_dir, arcname="opencode-switcher")
-        return (True, archive_path)
+        return (None, archive_path)
     except Exception as e:
-        return (False, str(e))
+        return (str(e), "")
 
 
-def _restore_config(archive_path: str) -> tuple[bool, str]:
+def _restore_config(archive_path: str) -> Optional[str]:
     """Restore opencode-switcher config from a .tar.gz archive.
 
-    Returns (success, message).
+    Returns None on success, or an error message string on failure.
     """
     import tarfile
     config_parent = os.path.dirname(os.path.expanduser("~/.config/opencode-switcher"))
     try:
         with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(config_parent)
-        return (True, "Restore completed. Refreshing data...")
+        return None
     except Exception as e:
-        return (False, str(e))
+        return str(e)
