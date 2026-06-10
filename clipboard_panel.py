@@ -799,7 +799,7 @@ class ClipboardPanel(Gtk.Box):
         sw.set_min_content_height(240)
         sw.set_min_content_width(460)
         sw.add(text_view)
-        content.add(sw)
+        content.pack_start(sw, True, True, 0)
 
         if existing:
             buf = text_view.get_buffer()
