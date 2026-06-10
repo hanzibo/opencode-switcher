@@ -4,3 +4,4 @@ run.log
 .deepseek/
 toggle.sock
 venv/
+.hzb-agents/
