@@ -682,13 +682,14 @@ class ClipboardPanel(Gtk.Box):
             _indicator_inserted[0] = False
 
         def on_drag_data_received(row, context, x, y, sel_data, info, time, lb):
-            if not sel_data.get_data():
+            src_text = sel_data.get_text()
+            if src_text is None:
                 Gdk.drag_status(context, Gdk.DragAction.COPY, time)
                 return
 
             try:
-                src_idx = int(sel_data.get_data().decode())
-            except (ValueError, UnicodeDecodeError):
+                src_idx = int(src_text)
+            except (ValueError, TypeError):
                 Gdk.drag_status(context, Gdk.DragAction.COPY, time)
                 return
 
