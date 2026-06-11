@@ -334,6 +334,16 @@ class CategoryStore:
                 raise IndexError("Item index out of range")
         raise ValueError(f"Category '{cat_id}' not found")
 
+    def reorder_items(self, cat_id: str, new_items: List[CategoryItem]):
+        """Replace the items list of a category with a reordered copy."""
+        self._assert_not_clipboard(cat_id)
+        for c in self._categories:
+            if c.id == cat_id:
+                c.items = list(new_items)
+                self._save()
+                return
+        raise ValueError(f"Category '{cat_id}' not found")
+
     def migrate_from_prompts(self):
         if not os.path.isfile(PROMPTS_PATH):
             return

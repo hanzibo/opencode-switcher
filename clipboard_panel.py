@@ -167,6 +167,9 @@ class ClipboardPanel(Gtk.Box):
         self._btn_edit = Gtk.Button.new_with_label("Edit")
         self._btn_edit.connect("clicked", self._on_edit_clicked)
 
+        self._btn_sort = Gtk.Button.new_with_label("Sort")
+        self._btn_sort.connect("clicked", self._on_sort_clicked)
+
         self._action_sep2 = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
         self._action_sep2.set_margin_top(8)
         self._action_sep2.set_margin_bottom(8)
@@ -536,6 +539,7 @@ class ClipboardPanel(Gtk.Box):
             self._action_box.pack_start(self._btn_create, False, False, 0)
             self._action_box.pack_start(self._btn_edit, False, False, 0)
             self._action_box.pack_start(self._btn_delete, False, False, 0)
+            self._action_box.pack_start(self._btn_sort, False, False, 0)
 
         self._action_box.pack_start(self._action_sep2, False, False, 0)
         self._action_box.pack_start(self._btn_backup, False, False, 0)
@@ -547,6 +551,228 @@ class ClipboardPanel(Gtk.Box):
         has_custom_cats = any(c.id != "__clipboard__" for c in self._cat_store.get_all())
         self._btn_delete_cat.set_sensitive(not is_clipboard and has_custom_cats)
         self._btn_rename_cat.set_sensitive(not is_clipboard)
+
+        # Sort button sensitivity: only for custom categories with 2+ items
+        if not is_clipboard:
+            cat = self._cat_store.get(self._active_category_id)
+            self._btn_sort.set_sensitive(len(cat.items) > 1 if cat else False)
+
+    def _on_sort_clicked(self, _btn):
+        self._show_sort_dialog()
+
+    def _show_sort_dialog(self):
+        cat = self._cat_store.get(self._active_category_id)
+        if not cat or len(cat.items) <= 1:
+            return
+
+        items = list(cat.items)  # local working copy
+        dialog = Gtk.Window.new(Gtk.WindowType.TOPLEVEL)
+        dialog.set_title("Sort: {}".format(cat.name))
+        dialog.set_modal(True)
+        dialog.set_default_size(500, 400)
+        dialog.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
+        dialog.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        dialog.set_resizable(True)
+
+        # Main vertical box
+        vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        dialog.add(vbox)
+
+        # ===== Top bar =====
+        top_bar = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
+        title_label = Gtk.Label.new("Drag items to reorder: {}".format(cat.name))
+        title_label.set_xalign(0)
+        title_label.set_margin_start(12)
+        title_label.set_margin_top(8)
+        title_label.set_margin_bottom(8)
+        top_bar.pack_start(title_label, True, True, 0)
+
+        close_btn = Gtk.Button.new_from_icon_name("window-close", Gtk.IconSize.MENU)
+        close_btn.set_relief(Gtk.ReliefStyle.NONE)
+        close_btn.set_margin_end(8)
+        close_btn.connect("clicked", lambda _: dialog.destroy())
+        top_bar.pack_end(close_btn, False, False, 0)
+        vbox.pack_start(top_bar, False, False, 0)
+
+        # Separator after top bar
+        sep1 = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        vbox.pack_start(sep1, False, False, 0)
+
+        # ===== Scrollable ListBox =====
+        scrolled = Gtk.ScrolledWindow.new()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_vexpand(True)
+        listbox = Gtk.ListBox.new()
+        listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        scrolled.add(listbox)
+        vbox.pack_start(scrolled, True, True, 0)
+
+        # ===== Drag & Drop setup =====
+        target_entry = Gtk.TargetEntry.new("SORT_ITEM", Gtk.TargetFlags.SAME_WIDGET, 0)
+
+        # Insertion indicator (a horizontal separator widget)
+        insert_indicator = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        insert_indicator.set_name("sortInsertIndicator")
+        insert_indicator.set_size_request(-1, 4)
+        # Apply CSS for visibility
+        css = Gtk.CssProvider()
+        css.load_from_data(b"#sortInsertIndicator { background: #3584e4; border: none; min-height: 3px; }")
+        screen = dialog.get_screen() or Gdk.Screen.get_default()
+        Gtk.StyleContext.add_provider_for_screen(screen, css, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+        insert_indicator.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_USER)
+        _indicator_inserted = [False]  # mutable flag
+        _drag_source_idx = [-1]  # mutable
+
+        def setup_dnd(row):
+            Gtk.drag_source_set(row, Gdk.ModifierType.BUTTON1_MASK, [target_entry], Gdk.DragAction.MOVE)
+            row.connect("drag-data-get", on_drag_data_get)
+            row.connect("drag-end", on_drag_end)
+
+            Gtk.drag_dest_set(row, Gtk.DestDefaults.MOTION | Gtk.DestDefaults.DROP, [target_entry], Gdk.DragAction.MOVE)
+            row.connect("drag-motion", on_drag_motion, listbox)
+            row.connect("drag-leave", on_drag_leave, listbox)
+            row.connect("drag-data-received", on_drag_data_received, listbox)
+
+        def on_drag_data_get(row, context, sel_data, info, time):
+            sel_data.set(sel_data.get_target(), 8, str(row.item_index).encode())
+
+        def on_drag_end(row, context):
+            if _indicator_inserted[0] and insert_indicator.get_parent():
+                insert_indicator.get_parent().remove(insert_indicator)
+            _indicator_inserted[0] = False
+            _drag_source_idx[0] = -1
+
+        def on_drag_motion(row, context, x, y, time, lb):
+            if _drag_source_idx[0] < 0:
+                try:
+                    _drag_source_idx[0] = int(context.get_selection().get_target())
+                except Exception:
+                    pass
+            alloc = row.get_allocation()
+            below = y > alloc.height / 2
+
+            if insert_indicator.get_parent():
+                insert_indicator.get_parent().remove(insert_indicator)
+
+            children = lb.get_children()
+            insert_pos = -1
+            for i, child in enumerate(children):
+                if child == row:
+                    insert_pos = i + (1 if below else 0)
+                    break
+
+            if insert_pos >= 0 and insert_pos < len(children):
+                lb.insert(insert_indicator, insert_pos)
+            elif insert_pos >= len(children):
+                lb.add(insert_indicator)
+            else:
+                children2 = lb.get_children()
+                if children2:
+                    lb.insert(insert_indicator, 0)
+                else:
+                    lb.add(insert_indicator)
+
+            _indicator_inserted[0] = True
+            Gdk.drag_status(context, Gdk.DragAction.MOVE, time)
+            return True
+
+        def on_drag_leave(row, context, lb):
+            if insert_indicator.get_parent():
+                insert_indicator.get_parent().remove(insert_indicator)
+            _indicator_inserted[0] = False
+
+        def on_drag_data_received(row, context, x, y, sel_data, info, time, lb):
+            if not sel_data.get_data():
+                Gdk.drag_status(context, Gdk.DragAction.COPY, time)
+                return
+
+            try:
+                src_idx = int(sel_data.get_data().decode())
+            except (ValueError, UnicodeDecodeError):
+                Gdk.drag_status(context, Gdk.DragAction.COPY, time)
+                return
+
+            if insert_indicator.get_parent():
+                insert_indicator.get_parent().remove(insert_indicator)
+            _indicator_inserted[0] = False
+
+            alloc = row.get_allocation()
+            below = y > alloc.height / 2
+            dst_idx = row.item_index
+            if below:
+                dst_idx += 1
+
+            if src_idx == dst_idx or src_idx == dst_idx - 1:
+                Gdk.drag_status(context, Gdk.DragAction.COPY, time)
+                return
+
+            item = items.pop(src_idx)
+            if dst_idx > src_idx:
+                dst_idx -= 1
+            items.insert(dst_idx, item)
+
+            build_rows()
+
+            children = lb.get_children()
+            if 0 <= dst_idx < len(children):
+                lb.select_row(children[dst_idx])
+
+            Gdk.drag_status(context, Gdk.DragAction.MOVE, time)
+
+        # ===== Fill listbox with rows =====
+        def build_rows():
+            for child in listbox.get_children():
+                listbox.remove(child)
+            for idx, item in enumerate(items):
+                row = Gtk.ListBoxRow.new()
+                row.item_index = idx
+                row.set_size_request(-1, 36)
+                lbl = Gtk.Label.new(item.title if item.title else "(untitled)")
+                lbl.set_xalign(0)
+                lbl.set_margin_start(16)
+                lbl.set_margin_top(6)
+                lbl.set_margin_bottom(6)
+                row.add(lbl)
+                setup_dnd(row)
+                listbox.add(row)
+            listbox.show_all()
+
+        # ===== Bottom buttons =====
+        bottom_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        bottom_box.set_margin_top(8)
+        bottom_box.set_margin_bottom(8)
+        bottom_box.set_margin_end(12)
+
+        cancel_btn = Gtk.Button.new_with_label("Cancel")
+        cancel_btn.connect("clicked", lambda _: dialog.destroy())
+
+        confirm_btn = Gtk.Button.new_with_label("Confirm")
+        confirm_btn.get_style_context().add_class("suggested-action")
+
+        def on_confirm(_btn):
+            self._cat_store.reorder_items(self._active_category_id, items)
+            self._rebuild()
+            dialog.destroy()
+
+        confirm_btn.connect("clicked", on_confirm)
+
+        bottom_box.pack_end(confirm_btn, False, False, 0)
+        bottom_box.pack_end(cancel_btn, False, False, 0)
+        vbox.pack_start(bottom_box, False, False, 0)
+
+        sep2 = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        vbox.pack_start(sep2, False, False, 0)
+        # Move bottom_box after sep2 in the vbox order
+        vbox.reorder_child(bottom_box, -1)
+
+        # ===== Build rows initially =====
+        build_rows()
+
+        # ===== Wire focus guards =====
+        dialog.connect("show", lambda *_: self.on_dialog_shown and self.on_dialog_shown())
+        dialog.connect("destroy", lambda *_: self.on_dialog_hidden and self.on_dialog_hidden())
+
+        dialog.show_all()
 
     def _on_category_selected(self, _listbox, row):
         if row is None or not hasattr(row, 'cat_id'):
