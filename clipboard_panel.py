@@ -624,17 +624,17 @@ class ClipboardPanel(Gtk.Box):
         _drag_source_idx = [-1]  # mutable
 
         def setup_dnd(row):
-            Gtk.drag_source_set(row, Gdk.ModifierType.BUTTON1_MASK, [target_entry], Gdk.DragAction.MOVE)
+            row.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, [target_entry], Gdk.DragAction.MOVE)
             row.connect("drag-data-get", on_drag_data_get)
             row.connect("drag-end", on_drag_end)
 
-            Gtk.drag_dest_set(row, Gtk.DestDefaults.MOTION | Gtk.DestDefaults.DROP, [target_entry], Gdk.DragAction.MOVE)
+            row.drag_dest_set(Gtk.DestDefaults.MOTION | Gtk.DestDefaults.DROP, [target_entry], Gdk.DragAction.MOVE)
             row.connect("drag-motion", on_drag_motion, listbox)
             row.connect("drag-leave", on_drag_leave, listbox)
             row.connect("drag-data-received", on_drag_data_received, listbox)
 
         def on_drag_data_get(row, context, sel_data, info, time):
-            sel_data.set(sel_data.get_target(), 8, str(row.item_index).encode())
+            sel_data.set(sel_data.get_target(), 8, [row.item_index])
 
         def on_drag_end(row, context):
             if _indicator_inserted[0] and insert_indicator.get_parent():
