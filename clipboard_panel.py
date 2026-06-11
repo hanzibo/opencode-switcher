@@ -581,6 +581,17 @@ class ClipboardPanel(Gtk.Box):
             item = Gtk.MenuItem.new_with_label("Show at Top")
         item.connect("activate", lambda *_: self._toggle_pin(cat_id, not cat.pinned))
         menu.append(item)
+
+        menu.append(Gtk.SeparatorMenuItem.new())
+
+        rename_item = Gtk.MenuItem.new_with_label("Rename")
+        rename_item.connect("activate", lambda *_: self._on_rename_category_clicked(None))
+        menu.append(rename_item)
+
+        delete_item = Gtk.MenuItem.new_with_label("Delete")
+        delete_item.connect("activate", lambda *_: self._on_delete_category_clicked(None))
+        menu.append(delete_item)
+
         if self.on_menu_shown:
             self.on_menu_shown()
         menu.connect("deactivate", lambda *_: GLib.timeout_add(300, self._on_menu_deactivated))
