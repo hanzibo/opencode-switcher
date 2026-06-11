@@ -608,7 +608,7 @@ class ClipboardPanel(Gtk.Box):
         vbox.pack_start(scrolled, True, True, 0)
 
         # ===== Drag & Drop setup =====
-        target_entry = Gtk.TargetEntry.new("SORT_ITEM", Gtk.TargetFlags.SAME_WIDGET, 0)
+        target_entry = Gtk.TargetEntry.new("SORT_ITEM", Gtk.TargetFlags.SAME_APP, 0)
 
         # Insertion indicator (a horizontal separator widget)
         insert_indicator = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
@@ -634,7 +634,7 @@ class ClipboardPanel(Gtk.Box):
             row.connect("drag-data-received", on_drag_data_received, listbox)
 
         def on_drag_data_get(row, context, sel_data, info, time):
-            sel_data.set(sel_data.get_target(), 8, [row.item_index])
+            sel_data.set_text(str(row.item_index), -1)
 
         def on_drag_end(row, context):
             if _indicator_inserted[0] and insert_indicator.get_parent():
