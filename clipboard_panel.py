@@ -608,103 +608,122 @@ class ClipboardPanel(Gtk.Box):
         vbox.pack_start(scrolled, True, True, 0)
 
         # ===== Drag & Drop setup =====
-        target_entry = Gtk.TargetEntry.new("SORT_ITEM", Gtk.TargetFlags.SAME_APP, 0)
+        target_entry = Gtk.TargetEntry.new("text/plain", Gtk.TargetFlags.SAME_APP, 0)
 
-        # Insertion indicator (a horizontal separator widget)
-        insert_indicator = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
-        insert_indicator.set_name("sortInsertIndicator")
-        insert_indicator.set_size_request(-1, 4)
-        # Apply CSS for visibility
+        # Apply CSS for visual feedback borders with constant size
         css = Gtk.CssProvider()
-        css.load_from_data(b"#sortInsertIndicator { background: #3584e4; border: none; min-height: 3px; }")
-        screen = dialog.get_screen() or Gdk.Screen.get_default()
-        Gtk.StyleContext.add_provider_for_screen(screen, css, Gtk.STYLE_PROVIDER_PRIORITY_USER)
-        insert_indicator.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_USER)
-        _indicator_inserted = [False]  # mutable flag
-        _drag_source_idx = [-1]  # mutable
+        css.load_from_data(b"""
+            .sort-row {
+                border-top: 3px solid transparent;
+                border-bottom: 3px solid transparent;
+            }
+            .sort-row.drag-hover-top {
+                border-top-color: #3584e4;
+            }
+            .sort-row.drag-hover-bottom {
+                border-bottom-color: #3584e4;
+            }
+        """)
+        listbox.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_USER)
 
-        def setup_dnd(row):
-            row.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, [target_entry], Gdk.DragAction.MOVE)
-            row.connect("drag-data-get", on_drag_data_get)
-            row.connect("drag-end", on_drag_end)
+        # Track currently highlighted row
+        _current_hover_row = None
+        _current_hover_dir = None
 
-            row.drag_dest_set(Gtk.DestDefaults.MOTION | Gtk.DestDefaults.DROP, [target_entry], Gdk.DragAction.MOVE)
-            row.connect("drag-motion", on_drag_motion, listbox)
-            row.connect("drag-leave", on_drag_leave, listbox)
-            row.connect("drag-data-received", on_drag_data_received, listbox)
+        # Set DnD DEST on Gtk.ListBox itself (omit HIGHLIGHT to prevent green border)
+        listbox.drag_dest_set(Gtk.DestDefaults.MOTION | Gtk.DestDefaults.DROP, [target_entry], Gdk.DragAction.MOVE)
 
-        def on_drag_data_get(row, context, sel_data, info, time):
-            sel_data.set_text(str(row.item_index), -1)
-
-        def on_drag_end(row, context):
-            if _indicator_inserted[0] and insert_indicator.get_parent():
-                insert_indicator.get_parent().remove(insert_indicator)
-            _indicator_inserted[0] = False
-            _drag_source_idx[0] = -1
-
-        def on_drag_motion(row, context, x, y, time, lb):
-            if _drag_source_idx[0] < 0:
+        def clear_hover_styling():
+            nonlocal _current_hover_row, _current_hover_dir
+            if _current_hover_row:
                 try:
-                    _drag_source_idx[0] = int(context.get_selection().get_target())
+                    ctx = _current_hover_row.get_style_context()
+                    ctx.remove_class("drag-hover-top")
+                    ctx.remove_class("drag-hover-bottom")
                 except Exception:
                     pass
-            alloc = row.get_allocation()
-            below = y > alloc.height / 2
+                _current_hover_row = None
+                _current_hover_dir = None
 
-            if insert_indicator.get_parent():
-                insert_indicator.get_parent().remove(insert_indicator)
+        def on_drag_data_get(widget, context, sel_data, info, time):
+            sel_data.set_text(str(widget.item_index), -1)
 
-            children = lb.get_children()
-            insert_pos = -1
-            for i, child in enumerate(children):
-                if child == row:
-                    insert_pos = i + (1 if below else 0)
-                    break
+        def on_drag_end(widget, context):
+            clear_hover_styling()
 
-            if insert_pos >= 0 and insert_pos < len(children):
-                lb.insert(insert_indicator, insert_pos)
-            elif insert_pos >= len(children):
-                lb.add(insert_indicator)
+        def on_drag_motion(lb, context, x, y, time):
+            nonlocal _current_hover_row, _current_hover_dir
+            vadj = scrolled.get_vadjustment()
+            if vadj:
+                visible_top = vadj.get_value()
+                visible_height = vadj.get_page_size()
+                clamped_y = max(visible_top, min(y, visible_top + visible_height))
             else:
-                children2 = lb.get_children()
-                if children2:
-                    lb.insert(insert_indicator, 0)
-                else:
-                    lb.add(insert_indicator)
+                clamped_y = y
 
-            _indicator_inserted[0] = True
+            row = lb.get_row_at_y(clamped_y)
+            if row is None:
+                clear_hover_styling()
+                Gdk.drag_status(context, Gdk.DragAction.MOVE, time)
+                return True
+
+            alloc = row.get_allocation()
+            row_y = clamped_y - alloc.y
+            below = row_y > alloc.height / 2
+            direction = 'bottom' if below else 'top'
+
+            if _current_hover_row != row or _current_hover_dir != direction:
+                clear_hover_styling()
+                _current_hover_row = row
+                _current_hover_dir = direction
+                ctx = row.get_style_context()
+                if direction == 'top':
+                    ctx.add_class("drag-hover-top")
+                else:
+                    ctx.add_class("drag-hover-bottom")
+
             Gdk.drag_status(context, Gdk.DragAction.MOVE, time)
             return True
 
-        def on_drag_leave(row, context, lb):
-            if insert_indicator.get_parent():
-                insert_indicator.get_parent().remove(insert_indicator)
-            _indicator_inserted[0] = False
+        def on_drag_leave(lb, context, time):
+            clear_hover_styling()
 
-        def on_drag_data_received(row, context, x, y, sel_data, info, time, lb):
+        def on_drag_data_received(lb, context, x, y, sel_data, info, time):
             src_text = sel_data.get_text()
             if src_text is None:
-                Gdk.drag_status(context, Gdk.DragAction.COPY, time)
+                Gtk.drag_finish(context, False, False, time)
                 return
 
             try:
                 src_idx = int(src_text)
             except (ValueError, TypeError):
-                Gdk.drag_status(context, Gdk.DragAction.COPY, time)
+                Gtk.drag_finish(context, False, False, time)
                 return
 
-            if insert_indicator.get_parent():
-                insert_indicator.get_parent().remove(insert_indicator)
-            _indicator_inserted[0] = False
+            # Clamp y to the visible viewport bounds of the ScrolledWindow
+            vadj = scrolled.get_vadjustment()
+            if vadj:
+                visible_top = vadj.get_value()
+                visible_height = vadj.get_page_size()
+                clamped_y = max(visible_top, min(y, visible_top + visible_height))
+            else:
+                clamped_y = y
 
-            alloc = row.get_allocation()
-            below = y > alloc.height / 2
-            dst_idx = row.item_index
-            if below:
-                dst_idx += 1
+            row = lb.get_row_at_y(clamped_y)
+            clear_hover_styling()
+
+            if row is None:
+                dst_idx = len(items)
+            else:
+                alloc = row.get_allocation()
+                row_y = clamped_y - alloc.y
+                below = row_y > alloc.height / 2
+                dst_idx = getattr(row, 'item_index', 0)
+                if below:
+                    dst_idx += 1
 
             if src_idx == dst_idx or src_idx == dst_idx - 1:
-                Gdk.drag_status(context, Gdk.DragAction.COPY, time)
+                Gtk.drag_finish(context, False, False, time)
                 return
 
             item = items.pop(src_idx)
@@ -718,7 +737,11 @@ class ClipboardPanel(Gtk.Box):
             if 0 <= dst_idx < len(children):
                 lb.select_row(children[dst_idx])
 
-            Gdk.drag_status(context, Gdk.DragAction.MOVE, time)
+            Gtk.drag_finish(context, True, False, time)
+
+        listbox.connect("drag-motion", on_drag_motion)
+        listbox.connect("drag-leave", on_drag_leave)
+        listbox.connect("drag-data-received", on_drag_data_received)
 
         # ===== Fill listbox with rows =====
         def build_rows():
@@ -727,14 +750,25 @@ class ClipboardPanel(Gtk.Box):
             for idx, item in enumerate(items):
                 row = Gtk.ListBoxRow.new()
                 row.item_index = idx
+                row.get_style_context().add_class("sort-row")
+                row.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_USER)
                 row.set_size_request(-1, 36)
+
+                evbox = Gtk.EventBox.new()
+                evbox.item_index = idx
+
                 lbl = Gtk.Label.new(item.title if item.title else "(untitled)")
                 lbl.set_xalign(0)
                 lbl.set_margin_start(16)
                 lbl.set_margin_top(6)
                 lbl.set_margin_bottom(6)
-                row.add(lbl)
-                setup_dnd(row)
+                evbox.add(lbl)
+                row.add(evbox)
+
+                evbox.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, [target_entry], Gdk.DragAction.MOVE)
+                evbox.connect("drag-data-get", on_drag_data_get)
+                evbox.connect("drag-end", on_drag_end)
+
                 listbox.add(row)
             listbox.show_all()
 
