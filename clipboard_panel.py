@@ -578,21 +578,12 @@ class ClipboardPanel(Gtk.Box):
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         dialog.add(vbox)
 
-        # ===== Top bar =====
-        top_bar = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
         title_label = Gtk.Label.new("Drag items to reorder: {}".format(cat.name))
         title_label.set_xalign(0)
         title_label.set_margin_start(12)
         title_label.set_margin_top(8)
         title_label.set_margin_bottom(8)
-        top_bar.pack_start(title_label, True, True, 0)
-
-        close_btn = Gtk.Button.new_from_icon_name("window-close", Gtk.IconSize.MENU)
-        close_btn.set_relief(Gtk.ReliefStyle.NONE)
-        close_btn.set_margin_end(8)
-        close_btn.connect("clicked", lambda _: dialog.destroy())
-        top_bar.pack_end(close_btn, False, False, 0)
-        vbox.pack_start(top_bar, False, False, 0)
+        vbox.pack_start(title_label, False, False, 0)
 
         # Separator after top bar
         sep1 = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
