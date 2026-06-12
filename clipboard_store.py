@@ -5,7 +5,7 @@ import time
 import hashlib
 from copy import deepcopy
 from dataclasses import dataclass, asdict
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from uuid import uuid4
 
 from utils import is_wayland
@@ -201,6 +201,7 @@ class PromptStore:
 class CategoryStore:
     def __init__(self):
         self._categories: List[CustomCategory] = []
+        self._recycle_bin: List[Dict[str, Any]] = []
         self._load()
 
     def _load(self):
@@ -218,13 +219,19 @@ class CategoryStore:
                     pinned=c.get("pinned", False), created_at=c.get("created_at", 0)
                 )
                 self._categories.append(cat)
+            self._recycle_bin = data.get("recycle_bin", [])
         except (json.JSONDecodeError, TypeError, KeyError):
             self._categories = []
+            self._recycle_bin = []
 
     def _save(self):
         os.makedirs(CONFIG_DIR, exist_ok=True)
         with open(CATEGORIES_PATH, "w") as f:
-            json.dump({"version": 1, "categories": [asdict(c) for c in self._categories]}, f, indent=2)
+            json.dump({
+                "version": 1,
+                "categories": [asdict(c) for c in self._categories],
+                "recycle_bin": self._recycle_bin
+            }, f, indent=2)
 
     @staticmethod
     def _assert_not_clipboard(cat_id: str):
@@ -328,11 +335,69 @@ class CategoryStore:
         for c in self._categories:
             if c.id == cat_id:
                 if 0 <= index < len(c.items):
-                    c.items.pop(index)
-                    self._save()
+                    item = c.items.pop(index)
+                    self.add_to_recycle_bin(c.id, c.name, item)
                     return
                 raise IndexError("Item index out of range")
         raise ValueError(f"Category '{cat_id}' not found")
+
+    def get_recycle_bin(self) -> List[Dict[str, Any]]:
+        return list(self._recycle_bin)
+
+    def add_to_recycle_bin(self, original_cat_id: str, original_cat_name: str, item: CategoryItem):
+        self._recycle_bin.append({
+            "original_cat_id": original_cat_id,
+            "original_cat_name": original_cat_name,
+            "item": asdict(item),
+            "deleted_at": int(time.time() * 1000)
+        })
+        self._save()
+
+    def restore_item(self, index: int):
+        if 0 <= index < len(self._recycle_bin):
+            entry = self._recycle_bin.pop(index)
+            orig_id = entry["original_cat_id"]
+            orig_name = entry["original_cat_name"]
+            item_data = entry["item"]
+            item = CategoryItem(
+                title=item_data["title"],
+                text=item_data["text"],
+                timestamp=item_data["timestamp"]
+            )
+            
+            # Find if the original category still exists by id or name
+            target_cat = None
+            for c in self._categories:
+                if c.id == orig_id:
+                    target_cat = c
+                    break
+            if not target_cat:
+                for c in self._categories:
+                    if c.name == orig_name:
+                        target_cat = c
+                        break
+            
+            # If not found, create a new category
+            if not target_cat:
+                new_cat_id = self.create(orig_name)
+                for c in self._categories:
+                    if c.id == new_cat_id:
+                        target_cat = c
+                        break
+            
+            if target_cat:
+                target_cat.items.append(item)
+            self._save()
+            return True
+        return False
+
+    def permanently_delete_item(self, index: int):
+        if 0 <= index < len(self._recycle_bin):
+            self._recycle_bin.pop(index)
+            self._save()
+            return True
+        return False
+
 
     def reorder_items(self, cat_id: str, new_items: List[CategoryItem]):
         """Replace the items list of a category with a reordered copy."""

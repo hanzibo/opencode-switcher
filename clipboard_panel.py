@@ -7,7 +7,7 @@ gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf
 from typing import Optional, Callable, List
-from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, capture_clipboard_once
+from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once
 import time
 from utils import relative_time, is_wayland
 
@@ -180,6 +180,9 @@ class ClipboardPanel(Gtk.Box):
         self._btn_restore = Gtk.Button.new_with_label("Restore")
         self._btn_restore.connect("clicked", self._on_restore_clicked)
 
+        self._btn_recycle_bin = Gtk.Button.new_with_label("Recycle Bin")
+        self._btn_recycle_bin.connect("clicked", self._on_recycle_bin_clicked)
+
         self.pack_start(self._cat_vbox, False, True, 0)
         self.pack_start(self._cat_sep, False, False, 0)
         self.pack_start(self._content_scrolled, True, True, 0)
@@ -325,35 +328,38 @@ class ClipboardPanel(Gtk.Box):
             ".cat-tool-btn:hover { background: %(btn_hover)s; }"
             ".cat-tool-btn:active { background: %(btn_active)s; }"
             ".cat-sep-row separator { background: %(cat_sep_color)s; min-height: 1px; }"
-            "dialog, messagedialog, GtkDialog, GtkMessageDialog, "
-            "dialog box, messagedialog box, dialog grid, messagedialog grid, "
+            "dialog, messagedialog, GtkDialog, GtkMessageDialog, .custom-dialog, "
+            "dialog box, messagedialog box, dialog grid, messagedialog grid, .custom-dialog box, "
             ".dialog-vbox, .dialog-action-area, .dialog-content-area { "
             "background-color: %(dialog_bg)s; color: %(text_fg)s; border: none; box-shadow: none; }"
-            "dialog scrolledwindow, messagedialog scrolledwindow, dialog viewport, messagedialog viewport { "
+            "dialog scrolledwindow, messagedialog scrolledwindow, .custom-dialog scrolledwindow, "
+            "dialog viewport, messagedialog viewport, .custom-dialog viewport { "
             "background-color: transparent; border: none; }"
-            "dialog label, messagedialog label { color: %(text_fg)s; background-color: transparent; }"
-            "dialog entry, messagedialog entry, dialog textview, messagedialog textview, "
-            "dialog textview text, messagedialog textview text { "
+            "dialog label, messagedialog label, .custom-dialog label { color: %(text_fg)s; background-color: transparent; }"
+            "dialog entry, messagedialog entry, .custom-dialog entry, "
+            "dialog textview, messagedialog textview, .custom-dialog textview, "
+            "dialog textview text, messagedialog textview text, .custom-dialog textview text { "
             "background-color: %(input_bg)s; color: %(input_fg)s; "
             "border: 1px solid %(input_border)s; border-radius: 6px; "
             "caret-color: %(sel_border)s; }"
-            "dialog entry:focus, messagedialog entry:focus, dialog textview:focus, messagedialog textview:focus { "
+            "dialog entry:focus, messagedialog entry:focus, .custom-dialog entry:focus, "
+            "dialog textview:focus, messagedialog textview:focus, .custom-dialog textview:focus { "
             "border-color: %(sel_border)s; }"
-            "dialog button, messagedialog button { "
+            "dialog button, messagedialog button, .custom-dialog button { "
             "background-color: %(btn_bg)s; color: %(text_fg)s; "
             "border: 1px solid %(btn_border)s; border-radius: 6px; "
             "padding: 8px 16px; font-size: 14px; font-weight: 500; "
             "box-shadow: none; text-shadow: none; }"
-            "dialog button:hover, messagedialog button:hover { background-color: %(btn_hover)s; border-color: %(sel_border)s; }"
-            "dialog button:active, messagedialog button:active { background-color: %(btn_active)s; }"
-            "dialog headerbar, messagedialog headerbar, "
-            "dialog headerbar.titlebar, messagedialog headerbar.titlebar { "
+            "dialog button:hover, messagedialog button:hover, .custom-dialog button:hover { background-color: %(btn_hover)s; border-color: %(sel_border)s; }"
+            "dialog button:active, messagedialog button:active, .custom-dialog button:active { background-color: %(btn_active)s; }"
+            "dialog headerbar, messagedialog headerbar, .custom-dialog headerbar, "
+            "dialog headerbar.titlebar, messagedialog headerbar.titlebar, .custom-dialog headerbar.titlebar { "
             "background-color: %(dialog_bg)s; background-image: none; box-shadow: none; border-style: none; border-color: %(dialog_bg)s; color: %(text_fg)s; }"
-            "dialog headerbar *, messagedialog headerbar * { "
+            "dialog headerbar *, messagedialog headerbar *, .custom-dialog headerbar * { "
             "background-color: transparent; background-image: none; box-shadow: none; color: %(text_fg)s; }"
-            "dialog headerbar button, messagedialog headerbar button { "
+            "dialog headerbar button, messagedialog headerbar button, .custom-dialog headerbar button { "
             "background-color: transparent; background-image: none; border: none; box-shadow: none; color: %(text_fg)s; }"
-            "dialog headerbar button:hover, messagedialog headerbar button:hover { background-color: %(btn_hover)s; }"
+            "dialog headerbar button:hover, messagedialog headerbar button:hover, .custom-dialog headerbar button:hover { background-color: %(btn_hover)s; }"
             "entry, textview, textview text { background-color: %(input_bg)s; color: %(input_fg)s; border: 1px solid %(input_border)s; border-radius: 6px; }"
             "textview { padding: 4px; }"
             "menu, menuitem { background-color: %(dialog_bg)s; background-image: none; }"
@@ -362,6 +368,12 @@ class ClipboardPanel(Gtk.Box):
             "menuitem:hover, menuitem:selected { background-color: %(btn_hover)s; color: %(text_fg)s; }"
             "menuitem label { color: %(text_fg)s; }"
             "menuitem:hover label, menuitem:selected label { color: %(text_fg)s; }"
+            ".custom-dialog separator { background: %(input_border)s; min-height: 1px; }"
+            ".custom-dialog list { background-color: %(input_bg)s; border: 1px solid %(input_border)s; border-radius: 6px; padding: 4px 0; }"
+            ".custom-dialog row, .custom-dialog listrow, .custom-dialog .sort-row { background-color: transparent; color: %(text_fg)s; border-bottom: 1px solid %(input_border)s; }"
+            ".custom-dialog row:last-child, .custom-dialog listrow:last-child, .custom-dialog .sort-row:last-child { border-bottom: none; }"
+            ".custom-dialog row:hover, .custom-dialog listrow:hover, .custom-dialog .sort-row:hover { background-color: %(hover_bg)s; }"
+            ".custom-dialog row:selected, .custom-dialog listrow:selected, .custom-dialog .sort-row:selected { background-color: %(sel_bg)s; color: %(text_fg)s; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self, self._cat_list, self._content_scrolled, self._content_list):
@@ -544,6 +556,7 @@ class ClipboardPanel(Gtk.Box):
         self._action_box.pack_start(self._action_sep2, False, False, 0)
         self._action_box.pack_start(self._btn_backup, False, False, 0)
         self._action_box.pack_start(self._btn_restore, False, False, 0)
+        self._action_box.pack_start(self._btn_recycle_bin, False, False, 0)
 
         self._action_box.show_all()
 
@@ -567,6 +580,7 @@ class ClipboardPanel(Gtk.Box):
 
         items = list(cat.items)  # local working copy
         dialog = Gtk.Window.new(Gtk.WindowType.TOPLEVEL)
+        dialog.get_style_context().add_class("custom-dialog")
         dialog.set_title("Sort: {}".format(cat.name))
         dialog.set_modal(True)
         dialog.set_default_size(500, 400)
@@ -1447,6 +1461,207 @@ class ClipboardPanel(Gtk.Box):
 
         dialog.connect("response", on_resp)
         dialog.show_all()
+
+    def _on_recycle_bin_clicked(self, _btn):
+        self._show_recycle_bin_dialog()
+
+    def _show_recycle_bin_dialog(self):
+        if self.on_dialog_shown:
+            self.on_dialog_shown()
+
+        from copy import deepcopy
+        from uuid import uuid4
+
+        dialog = Gtk.Window.new(Gtk.WindowType.TOPLEVEL)
+        dialog.get_style_context().add_class("custom-dialog")
+        dialog.set_title("Recycle Bin")
+        dialog.set_modal(True)
+        dialog.set_default_size(500, 400)
+        dialog.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
+        dialog.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        dialog.set_resizable(True)
+        dialog.set_transient_for(self.get_toplevel())
+
+        # Transaction copies of the recycle bin and categories
+        temp_recycle_bin = deepcopy(self._cat_store._recycle_bin)
+        temp_categories = deepcopy(self._cat_store._categories)
+
+        vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+        vbox.set_margin_top(12)
+        vbox.set_margin_bottom(12)
+        vbox.set_margin_start(12)
+        vbox.set_margin_end(12)
+        dialog.add(vbox)
+
+        # Title Label
+        title_lbl = Gtk.Label.new("Deleted Templates:")
+        title_lbl.set_xalign(0)
+        title_lbl.set_halign(Gtk.Align.START)
+        vbox.pack_start(title_lbl, False, False, 0)
+
+        # List Area
+        scrolled = Gtk.ScrolledWindow.new()
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_vexpand(True)
+        listbox = Gtk.ListBox.new()
+        listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        scrolled.add(listbox)
+        vbox.pack_start(scrolled, True, True, 0)
+
+        # Middle bottom box: Restore button
+        middle_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
+        restore_btn = Gtk.Button.new_with_label("Restore")
+        middle_box.pack_start(restore_btn, True, False, 0)
+        vbox.pack_start(middle_box, False, False, 0)
+
+        # Separator before bottom bar
+        sep = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        vbox.pack_start(sep, False, False, 0)
+
+        # Bottom box: Permanently Delete (left) | Cancel & Confirm (right)
+        bottom_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        
+        perm_delete_btn = Gtk.Button.new_with_label("Permanently Delete All")
+        perm_delete_btn.get_style_context().add_class("destructive-action")
+        bottom_box.pack_start(perm_delete_btn, False, False, 0)
+
+        cancel_btn = Gtk.Button.new_with_label("Cancel")
+        confirm_btn = Gtk.Button.new_with_label("Confirm")
+        confirm_btn.get_style_context().add_class("suggested-action")
+        
+        bottom_box.pack_end(confirm_btn, False, False, 0)
+        bottom_box.pack_end(cancel_btn, False, False, 0)
+        vbox.pack_start(bottom_box, False, False, 0)
+
+        def build_rows():
+            for child in listbox.get_children():
+                listbox.remove(child)
+            for entry in temp_recycle_bin:
+                row = Gtk.ListBoxRow.new()
+                row.entry = entry
+
+                hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+                
+                title = entry["item"]["title"]
+                if not title:
+                    title = "(untitled)"
+                title_lbl = Gtk.Label.new(title)
+                title_lbl.set_halign(Gtk.Align.START)
+                title_lbl.set_xalign(0)
+                title_lbl.set_margin_start(12)
+                title_lbl.set_margin_top(8)
+                title_lbl.set_margin_bottom(8)
+
+                cat_name = entry["original_cat_name"]
+                cat_lbl = Gtk.Label.new(f"From category: {cat_name}")
+                cat_lbl.set_halign(Gtk.Align.END)
+                cat_lbl.set_xalign(1)
+                cat_lbl.set_margin_end(12)
+                cat_lbl.override_color(Gtk.StateFlags.NORMAL, self._snippet_color)
+
+                hbox.pack_start(title_lbl, True, True, 0)
+                hbox.pack_end(cat_lbl, False, False, 0)
+                row.add(hbox)
+                listbox.add(row)
+            listbox.show_all()
+
+        build_rows()
+
+        # Restore action
+        def on_restore_clicked(_btn):
+            row = listbox.get_selected_row()
+            if not row or not hasattr(row, "entry"):
+                return
+            entry = row.entry
+            
+            # Perform restore in temp
+            temp_recycle_bin.remove(entry)
+            
+            orig_id = entry["original_cat_id"]
+            orig_name = entry["original_cat_name"]
+            item_data = entry["item"]
+            item = CategoryItem(
+                title=item_data["title"],
+                text=item_data["text"],
+                timestamp=item_data["timestamp"]
+            )
+            
+            target_cat = None
+            for c in temp_categories:
+                if c.id == orig_id:
+                    target_cat = c
+                    break
+            if not target_cat:
+                for c in temp_categories:
+                    if c.name == orig_name:
+                        target_cat = c
+                        break
+            if not target_cat:
+                # To prevent naming conflicts in temp_categories
+                new_cat_id = uuid4().hex[:12]
+                target_cat = CustomCategory(
+                    id=new_cat_id,
+                    name=orig_name,
+                    items=[],
+                    pinned=False,
+                    created_at=int(time.time() * 1000)
+                )
+                temp_categories.append(target_cat)
+            
+            target_cat.items.append(item)
+            build_rows()
+
+        restore_btn.connect("clicked", on_restore_clicked)
+
+        # Permanently Delete All action
+        def on_perm_delete_clicked(_btn):
+            if not temp_recycle_bin:
+                return
+
+            # Double confirmation dialog
+            confirm = Gtk.MessageDialog(
+                transient_for=dialog,
+                modal=True,
+                message_type=Gtk.MessageType.QUESTION,
+                buttons=Gtk.ButtonsType.YES_NO,
+                text="Permanently delete all templates?",
+            )
+            confirm.format_secondary_text("This action cannot be undone and all templates in the Recycle Bin will be lost forever.")
+            
+            def on_confirm_response(dlg, resp):
+                dlg.destroy()
+                if resp == Gtk.ResponseType.YES:
+                    temp_recycle_bin.clear()
+                    build_rows()
+
+            confirm.connect("response", on_confirm_response)
+            confirm.show_all()
+
+        perm_delete_btn.connect("clicked", on_perm_delete_clicked)
+
+        # Cancel action
+        def on_cancel_clicked(_btn):
+            dialog.destroy()
+
+        cancel_btn.connect("clicked", on_cancel_clicked)
+
+        # Confirm action
+        def on_confirm_clicked(_btn):
+            self._cat_store._recycle_bin = temp_recycle_bin
+            self._cat_store._categories = temp_categories
+            self._cat_store._save()
+            self._rebuild_category_list()
+            self._rebuild()
+            dialog.destroy()
+
+        confirm_btn.connect("clicked", on_confirm_clicked)
+
+        # Focus guards connection
+        dialog.connect("show", lambda *_: self.on_dialog_shown and self.on_dialog_shown())
+        dialog.connect("destroy", lambda *_: self.on_dialog_hidden and self.on_dialog_hidden())
+
+        dialog.show_all()
+
 
 
 
