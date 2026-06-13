@@ -902,6 +902,14 @@ class ClipboardPanel(Gtk.Box):
             copy_item = Gtk.MenuItem.new_with_label("Copy")
             copy_item.connect("activate", lambda *_: self._activate_item(item))
             menu.append(copy_item)
+
+            import re
+            dynamic_copy_item = Gtk.MenuItem.new_with_label("Dynamic Copy")
+            has_placeholders = len(re.findall(r"\$\{(\d+)\}", item.text)) > 0
+            dynamic_copy_item.set_sensitive(has_placeholders)
+            dynamic_copy_item.connect("activate", lambda *_: self._show_dynamic_copy_dialog(item))
+            menu.append(dynamic_copy_item)
+
             edit_item = Gtk.MenuItem.new_with_label("Edit")
             edit_item.connect("activate", lambda *_: self._edit_prompt(item))
             menu.append(edit_item)
@@ -1957,6 +1965,221 @@ class ClipboardPanel(Gtk.Box):
         # Focus guards connection
         dialog.connect("show", lambda *_: self.on_dialog_shown and self.on_dialog_shown())
         dialog.connect("destroy", lambda *_: self.on_dialog_hidden and self.on_dialog_hidden())
+
+        dialog.show_all()
+
+    def _show_dynamic_copy_dialog(self, item):
+        import re
+
+        matches = re.findall(r"\$\{(\d+)\}", item.text)
+        if not matches:
+            return
+
+        nums = sorted(list(set(int(m) for m in matches)))
+
+        dialog = Gtk.Window.new(Gtk.WindowType.TOPLEVEL)
+        dialog.get_style_context().add_class("custom-dialog")
+        dialog.set_title("Dynamic Copy - {}".format(item.title if item.title else "Template"))
+        dialog.set_modal(True)
+        dialog.set_default_size(800, 500)
+        dialog.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
+        dialog.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        dialog.set_resizable(True)
+        dialog.set_transient_for(self.get_toplevel())
+
+        # Main vertical container
+        vbox_main = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+        vbox_main.set_margin_top(12)
+        vbox_main.set_margin_bottom(12)
+        vbox_main.set_margin_start(12)
+        vbox_main.set_margin_end(12)
+        dialog.add(vbox_main)
+
+        # Left/Right columns container
+        hbox_cols = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
+        vbox_main.pack_start(hbox_cols, True, True, 0)
+
+        # --- Left Column: Parameter Input Panel ---
+        vbox_input = Gtk.Box.new(Gtk.Orientation.VERTICAL, 6)
+
+        lbl_input = Gtk.Label.new("Parameter Input:")
+        lbl_input.set_xalign(0)
+        vbox_input.pack_start(lbl_input, False, False, 0)
+
+        notebook = Gtk.Notebook.new()
+        vbox_input.pack_start(notebook, True, True, 0)
+        hbox_cols.pack_start(vbox_input, True, True, 0)
+
+        # --- Right Column: Real-time Preview & Edit Panel ---
+        vbox_preview = Gtk.Box.new(Gtk.Orientation.VERTICAL, 6)
+
+        lbl_preview = Gtk.Label.new("Real-time Preview:")
+        lbl_preview.set_xalign(0)
+        vbox_preview.pack_start(lbl_preview, False, False, 0)
+
+        scrolled_preview = Gtk.ScrolledWindow.new()
+        scrolled_preview.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        scrolled_preview.set_vexpand(True)
+
+        preview_tv = Gtk.TextView.new()
+        preview_tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        preview_tv.set_left_margin(8)
+        preview_tv.set_right_margin(8)
+        preview_tv.set_top_margin(8)
+        preview_tv.set_bottom_margin(8)
+        preview_buffer = preview_tv.get_buffer()
+        scrolled_preview.add(preview_tv)
+        vbox_preview.pack_start(scrolled_preview, True, True, 0)
+
+        chk_edit = Gtk.CheckButton.new_with_label("允许在预览框直接编辑")
+        chk_edit.set_active(True)
+        preview_tv.set_editable(True)
+
+        def on_chk_edit_toggled(btn):
+            preview_tv.set_editable(btn.get_active())
+
+        chk_edit.connect("toggled", on_chk_edit_toggled)
+        vbox_preview.pack_start(chk_edit, False, False, 0)
+        hbox_cols.pack_start(vbox_preview, True, True, 0)
+
+        # --- Data Binding and Key Event logic ---
+        input_buffers = {}
+        input_textviews = {}
+        is_updating_preview = False
+
+        def update_preview():
+            nonlocal is_updating_preview
+            if is_updating_preview:
+                return
+            is_updating_preview = True
+            try:
+                text = item.text
+                for num, buf in input_buffers.items():
+                    start_iter = buf.get_start_iter()
+                    end_iter = buf.get_end_iter()
+                    val = buf.get_text(start_iter, end_iter, True)
+                    if not val:
+                        val = f"${{{num}}}"
+                    text = text.replace(f"${{{num}}}", val)
+                preview_buffer.set_text(text)
+            finally:
+                is_updating_preview = False
+
+        def on_key_press(widget, event, num_val):
+            is_shift = (event.state & Gdk.ModifierType.SHIFT_MASK) != 0
+
+            # Shift+Tab
+            if event.keyval == Gdk.KEY_ISO_Left_Tab or (event.keyval == Gdk.KEY_Tab and is_shift):
+                current_page = notebook.get_current_page()
+                if current_page > 0:
+                    notebook.set_current_page(current_page - 1)
+                    prev_num = nums[current_page - 1]
+                    input_textviews[prev_num].grab_focus()
+                return True
+
+            # Tab
+            if event.keyval == Gdk.KEY_Tab:
+                current_page = notebook.get_current_page()
+                n_pages = notebook.get_n_pages()
+                if current_page < n_pages - 1:
+                    notebook.set_current_page(current_page + 1)
+                    next_num = nums[current_page + 1]
+                    input_textviews[next_num].grab_focus()
+                else:
+                    confirm_btn.grab_focus()
+                return True
+
+            # Ctrl/Cmd+Enter
+            is_enter = event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter)
+            has_modifier = (event.state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD4_MASK | Gdk.ModifierType.META_MASK)) != 0
+            if is_enter and has_modifier:
+                on_confirm(None)
+                return True
+
+            return False
+
+        for num in nums:
+            scr_in = Gtk.ScrolledWindow.new()
+            scr_in.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+            scr_in.set_margin_top(6)
+            scr_in.set_margin_bottom(6)
+            scr_in.set_margin_start(6)
+            scr_in.set_margin_end(6)
+
+            tv_in = Gtk.TextView.new()
+            tv_in.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+            tv_in.set_left_margin(8)
+            tv_in.set_right_margin(8)
+            tv_in.set_top_margin(8)
+            tv_in.set_bottom_margin(8)
+            buf_in = tv_in.get_buffer()
+            scr_in.add(tv_in)
+
+            tab_lbl = Gtk.Label.new(f"${{{num}}}")
+            notebook.append_page(scr_in, tab_lbl)
+
+            input_buffers[num] = buf_in
+            input_textviews[num] = tv_in
+
+            buf_in.connect("changed", lambda *_: update_preview())
+            tv_in.connect("key-press-event", on_key_press, num)
+
+        def on_preview_key_press(widget, event):
+            is_enter = event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter)
+            has_modifier = (event.state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.MOD4_MASK | Gdk.ModifierType.META_MASK)) != 0
+            if is_enter and has_modifier:
+                on_confirm(None)
+                return True
+            return False
+
+        preview_tv.connect("key-press-event", on_preview_key_press)
+
+        # Initialize preview text
+        update_preview()
+
+        # Separator before buttons
+        sep = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        vbox_main.pack_start(sep, False, False, 0)
+
+        # --- Bottom Buttons Box ---
+        bottom_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        bottom_box.set_margin_top(8)
+        bottom_box.set_margin_bottom(8)
+        bottom_box.set_margin_end(12)
+
+        cancel_btn = Gtk.Button.new_with_label("Cancel")
+        cancel_btn.connect("clicked", lambda _: dialog.destroy())
+
+        confirm_btn = Gtk.Button.new_with_label("Copy")
+        confirm_btn.get_style_context().add_class("suggested-action")
+
+        def on_confirm(_btn):
+            start_iter = preview_buffer.get_start_iter()
+            end_iter = preview_buffer.get_end_iter()
+            text = preview_buffer.get_text(start_iter, end_iter, True)
+
+            _copy_to_clipboard(text)
+            if self.on_copy_clipboard:
+                self.on_copy_clipboard(text, None)
+
+            dialog.destroy()
+
+            if self.on_hide_request:
+                self.on_hide_request()
+
+        confirm_btn.connect("clicked", on_confirm)
+
+        bottom_box.pack_end(confirm_btn, False, False, 0)
+        bottom_box.pack_end(cancel_btn, False, False, 0)
+        vbox_main.pack_start(bottom_box, False, False, 0)
+
+        # Focus guards
+        dialog.connect("show", lambda *_: self.on_dialog_shown and self.on_dialog_shown())
+        dialog.connect("destroy", lambda *_: self.on_dialog_hidden and self.on_dialog_hidden())
+
+        # Grab focus on the first input textview initially
+        if nums:
+            input_textviews[nums[0]].grab_focus()
 
         dialog.show_all()
 
