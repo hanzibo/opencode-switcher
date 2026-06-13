@@ -246,8 +246,8 @@ class CategoryStore:
 
     def get_all(self) -> List[CustomCategory]:
         clipboard_cat = self._clipboard_category()
-        pinned = sorted([c for c in self._categories if c.pinned], key=lambda c: c.created_at, reverse=True)
-        unpinned = sorted([c for c in self._categories if not c.pinned], key=lambda c: c.created_at, reverse=True)
+        pinned = [c for c in self._categories if c.pinned]
+        unpinned = [c for c in self._categories if not c.pinned]
         return [clipboard_cat] + [deepcopy(c) for c in pinned] + [deepcopy(c) for c in unpinned]
 
     def get(self, cat_id: str) -> Optional[CustomCategory]:
@@ -264,12 +264,20 @@ class CategoryStore:
         if any(c.name == name for c in self._categories):
             raise ValueError(f"Category '{name}' already exists")
         cat_id = uuid4().hex[:12]
-        self._categories.append(CustomCategory(
+        self._categories.insert(0, CustomCategory(
             id=cat_id, name=name, items=[], pinned=False,
             created_at=int(time.time() * 1000)
         ))
         self._save()
         return cat_id
+
+    def reorder_categories(self, new_categories: List[CustomCategory]):
+        orig_ids = {c.id for c in self._categories}
+        new_ids = {c.id for c in new_categories}
+        if orig_ids != new_ids:
+            raise ValueError("Reordered categories do not match original categories")
+        self._categories = list(new_categories)
+        self._save()
 
     def delete(self, cat_id: str):
         self._assert_not_clipboard(cat_id)
