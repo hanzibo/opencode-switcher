@@ -1929,11 +1929,11 @@ class ClipboardPanel(Gtk.Box):
         sep = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
         vbox.pack_start(sep, False, False, 0)
 
-        # Bottom buttons box (left-aligned as requested)
+        # Bottom buttons box (right-aligned)
         bottom_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
         bottom_box.set_margin_top(8)
         bottom_box.set_margin_bottom(8)
-        bottom_box.set_margin_start(12)
+        bottom_box.set_margin_end(12)
 
         cancel_btn = Gtk.Button.new_with_label("Cancel")
         cancel_btn.connect("clicked", lambda _: dialog.destroy())
@@ -1950,8 +1950,8 @@ class ClipboardPanel(Gtk.Box):
 
         confirm_btn.connect("clicked", on_confirm)
 
-        bottom_box.pack_start(cancel_btn, False, False, 0)
-        bottom_box.pack_start(confirm_btn, False, False, 0)
+        bottom_box.pack_end(confirm_btn, False, False, 0)
+        bottom_box.pack_end(cancel_btn, False, False, 0)
         vbox.pack_start(bottom_box, False, False, 0)
 
         # Focus guards connection
