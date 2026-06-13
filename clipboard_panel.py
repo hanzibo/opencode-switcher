@@ -378,6 +378,7 @@ class ClipboardPanel(Gtk.Box):
             ".custom-dialog row:hover, .custom-dialog listrow:hover, .custom-dialog .sort-row:hover { background-color: %(hover_bg)s; }"
             ".custom-dialog row:selected, .custom-dialog listrow:selected, .custom-dialog .sort-row:selected { background-color: %(sel_bg)s; color: %(text_fg)s; }"
             ".dynamic-copy-tag { color: #2ecc71; font-size: 12px; font-weight: bold; }"
+            ".custom-dialog notebook, .custom-dialog notebook > stack { border: none; background-color: transparent; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self, self._cat_list, self._content_scrolled, self._content_list):
@@ -1723,6 +1724,7 @@ class ClipboardPanel(Gtk.Box):
 
         # Tab layout using Notebook
         notebook = Gtk.Notebook.new()
+        notebook.set_show_border(False)
         vbox.pack_start(notebook, True, True, 0)
 
         # Tab 1: Pinned Categories
@@ -2022,6 +2024,7 @@ class ClipboardPanel(Gtk.Box):
         vbox_input.pack_start(lbl_input, False, False, 0)
 
         notebook = Gtk.Notebook.new()
+        notebook.set_show_border(False)
         vbox_input.pack_start(notebook, True, True, 0)
         hbox_cols.pack_start(vbox_input, True, True, 0)
 
