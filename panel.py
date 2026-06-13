@@ -871,6 +871,8 @@ class SearchPanel:
             )
             dialog.add_button("_Cancel", Gtk.ResponseType.CANCEL)
             dialog.add_button("_Open", Gtk.ResponseType.ACCEPT)
+            dialog.connect("show", lambda *_: self._on_clip_dialog_shown())
+            dialog.connect("destroy", lambda *_: self._on_clip_dialog_hidden())
             def _on_dialog_response(dlg, response):
                 if response == Gtk.ResponseType.ACCEPT:
                     chosen = dlg.get_filename()
