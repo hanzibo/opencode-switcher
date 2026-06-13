@@ -447,7 +447,11 @@ class SearchPanel:
         # Hide and defer-destroy all transient dialogs to release input grabs
         # Only destroy Gtk.Dialog instances to avoid destroying GTK internal windows like GtkTooltipWindow
         for win in Gtk.Window.list_toplevels():
-            if win != self._window and isinstance(win, Gtk.Dialog) and win.get_transient_for() == self._window:
+            if win == self._window:
+                continue
+            is_dialog = isinstance(win, Gtk.Dialog)
+            is_custom = isinstance(win, Gtk.Window) and win.get_style_context().has_class("custom-dialog")
+            if (is_dialog or is_custom) and win.get_transient_for() == self._window:
                 win.hide()
                 GLib.idle_add(win.destroy)
 

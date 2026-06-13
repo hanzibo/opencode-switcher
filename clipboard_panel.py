@@ -591,6 +591,7 @@ class ClipboardPanel(Gtk.Box):
         dialog.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
         dialog.set_type_hint(Gdk.WindowTypeHint.DIALOG)
         dialog.set_resizable(True)
+        dialog.set_transient_for(self.get_toplevel())
 
         # Main vertical box
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
