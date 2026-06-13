@@ -377,6 +377,7 @@ class ClipboardPanel(Gtk.Box):
             ".custom-dialog row:last-child, .custom-dialog listrow:last-child, .custom-dialog .sort-row:last-child { border-bottom: none; }"
             ".custom-dialog row:hover, .custom-dialog listrow:hover, .custom-dialog .sort-row:hover { background-color: %(hover_bg)s; }"
             ".custom-dialog row:selected, .custom-dialog listrow:selected, .custom-dialog .sort-row:selected { background-color: %(sel_bg)s; color: %(text_fg)s; }"
+            ".dynamic-copy-tag { color: #2ecc71; font-size: 12px; font-weight: bold; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self, self._cat_list, self._content_scrolled, self._content_list):
@@ -517,11 +518,14 @@ class ClipboardPanel(Gtk.Box):
         row.add(hbox)
 
     def _build_prompt_row(self, row, item: CategoryItem):
+        hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
+        hbox.set_margin_start(16)
+        hbox.set_margin_end(16)
+        hbox.set_margin_top(10)
+        hbox.set_margin_bottom(10)
+
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
-        vbox.set_margin_start(16)
-        vbox.set_margin_end(16)
-        vbox.set_margin_top(10)
-        vbox.set_margin_bottom(10)
+        vbox.set_hexpand(True)
 
         title_label = Gtk.Label.new()
         title_label.set_name("promptTitle")
@@ -541,7 +545,18 @@ class ClipboardPanel(Gtk.Box):
         text_label.override_color(Gtk.StateFlags.NORMAL, self._snippet_color)
         vbox.pack_start(text_label, False, False, 0)
 
-        row.add(vbox)
+        hbox.pack_start(vbox, True, True, 0)
+
+        import re
+        has_placeholders = len(re.findall(r"\$\{(\d+)\}", item.text)) > 0
+        if has_placeholders:
+            tag_label = Gtk.Label.new("Dynamic Copy")
+            tag_label.get_style_context().add_class("dynamic-copy-tag")
+            tag_label.set_halign(Gtk.Align.END)
+            tag_label.set_valign(Gtk.Align.CENTER)
+            hbox.pack_start(tag_label, False, False, 0)
+
+        row.add(hbox)
 
     def _update_actions(self):
         for child in self._action_box.get_children():
