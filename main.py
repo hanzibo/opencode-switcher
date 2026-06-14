@@ -158,8 +158,21 @@ class App:
         Gtk.main_quit()
 
     def _on_panel_opened(self):
-        sessions = get_sessions()
-        self._panel.load_sessions(sessions)
+        self._session_load_seq = getattr(self, "_session_load_seq", 0) + 1
+        seq = self._session_load_seq
+
+        def _bg_load(seq_val):
+            try:
+                sessions = get_sessions()
+                def _apply():
+                    if seq_val == self._session_load_seq:
+                        self._panel.load_sessions(sessions)
+                    return False
+                GLib.idle_add(_apply)
+            except Exception as e:
+                print(f"Error loading sessions in background: {e}", flush=True)
+
+        threading.Thread(target=_bg_load, args=(seq,), daemon=True).start()
 
     def _on_session_selected(self, session):
         try:

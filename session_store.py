@@ -2,6 +2,7 @@ import sqlite3
 import json
 import os
 import time
+import subprocess
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
 
@@ -26,33 +27,44 @@ def _detect_live_sessions() -> Tuple[set, set]:
     live_dirs: set = set()
     live_session_ids: set = set()
     try:
-        for entry in os.listdir("/proc"):
-            if not entry.isdigit():
-                continue
-            pid = entry
+        out = subprocess.check_output(["pgrep", "-f", "opencode"], stderr=subprocess.DEVNULL)
+        pids = out.decode("utf-8", errors="ignore").strip().split()
+    except subprocess.CalledProcessError as e:
+        if e.returncode == 1:
+            pids = []
+        else:
             try:
-                cmdline_path = f"/proc/{pid}/cmdline"
-                if not os.path.isfile(cmdline_path):
-                    continue
-                with open(cmdline_path, "rb") as f:
-                    raw = f.read(4096)
-                if b"opencode" not in raw:
-                    continue
-                if b"python3" in raw and b"opencode-switcher" in raw:
-                    continue
-                cwd = os.readlink(f"/proc/{pid}/cwd")
-                if cwd:
-                    live_dirs.add(cwd)
-                parts = raw.split(b"\0")
-                for i, part in enumerate(parts):
-                    if part == b"--session" and i + 1 < len(parts):
-                        sid = parts[i + 1].decode("utf-8", errors="replace").strip()
-                        if sid:
-                            live_session_ids.add(sid)
-            except (OSError, IOError):
+                pids = [entry for entry in os.listdir("/proc") if entry.isdigit()]
+            except Exception:
+                pids = []
+    except Exception:
+        try:
+            pids = [entry for entry in os.listdir("/proc") if entry.isdigit()]
+        except Exception:
+            pids = []
+
+    for pid in pids:
+        try:
+            cmdline_path = f"/proc/{pid}/cmdline"
+            if not os.path.isfile(cmdline_path):
                 continue
-    except FileNotFoundError:
-        pass
+            with open(cmdline_path, "rb") as f:
+                raw = f.read(4096)
+            if b"opencode" not in raw:
+                continue
+            if b"python3" in raw and b"opencode-switcher" in raw:
+                continue
+            cwd = os.readlink(f"/proc/{pid}/cwd")
+            if cwd:
+                live_dirs.add(cwd)
+            parts = raw.split(b"\0")
+            for i, part in enumerate(parts):
+                if part == b"--session" and i + 1 < len(parts):
+                    sid = parts[i + 1].decode("utf-8", errors="replace").strip()
+                    if sid:
+                        live_session_ids.add(sid)
+        except (OSError, IOError):
+            continue
     return live_dirs, live_session_ids
 
 

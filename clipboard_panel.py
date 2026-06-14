@@ -145,6 +145,7 @@ class ClipboardPanel(Gtk.Box):
         self._content_list = Gtk.ListBox.new()
         self._content_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self._content_list.set_activate_on_single_click(False)
+        self._content_list.set_filter_func(self._list_filter_func, None)
         self._content_list.connect("row-activated", self._on_content_activated)
         self._content_list.connect("button-press-event", self._on_content_button)
         self._content_list.connect("key-press-event", self._on_content_key)
@@ -393,7 +394,8 @@ class ClipboardPanel(Gtk.Box):
 
     def set_filter(self, query: str):
         self._filter_query = query.strip().lower()
-        self._rebuild()
+        self._content_list.invalidate_filter()
+        GLib.idle_add(self._select_first_visible_row)
 
     def reset_filter(self):
         """Public API: Clear filter query without triggering rebuild."""
@@ -423,32 +425,13 @@ class ClipboardPanel(Gtk.Box):
 
         if self._active_category_id == "__clipboard__":
             items = self._clip_items
-            if self._filter_query:
-                items = [i for i in items if self._filter_query in i.text.lower()]
         else:
             cat = self._cat_store.get(self._active_category_id)
             items = cat.items if cat else []
-            if self._filter_query:
-                items = [i for i in items
-                         if self._filter_query in i.title.lower()
-                         or self._filter_query in i.text.lower()]
 
         self._update_actions()
 
-        if not items:
-            row = Gtk.ListBoxRow.new()
-            row.set_sensitive(False)
-            lbl = Gtk.Label.new("No items")
-            lbl.set_name("clipText")
-            lbl.set_halign(Gtk.Align.CENTER)
-            lbl.set_margin_top(30)
-            lbl.set_margin_bottom(30)
-            lbl.override_color(Gtk.StateFlags.NORMAL, self._snippet_color)
-            row.add(lbl)
-            self._content_list.add(row)
-            self._content_list.show_all()
-            return
-
+        # 1. Build regular item rows
         for idx, item in enumerate(items):
             row = Gtk.ListBoxRow.new()
             row.get_style_context().add_class("row")
@@ -462,9 +445,66 @@ class ClipboardPanel(Gtk.Box):
 
             self._content_list.add(row)
 
+        # 2. Build the "No items" placeholder row
+        placeholder_row = Gtk.ListBoxRow.new()
+        placeholder_row.set_sensitive(False)
+        placeholder_row.is_placeholder = True
+
+        lbl = Gtk.Label.new("No items")
+        lbl.set_name("clipText")
+        lbl.set_halign(Gtk.Align.CENTER)
+        lbl.set_margin_top(30)
+        lbl.set_margin_bottom(30)
+        lbl.override_color(Gtk.StateFlags.NORMAL, self._snippet_color)
+        placeholder_row.add(lbl)
+        self._content_list.add(placeholder_row)
+
         self._content_list.show_all()
-        if self._content_list.get_children():
-            self._content_list.select_row(self._content_list.get_row_at_index(0))
+        self._content_list.invalidate_filter()
+        GLib.idle_add(self._select_first_visible_row)
+
+    def _list_filter_func(self, row, user_data):
+        if getattr(row, "is_placeholder", False):
+            if self._active_category_id == "__clipboard__":
+                items = self._clip_items
+                if not items:
+                    return True
+                if not self._filter_query:
+                    return False
+                any_match = any(self._filter_query in i.text.lower() for i in items)
+                return not any_match
+            else:
+                cat = self._cat_store.get(self._active_category_id)
+                items = cat.items if cat else []
+                if not items:
+                    return True
+                if not self._filter_query:
+                    return False
+                any_match = any(self._filter_query in i.title.lower() or self._filter_query in i.text.lower() for i in items)
+                return not any_match
+
+        if not self._filter_query:
+            return True
+
+        item = getattr(row, "store_item", None)
+        if not item:
+            return True
+
+        if self._active_category_id == "__clipboard__":
+            return self._filter_query in item.text.lower()
+        else:
+            return self._filter_query in item.title.lower() or self._filter_query in item.text.lower()
+
+    def _select_first_visible_row(self):
+        first_visible = None
+        for row in self._content_list.get_children():
+            if row.is_visible() and getattr(row, "store_item", None) is not None:
+                first_visible = row
+                break
+        if first_visible:
+            self._content_list.select_row(first_visible)
+        else:
+            self._content_list.select_row(None)
 
     def _build_clip_row(self, row, item: ClipboardItem):
         hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
@@ -1257,14 +1297,21 @@ class ClipboardPanel(Gtk.Box):
         return self._content_list.get_row_at_y(int(y))
 
     def _move_selection(self, direction: int):
-        rows = self._content_list.get_children()
+        visible_rows = [
+            r for r in self._content_list.get_children()
+            if r.is_visible() and getattr(r, "store_item", None) is not None
+        ]
+        if not visible_rows:
+            return
+
         sel = self._content_list.get_selected_row()
-        if sel is None or sel not in rows:
-            idx = 0 if direction > 0 else len(rows) - 1
+        if sel is None or sel not in visible_rows:
+            idx = 0 if direction > 0 else len(visible_rows) - 1
         else:
-            idx = list(rows).index(sel)
-            idx = max(0, min(len(rows) - 1, idx + direction))
-        target = rows[idx]
+            idx = visible_rows.index(sel)
+            idx = max(0, min(len(visible_rows) - 1, idx + direction))
+
+        target = visible_rows[idx]
         self._content_list.select_row(target)
         target.grab_focus()
 
