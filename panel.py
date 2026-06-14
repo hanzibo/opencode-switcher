@@ -12,7 +12,7 @@ from clipboard_panel import ClipboardPanel
 import difflib
 import os
 import time
-from utils import relative_time, is_wayland
+from utils import relative_time, is_wayland, request_window_focus
 
 
 def _get_active_monitor_geometry():
@@ -916,23 +916,13 @@ class SearchPanel:
         if self.on_select:
             self.on_select(session)
 
-    def _request_window_focus(self, wm_class: str):
-        """向 GNOME 扩展发送窗口聚焦请求"""
-        try:
-            cache_dir = os.path.expanduser("~/.cache/opencode-switcher")
-            os.makedirs(cache_dir, exist_ok=True)
-            with open(os.path.join(cache_dir, "focus.request"), "w") as f:
-                f.write(wm_class)
-        except Exception as e:
-            print(f"Failed to write focus request: {e}", flush=True)
-
     def _handle_google_command(self, prompt_text: str):
         import urllib.parse
         encoded = urllib.parse.quote(prompt_text)
         url = f"https://www.google.com/search?udm=50&q={encoded}"
         try:
             Gtk.show_uri_on_window(self._window, url, Gdk.CURRENT_TIME)
-            self._request_window_focus("firefox")
+            request_window_focus("firefox")
         except Exception as e:
             print(f"Error launching Google AI search: {e}", flush=True)
         GLib.idle_add(self.hide)
@@ -959,7 +949,7 @@ class SearchPanel:
         # 3. Launch Gemini URL via Gtk.show_uri_on_window (handles focus transfer)
         try:
             Gtk.show_uri_on_window(self._window, "https://gemini.google.com/app", Gdk.CURRENT_TIME)
-            self._request_window_focus("firefox")
+            request_window_focus("firefox")
         except Exception as e:
             print(f"Error launching Gemini: {e}", flush=True)
             self.hide()
@@ -975,7 +965,7 @@ class SearchPanel:
             time.sleep(delay)
 
             # Request focus again right before injecting keys to be absolutely sure
-            self._request_window_focus("firefox")
+            request_window_focus("firefox")
             time.sleep(0.1)
 
 

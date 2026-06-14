@@ -31,3 +31,15 @@ def relative_time(ts_ms: int) -> str:
         return f"{int(days)}d ago"
     weeks = days / 7
     return f"{int(weeks)}w ago"
+
+
+def request_window_focus(wm_class: str):
+    """向 GNOME 扩展发送窗口聚焦请求"""
+    try:
+        cache_dir = os.path.expanduser("~/.cache/opencode-switcher")
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(os.path.join(cache_dir, "focus.request"), "w") as f:
+            f.write(wm_class)
+    except Exception as e:
+        print(f"Failed to write focus request: {e}", flush=True)
+

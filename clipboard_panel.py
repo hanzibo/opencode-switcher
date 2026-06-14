@@ -9,7 +9,7 @@ from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf
 from typing import Optional, Callable, List
 from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once
 import time
-from utils import relative_time, is_wayland
+from utils import relative_time, is_wayland, request_window_focus
 
 
 CATEGORY_WIDTH = 200
@@ -914,6 +914,14 @@ class ClipboardPanel(Gtk.Box):
             del_item = Gtk.MenuItem.new_with_label("Delete")
             del_item.connect("activate", lambda *_: self._delete_item(item))
             menu.append(del_item)
+
+            sep = Gtk.SeparatorMenuItem.new()
+            menu.append(sep)
+
+            ask_google_item = Gtk.MenuItem.new_with_label("Ask Google")
+            ask_google_item.set_sensitive(getattr(item, "type", "text") == "text")
+            ask_google_item.connect("activate", lambda *_: self._ask_google(item))
+            menu.append(ask_google_item)
         else:
             copy_item = Gtk.MenuItem.new_with_label("Copy")
             copy_item.connect("activate", lambda *_: self._activate_item(item))
@@ -943,6 +951,56 @@ class ClipboardPanel(Gtk.Box):
         if self.on_menu_hidden:
             self.on_menu_hidden()
         return False
+
+    def _ask_google(self, item: ClipboardItem):
+        original_content = item.text.rstrip()
+        suffix = " 以上内容是什么意思，如果是代码，请分析并注释。 "
+        final_query = original_content + suffix
+
+        if len(final_query) > 2000:
+            max_len = 2000 - len(suffix)
+            truncated_original = original_content[:max_len]
+            final_query = truncated_original + suffix
+
+            dialog = Gtk.MessageDialog(
+                transient_for=self.get_toplevel(),
+                modal=True,
+                message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.OK,
+                text="查询内容过长",
+            )
+            dialog.format_secondary_text("选中的剪切板内容过长，已自动截断至 2000 个字符进行 Google 搜索。")
+
+            def _on_response(dlg, resp):
+                dlg.destroy()
+                if self.on_dialog_hidden:
+                    self.on_dialog_hidden()
+                self._open_google_search(final_query)
+                if self.on_hide_request:
+                    self.on_hide_request()
+
+            dialog.connect("response", _on_response)
+            if self.on_dialog_shown:
+                self.on_dialog_shown()
+            dialog.show_all()
+        else:
+            self._open_google_search(final_query)
+            if self.on_hide_request:
+                self.on_hide_request()
+
+    def _open_google_search(self, query: str):
+        import urllib.parse
+        encoded = urllib.parse.quote(query)
+        url = f"https://www.google.com/search?udm=50&q={encoded}"
+        try:
+            subprocess.Popen(["firefox", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            request_window_focus("firefox")
+        except Exception:
+            try:
+                Gtk.show_uri_on_window(self.get_toplevel(), url, Gdk.CURRENT_TIME)
+                request_window_focus("firefox")
+            except Exception as e:
+                print(f"Error launching Google search: {e}", flush=True)
 
     def _on_content_key(self, _widget, event):
         keyname = Gdk.keyval_name(event.keyval)
