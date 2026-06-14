@@ -15,6 +15,8 @@ CLIPBOARD_PATH = os.path.join(CONFIG_DIR, "clipboard_history.json")
 PROMPTS_PATH = os.path.join(CONFIG_DIR, "prompts.json")
 MAX_CLIPBOARD = 150
 CATEGORIES_PATH = os.path.join(CONFIG_DIR, "categories.json")
+CUSTOM_PROMPTS_PATH = os.path.join(CONFIG_DIR, "custom_prompts.json")
+
 
 
 def _content_hash(text: str) -> str:
@@ -478,3 +480,63 @@ def capture_clipboard_once(store: ClipboardStore):
         pass
     except Exception:
         pass
+
+
+@dataclass
+class CustomPrompt:
+    id: str
+    name: str
+    prompt: str
+
+
+class CustomPromptsStore:
+    def __init__(self):
+        self._prompts: List[CustomPrompt] = []
+        self._load()
+
+    def _load(self):
+        if not os.path.isfile(CUSTOM_PROMPTS_PATH):
+            self._prompts = [
+                CustomPrompt(
+                    id=str(uuid4()),
+                    name="Ask Google",
+                    prompt="以上内容是什么意思，如果是代码，请分析并注释。"
+                )
+            ]
+            self._save()
+            return
+        try:
+            with open(CUSTOM_PROMPTS_PATH) as f:
+                data = json.load(f)
+            self._prompts = [CustomPrompt(**p) for p in data]
+            if not self._prompts:
+                self._prompts = [
+                    CustomPrompt(
+                        id=str(uuid4()),
+                        name="Ask Google",
+                        prompt="以上内容是什么意思，如果是代码，请分析并注释。"
+                    )
+                ]
+                self._save()
+        except (json.JSONDecodeError, TypeError, KeyError):
+            self._prompts = [
+                CustomPrompt(
+                    id=str(uuid4()),
+                    name="Ask Google",
+                    prompt="以上内容是什么意思，如果是代码，请分析并注释。"
+                )
+            ]
+            self._save()
+
+    def _save(self):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(CUSTOM_PROMPTS_PATH, "w") as f:
+            json.dump([asdict(p) for p in self._prompts], f, indent=2)
+
+    def get_all(self) -> List[CustomPrompt]:
+        return deepcopy(self._prompts)
+
+    def save_all(self, prompts: List[CustomPrompt]):
+        self._prompts = deepcopy(prompts)
+        self._save()
+

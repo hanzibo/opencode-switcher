@@ -7,7 +7,8 @@ gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf
 from typing import Optional, Callable, List
-from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once
+from uuid import uuid4
+from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore
 import time
 from utils import relative_time, is_wayland, request_window_focus
 
@@ -56,6 +57,7 @@ class ClipboardPanel(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self._clip_store = clip_store
         self._cat_store = cat_store
+        self._custom_prompts_store = CustomPromptsStore()
         self._active_category_id = "__clipboard__"
         self._clip_items: List[ClipboardItem] = []
         self._selected_index = 0
@@ -162,6 +164,8 @@ class ClipboardPanel(Gtk.Box):
         self._btn_delete.connect("clicked", self._on_delete_clicked)
         self._btn_delete_all = Gtk.Button.new_with_label("Delete All")
         self._btn_delete_all.connect("clicked", self._on_delete_all_clicked)
+        self._btn_prompts_config = Gtk.Button.new_with_label("Prompts Config")
+        self._btn_prompts_config.connect("clicked", self._on_prompts_config_clicked)
         self._btn_create = Gtk.Button.new_with_label("Create")
         self._btn_create.connect("clicked", self._on_create_clicked)
         self._btn_edit = Gtk.Button.new_with_label("Edit")
@@ -566,6 +570,7 @@ class ClipboardPanel(Gtk.Box):
         if self._active_category_id == "__clipboard__":
             self._action_box.pack_start(self._btn_delete, False, False, 0)
             self._action_box.pack_start(self._btn_delete_all, False, False, 0)
+            self._action_box.pack_start(self._btn_prompts_config, False, False, 0)
         else:
             self._action_box.pack_start(self._btn_create, False, False, 0)
             self._action_box.pack_start(self._btn_edit, False, False, 0)
@@ -915,13 +920,16 @@ class ClipboardPanel(Gtk.Box):
             del_item.connect("activate", lambda *_: self._delete_item(item))
             menu.append(del_item)
 
-            sep = Gtk.SeparatorMenuItem.new()
-            menu.append(sep)
+            custom_prompts = self._custom_prompts_store.get_all()
+            if custom_prompts:
+                sep = Gtk.SeparatorMenuItem.new()
+                menu.append(sep)
 
-            ask_google_item = Gtk.MenuItem.new_with_label("Ask Google")
-            ask_google_item.set_sensitive(getattr(item, "type", "text") == "text")
-            ask_google_item.connect("activate", lambda *_: self._ask_google(item))
-            menu.append(ask_google_item)
+                for p in custom_prompts:
+                    prompt_item = Gtk.MenuItem.new_with_label(p.name)
+                    prompt_item.set_sensitive(getattr(item, "type", "text") == "text")
+                    prompt_item.connect("activate", lambda *_, p_obj=p: self._ask_custom_prompt(item, p_obj))
+                    menu.append(prompt_item)
         else:
             copy_item = Gtk.MenuItem.new_with_label("Copy")
             copy_item.connect("activate", lambda *_: self._activate_item(item))
@@ -952,9 +960,13 @@ class ClipboardPanel(Gtk.Box):
             self.on_menu_hidden()
         return False
 
-    def _ask_google(self, item: ClipboardItem):
+    def _ask_custom_prompt(self, item: ClipboardItem, prompt_obj: CustomPrompt):
         original_content = item.text.rstrip()
-        suffix = " 以上内容是什么意思，如果是代码，请分析并注释。 "
+        custom_prompt = prompt_obj.prompt.strip()
+        if custom_prompt:
+            suffix = " " + custom_prompt
+        else:
+            suffix = ""
         final_query = original_content + suffix
 
         if len(final_query) > 2000:
@@ -1001,6 +1013,232 @@ class ClipboardPanel(Gtk.Box):
                 request_window_focus("firefox")
             except Exception as e:
                 print(f"Error launching Google search: {e}", flush=True)
+
+    def _on_prompts_config_clicked(self, _btn):
+        self._show_prompts_config_dialog()
+
+    def _show_prompts_config_dialog(self):
+        prompts = self._custom_prompts_store.get_all()
+        self._dialog_active_idx = 0 if prompts else -1
+        tab_buttons = {}
+
+        dialog = Gtk.Window.new(Gtk.WindowType.TOPLEVEL)
+        dialog.get_style_context().add_class("custom-dialog")
+        dialog.set_title("Prompts Config")
+        dialog.set_modal(True)
+        dialog.set_default_size(600, 450)
+        dialog.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
+        dialog.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        dialog.set_resizable(True)
+        dialog.set_transient_for(self.get_toplevel())
+
+        vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        dialog.add(vbox)
+
+        title_label = Gtk.Label.new("Prompts Config")
+        title_label.set_xalign(0)
+        title_label.set_margin_start(12)
+        title_label.set_margin_top(8)
+        title_label.set_margin_bottom(8)
+        vbox.pack_start(title_label, False, False, 0)
+
+        sep1 = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        vbox.pack_start(sep1, False, False, 0)
+
+        # Tab bar (scrolled box)
+        top_bar = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+        top_bar.set_margin_start(12)
+        top_bar.set_margin_end(12)
+        top_bar.set_margin_top(8)
+        top_bar.set_margin_bottom(8)
+
+        tab_scrolled = Gtk.ScrolledWindow.new()
+        tab_scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        tab_scrolled.set_hexpand(True)
+
+        tab_bar_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+        tab_scrolled.add(tab_bar_box)
+        top_bar.pack_start(tab_scrolled, True, True, 0)
+
+        add_btn = Gtk.Button.new_with_label("➕")
+        add_btn.set_tooltip_text("Add new prompt")
+        top_bar.pack_start(add_btn, False, False, 0)
+        vbox.pack_start(top_bar, False, False, 0)
+
+        # Content edit area
+        mid_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 6)
+        mid_vbox.set_margin_start(12)
+        mid_vbox.set_margin_end(12)
+        mid_vbox.set_margin_top(8)
+        mid_vbox.set_margin_bottom(8)
+
+        name_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        name_label = Gtk.Label.new("菜单显示名称:")
+        name_label.set_xalign(0)
+        name_entry = Gtk.Entry.new()
+        name_entry.set_hexpand(True)
+        name_hbox.pack_start(name_label, False, False, 0)
+        name_hbox.pack_start(name_entry, True, True, 0)
+        mid_vbox.pack_start(name_hbox, False, False, 0)
+
+        prompt_label = Gtk.Label.new("追加提示词:")
+        prompt_label.set_xalign(0)
+        mid_vbox.pack_start(prompt_label, False, False, 0)
+
+        prompt_scrolled = Gtk.ScrolledWindow.new()
+        prompt_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        prompt_scrolled.set_vexpand(True)
+
+        prompt_textview = Gtk.TextView.new()
+        prompt_textview.set_wrap_mode(Gtk.WrapMode.WORD)
+        prompt_scrolled.add(prompt_textview)
+        mid_vbox.pack_start(prompt_scrolled, True, True, 0)
+        vbox.pack_start(mid_vbox, True, True, 0)
+
+        # Bottom buttons
+        bottom_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        bottom_box.set_margin_top(8)
+        bottom_box.set_margin_bottom(8)
+        bottom_box.set_margin_start(12)
+        bottom_box.set_margin_end(12)
+
+        delete_btn = Gtk.Button.new_with_label("🗑️ Delete")
+        cancel_btn = Gtk.Button.new_with_label("Cancel")
+        confirm_btn = Gtk.Button.new_with_label("Confirm")
+        confirm_btn.get_style_context().add_class("suggested-action")
+
+        bottom_box.pack_start(delete_btn, False, False, 0)
+        bottom_box.pack_end(confirm_btn, False, False, 0)
+        bottom_box.pack_end(cancel_btn, False, False, 0)
+        vbox.pack_start(bottom_box, False, False, 0)
+
+        sep2 = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        vbox.pack_start(sep2, False, False, 0)
+        vbox.reorder_child(bottom_box, -1)
+
+        def save_current_active_prompt():
+            if 0 <= self._dialog_active_idx < len(prompts):
+                name = name_entry.get_text().strip()
+                prompts[self._dialog_active_idx].name = name if name else "New Prompt"
+
+                buffer = prompt_textview.get_buffer()
+                start, end = buffer.get_bounds()
+                prompt_text = buffer.get_text(start, end, True)
+                prompts[self._dialog_active_idx].prompt = prompt_text
+
+        def load_prompt_to_fields(idx):
+            if 0 <= idx < len(prompts):
+                # Temporarily block the name_entry changed handler to prevent self-triggering cycle
+                name_entry.handler_block(changed_handler_id)
+                name_entry.set_text(prompts[idx].name)
+                name_entry.handler_unblock(changed_handler_id)
+
+                prompt_textview.get_buffer().set_text(prompts[idx].prompt)
+                name_entry.set_sensitive(True)
+                prompt_textview.set_sensitive(True)
+                delete_btn.set_sensitive(True)
+            else:
+                name_entry.handler_block(changed_handler_id)
+                name_entry.set_text("")
+                name_entry.handler_unblock(changed_handler_id)
+
+                prompt_textview.get_buffer().set_text("")
+                name_entry.set_sensitive(False)
+                prompt_textview.set_sensitive(False)
+                delete_btn.set_sensitive(False)
+
+        def rebuild_tabs():
+            for child in tab_bar_box.get_children():
+                tab_bar_box.remove(child)
+            tab_buttons.clear()
+
+            for idx, p in enumerate(prompts):
+                btn = Gtk.Button.new_with_label(p.name)
+                btn.idx = idx
+                if idx == self._dialog_active_idx:
+                    btn.get_style_context().add_class("suggested-action")
+
+                def on_tab_clicked(b):
+                    save_current_active_prompt()
+                    self._dialog_active_idx = b.idx
+                    rebuild_tabs()
+                    load_prompt_to_fields(b.idx)
+
+                btn.connect("clicked", on_tab_clicked)
+                tab_bar_box.pack_start(btn, False, False, 0)
+                tab_buttons[idx] = btn
+            tab_bar_box.show_all()
+
+        def on_add_clicked(_btn):
+            save_current_active_prompt()
+            new_p = CustomPrompt(
+                id=str(uuid4()),
+                name="New Prompt",
+                prompt=""
+            )
+            prompts.append(new_p)
+            self._dialog_active_idx = len(prompts) - 1
+            rebuild_tabs()
+            load_prompt_to_fields(self._dialog_active_idx)
+            name_entry.grab_focus()
+
+        def on_delete_clicked(_btn):
+            if not (0 <= self._dialog_active_idx < len(prompts)):
+                return
+
+            confirm = Gtk.MessageDialog(
+                transient_for=dialog,
+                modal=True,
+                message_type=Gtk.MessageType.QUESTION,
+                buttons=Gtk.ButtonsType.YES_NO,
+                text="确定要删除该提示词配置吗？",
+            )
+
+            def on_confirm_resp(dlg, resp):
+                dlg.destroy()
+                if resp == Gtk.ResponseType.YES:
+                    prompts.pop(self._dialog_active_idx)
+                    if not prompts:
+                        self._dialog_active_idx = -1
+                    else:
+                        self._dialog_active_idx = max(0, self._dialog_active_idx - 1)
+                    rebuild_tabs()
+                    load_prompt_to_fields(self._dialog_active_idx)
+
+            confirm.connect("response", on_confirm_resp)
+            confirm.show_all()
+
+        def on_confirm_clicked(_btn):
+            save_current_active_prompt()
+            for p in prompts:
+                if not p.name.strip():
+                    p.name = "New Prompt"
+            self._custom_prompts_store.save_all(prompts)
+            dialog.destroy()
+
+        def on_name_changed(entry):
+            idx = self._dialog_active_idx
+            if 0 <= idx < len(prompts):
+                new_text = entry.get_text().strip()
+                display_name = new_text if new_text else "New Prompt"
+                prompts[idx].name = display_name
+                if idx in tab_buttons:
+                    tab_buttons[idx].set_label(display_name)
+
+        changed_handler_id = name_entry.connect("changed", on_name_changed)
+
+        add_btn.connect("clicked", on_add_clicked)
+        delete_btn.connect("clicked", on_delete_clicked)
+        cancel_btn.connect("clicked", lambda _: dialog.destroy())
+        confirm_btn.connect("clicked", on_confirm_clicked)
+
+        rebuild_tabs()
+        load_prompt_to_fields(self._dialog_active_idx)
+
+        dialog.connect("show", lambda *_: self.on_dialog_shown and self.on_dialog_shown())
+        dialog.connect("destroy", lambda *_: self.on_dialog_hidden and self.on_dialog_hidden())
+
+        dialog.show_all()
 
     def _on_content_key(self, _widget, event):
         keyname = Gdk.keyval_name(event.keyval)
