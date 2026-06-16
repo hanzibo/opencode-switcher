@@ -593,7 +593,7 @@ class ClipboardPanel(Gtk.Box):
         hbox.pack_start(vbox, True, True, 0)
 
         import re
-        has_placeholders = len(re.findall(r"\$\{(\d+)\}", item.text)) > 0
+        has_placeholders = len(re.findall(r"\$\{(\d+)(?:[:=][^}]+)?\}", item.text)) > 0
         if has_placeholders:
             tag_label = Gtk.Label.new("Dynamic Copy")
             tag_label.get_style_context().add_class("dynamic-copy-tag")
@@ -977,7 +977,7 @@ class ClipboardPanel(Gtk.Box):
 
             import re
             dynamic_copy_item = Gtk.MenuItem.new_with_label("Dynamic Copy")
-            has_placeholders = len(re.findall(r"\$\{(\d+)\}", item.text)) > 0
+            has_placeholders = len(re.findall(r"\$\{(\d+)(?:[:=][^}]+)?\}", item.text)) > 0
             dynamic_copy_item.set_sensitive(has_placeholders)
             dynamic_copy_item.connect("activate", lambda *_: self._show_dynamic_copy_dialog(item))
             menu.append(dynamic_copy_item)
@@ -2330,8 +2330,22 @@ class ClipboardPanel(Gtk.Box):
 
     def _show_dynamic_copy_dialog(self, item):
         import re
+        from gi.repository import Gtk, Gdk, Pango, PangoCairo
 
-        matches = re.findall(r"\$\{(\d+)\}", item.text)
+        placeholders = {}
+        defaults = {}
+        for match in re.finditer(r"\$\{(\d+)(?:([:=])([^}]+))?\}", item.text):
+            num = int(match.group(1))
+            op = match.group(2)
+            val = match.group(3)
+            if op == ":":
+                if num not in placeholders:
+                    placeholders[num] = val
+            elif op == "=":
+                if num not in defaults:
+                    defaults[num] = val
+
+        matches = re.findall(r"\$\{(\d+)(?:[:=][^}]+)?\}", item.text)
         if not matches:
             return
 
@@ -2420,8 +2434,11 @@ class ClipboardPanel(Gtk.Box):
                     end_iter = buf.get_end_iter()
                     val = buf.get_text(start_iter, end_iter, True)
                     if not val:
-                        val = f"${{{num}}}"
-                    text = text.replace(f"${{{num}}}", val)
+                        replacement = f"${{{num}}}"
+                    else:
+                        replacement = val
+                    pattern = r"\$\{" + str(num) + r"(?:[:=][^}]+)?\}"
+                    text = re.sub(pattern, lambda m: replacement, text)
                 preview_buffer.set_text(text)
             finally:
                 is_updating_preview = False
@@ -2459,6 +2476,28 @@ class ClipboardPanel(Gtk.Box):
 
             return False
 
+        def on_textview_draw(widget, cr):
+            buf = widget.get_buffer()
+            if buf.get_char_count() == 0:
+                placeholder = getattr(widget, "placeholder_text", "")
+                if placeholder:
+                    cr.save()
+                    left = widget.get_left_margin()
+                    top = widget.get_top_margin()
+                    cr.translate(left, top)
+                    
+                    layout = widget.create_pango_layout(placeholder)
+                    context = widget.get_style_context()
+                    font_desc = context.get_property("font", Gtk.StateFlags.NORMAL)
+                    layout.set_font_description(font_desc)
+                    
+                    color = context.get_color(Gtk.StateFlags.NORMAL)
+                    cr.set_source_rgba(color.red, color.green, color.blue, 0.45)
+                    
+                    PangoCairo.show_layout(cr, layout)
+                    cr.restore()
+            return False
+
         for num in nums:
             scr_in = Gtk.ScrolledWindow.new()
             scr_in.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -2482,7 +2521,25 @@ class ClipboardPanel(Gtk.Box):
             input_buffers[num] = buf_in
             input_textviews[num] = tv_in
 
+            # Set placeholder if defined
+            if num in placeholders:
+                tv_in.placeholder_text = placeholders[num]
+                tv_in.connect("draw", on_textview_draw)
+
+            # Set default text if defined
+            if num in defaults:
+                buf_in.set_text(defaults[num])
+
+            # Select all text on focus
+            def on_focus_in(widget, event):
+                buf = widget.get_buffer()
+                start, end = buf.get_bounds()
+                buf.select_range(start, end)
+                return False
+            tv_in.connect("focus-in-event", on_focus_in)
+
             buf_in.connect("changed", lambda *_: update_preview())
+            buf_in.connect("changed", lambda w, tv=tv_in: tv.queue_draw())
             tv_in.connect("key-press-event", on_key_press, num)
 
         def on_preview_key_press(widget, event):
