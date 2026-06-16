@@ -1366,6 +1366,7 @@ class ClipboardPanel(Gtk.Box):
             text = item.text
         elif isinstance(item, CategoryItem):
             text = item.text
+            text = self._process_template_text(text)
         else:
             return
         _copy_to_clipboard(text)
@@ -1373,6 +1374,18 @@ class ClipboardPanel(Gtk.Box):
             self.on_copy_clipboard(text, item.hash if isinstance(item, ClipboardItem) else None)
         if self.on_hide_request:
             self.on_hide_request()
+
+    def _process_template_text(self, text: str) -> str:
+        import re
+        def repl(match):
+            num = match.group(1)
+            op = match.group(2)
+            val = match.group(3)
+            if op == "=":
+                return val
+            else:
+                return f"${{{num}}}"
+        return re.sub(r"\$\{(\d+)(?:([:=])([^}]+))?\}", repl, text)
 
     def _on_delete_clicked(self, _btn):
         row = self._content_list.get_selected_row()
