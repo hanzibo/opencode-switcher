@@ -2,15 +2,18 @@ import gi
 import subprocess
 import threading
 import os
+import re
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf
+from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo
 from typing import Optional, Callable, List
 from uuid import uuid4
 from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore
 import time
 from utils import relative_time, is_wayland, request_window_focus
+
+TEMPLATE_REGEX = re.compile(r"\$\{(\d+)(?:([:=])([^}]+))?\}")
 
 
 CATEGORY_WIDTH = 200
@@ -592,8 +595,7 @@ class ClipboardPanel(Gtk.Box):
 
         hbox.pack_start(vbox, True, True, 0)
 
-        import re
-        has_placeholders = len(re.findall(r"\$\{(\d+)(?:[:=][^}]+)?\}", item.text)) > 0
+        has_placeholders = len(TEMPLATE_REGEX.findall(item.text)) > 0
         if has_placeholders:
             tag_label = Gtk.Label.new("Dynamic Copy")
             tag_label.get_style_context().add_class("dynamic-copy-tag")
@@ -975,9 +977,8 @@ class ClipboardPanel(Gtk.Box):
             copy_item.connect("activate", lambda *_: self._activate_item(item))
             menu.append(copy_item)
 
-            import re
             dynamic_copy_item = Gtk.MenuItem.new_with_label("Dynamic Copy")
-            has_placeholders = len(re.findall(r"\$\{(\d+)(?:[:=][^}]+)?\}", item.text)) > 0
+            has_placeholders = len(TEMPLATE_REGEX.findall(item.text)) > 0
             dynamic_copy_item.set_sensitive(has_placeholders)
             dynamic_copy_item.connect("activate", lambda *_: self._show_dynamic_copy_dialog(item))
             menu.append(dynamic_copy_item)
@@ -1376,16 +1377,17 @@ class ClipboardPanel(Gtk.Box):
             self.on_hide_request()
 
     def _process_template_text(self, text: str) -> str:
-        import re
+        """Process custom templates during direct copy.
+
+        Replaces placeholders containing default values (e.g., ${1=default}) with their
+        actual defaults, and normalizes placeholder prompts (e.g., ${1:prompt}) to ${1}.
+        """
         def repl(match):
             num = match.group(1)
             op = match.group(2)
             val = match.group(3)
-            if op == "=":
-                return val
-            else:
-                return f"${{{num}}}"
-        return re.sub(r"\$\{(\d+)(?:([:=])([^}]+))?\}", repl, text)
+            return val if op == "=" else f"${{{num}}}"
+        return TEMPLATE_REGEX.sub(repl, text)
 
     def _on_delete_clicked(self, _btn):
         row = self._content_list.get_selected_row()
@@ -2342,12 +2344,9 @@ class ClipboardPanel(Gtk.Box):
         dialog.show_all()
 
     def _show_dynamic_copy_dialog(self, item):
-        import re
-        from gi.repository import Gtk, Gdk, Pango, PangoCairo
-
         placeholders = {}
         defaults = {}
-        for match in re.finditer(r"\$\{(\d+)(?:([:=])([^}]+))?\}", item.text):
+        for match in TEMPLATE_REGEX.finditer(item.text):
             num = int(match.group(1))
             op = match.group(2)
             val = match.group(3)
@@ -2358,7 +2357,7 @@ class ClipboardPanel(Gtk.Box):
                 if num not in defaults:
                     defaults[num] = val
 
-        matches = re.findall(r"\$\{(\d+)(?:[:=][^}]+)?\}", item.text)
+        matches = [m[0] for m in TEMPLATE_REGEX.findall(item.text)]
         if not matches:
             return
 
