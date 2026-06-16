@@ -1384,14 +1384,14 @@ class ClipboardPanel(Gtk.Box):
         """Process custom templates during direct copy.
 
         Replaces placeholders containing default values (e.g., ${1=default}) with their
-        actual defaults, and normalizes placeholder prompts (e.g., ${1:prompt}) to ${1}.
+        actual defaults (unescaped), and replaces placeholders without default values
+        (e.g., ${1:prompt} or ${1}) with an empty string.
         """
         def repl(match):
-            num = match.group(1)
             default_text = match.group(3)
-            if default_text:
+            if default_text is not None:
                 return self._unescape_template_field(default_text)
-            return f"${{{num}}}"
+            return ""
         return TEMPLATE_REGEX.sub(repl, text)
 
     def _unescape_template_field(self, val: Optional[str]) -> Optional[str]:
