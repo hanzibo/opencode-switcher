@@ -13,6 +13,10 @@ from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCa
 import time
 from utils import relative_time, is_wayland, request_window_focus
 
+# Regex to match placeholders: ${index[:prompt][=default]}
+# - Group 1: index (\d+)
+# - Group 2: optional prompt, allowing escaped colons (\:) and equals (\=)
+# - Group 3: optional default value, matched if the leading '=' is not escaped (?<!\\)
 TEMPLATE_REGEX = re.compile(r"\$\{(\d+)(?::((?:[^}=]|\\:|\\=)+))?(?<!\\)(?:=([^}]*))?\}")
 
 
@@ -1391,6 +1395,7 @@ class ClipboardPanel(Gtk.Box):
         return TEMPLATE_REGEX.sub(repl, text)
 
     def _unescape_template_field(self, val: Optional[str]) -> Optional[str]:
+        r"""Unescape backslash-escaped colons (\:) and equals (\=) inside a template field."""
         if val is None:
             return None
         return val.replace("\\:", ":").replace("\\=", "=")
