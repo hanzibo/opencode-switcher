@@ -13,7 +13,7 @@ from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCa
 import time
 from utils import relative_time, is_wayland, request_window_focus
 
-TEMPLATE_REGEX = re.compile(r"\$\{(\d+)(?::([^}=]+))?(?:=([^}]*))?\}")
+TEMPLATE_REGEX = re.compile(r"\$\{(\d+)(?::((?:[^}=]|\\:|\\=)+))?(?<!\\)(?:=([^}]*))?\}")
 
 
 CATEGORY_WIDTH = 200
@@ -1385,8 +1385,15 @@ class ClipboardPanel(Gtk.Box):
         def repl(match):
             num = match.group(1)
             default_text = match.group(3)
-            return default_text if default_text else f"${{{num}}}"
+            if default_text:
+                return self._unescape_template_field(default_text)
+            return f"${{{num}}}"
         return TEMPLATE_REGEX.sub(repl, text)
+
+    def _unescape_template_field(self, val: Optional[str]) -> Optional[str]:
+        if val is None:
+            return None
+        return val.replace("\\:", ":").replace("\\=", "=")
 
     def _on_delete_clicked(self, _btn):
         row = self._content_list.get_selected_row()
@@ -2351,10 +2358,10 @@ class ClipboardPanel(Gtk.Box):
             default_text = match.group(3)
             if prompt_text:
                 if num not in placeholders:
-                    placeholders[num] = prompt_text
+                    placeholders[num] = self._unescape_template_field(prompt_text)
             if default_text:
                 if num not in defaults:
-                    defaults[num] = default_text
+                    defaults[num] = self._unescape_template_field(default_text)
 
         matches = [m[0] for m in TEMPLATE_REGEX.findall(item.text)]
         if not matches:
