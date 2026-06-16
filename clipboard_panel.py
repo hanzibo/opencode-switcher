@@ -2481,21 +2481,23 @@ class ClipboardPanel(Gtk.Box):
             if buf.get_char_count() == 0:
                 placeholder = getattr(widget, "placeholder_text", "")
                 if placeholder:
-                    cr.save()
-                    left = widget.get_left_margin()
-                    top = widget.get_top_margin()
-                    cr.translate(left, top)
-                    
-                    layout = widget.create_pango_layout(placeholder)
-                    context = widget.get_style_context()
-                    font_desc = context.get_property("font", Gtk.StateFlags.NORMAL)
-                    layout.set_font_description(font_desc)
-                    
-                    color = context.get_color(Gtk.StateFlags.NORMAL)
-                    cr.set_source_rgba(color.red, color.green, color.blue, 0.45)
-                    
-                    PangoCairo.show_layout(cr, layout)
-                    cr.restore()
+                    text_window = widget.get_window(Gtk.TextWindowType.TEXT)
+                    if text_window and Gtk.cairo_should_draw_window(cr, text_window):
+                        cr.save()
+                        left = widget.get_left_margin()
+                        top = widget.get_top_margin()
+                        cr.translate(left, top)
+                        
+                        layout = widget.create_pango_layout(placeholder)
+                        context = widget.get_style_context()
+                        font_desc = context.get_property("font", Gtk.StateFlags.NORMAL)
+                        layout.set_font_description(font_desc)
+                        
+                        color = context.get_color(Gtk.StateFlags.NORMAL)
+                        cr.set_source_rgba(color.red, color.green, color.blue, 0.45)
+                        
+                        PangoCairo.show_layout(cr, layout)
+                        cr.restore()
             return False
 
         for num in nums:
@@ -2524,7 +2526,7 @@ class ClipboardPanel(Gtk.Box):
             # Set placeholder if defined
             if num in placeholders:
                 tv_in.placeholder_text = placeholders[num]
-                tv_in.connect("draw", on_textview_draw)
+                tv_in.connect_after("draw", on_textview_draw)
 
             # Set default text if defined
             if num in defaults:
