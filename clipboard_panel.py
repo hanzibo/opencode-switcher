@@ -2484,8 +2484,9 @@ class ClipboardPanel(Gtk.Box):
                     text_window = widget.get_window(Gtk.TextWindowType.TEXT)
                     if text_window and Gtk.cairo_should_draw_window(cr, text_window):
                         cr.save()
-                        left = widget.get_left_margin()
-                        top = widget.get_top_margin()
+                        start_iter = buf.get_start_iter()
+                        rect = widget.get_iter_location(start_iter)
+                        left, top = widget.buffer_to_window_coords(Gtk.TextWindowType.TEXT, rect.x, rect.y)
                         cr.translate(left, top)
                         
                         layout = widget.create_pango_layout(placeholder)
