@@ -650,7 +650,7 @@ class ClipboardPanel(Gtk.Box):
         if hasattr(item, "type") and item.type == "code":
             lang = getattr(item, "language", None)
             if not lang:
-                lang = self._store.detect_language_name(item.text) if hasattr(self._store, "detect_language_name") else "Code"
+                lang = self._clip_store.detect_language_name(item.text) if hasattr(self._clip_store, "detect_language_name") else "Code"
                 # Cache detected language back on the item so it is saved later
                 try:
                     item.language = lang
