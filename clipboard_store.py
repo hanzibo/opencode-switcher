@@ -95,6 +95,207 @@ class CustomCategory:
     created_at: int = 0
 
 
+def classify_text(text: str) -> str:
+    stripped = text.strip()
+    if not stripped:
+        return "text"
+        
+    if stripped.startswith("http"):
+        return "link"
+        
+    # 1. JSON Check
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, (dict, list)) and len(stripped) > 4:
+            return "code"
+    except Exception:
+        pass
+
+    # 2. HTML/XML Check
+    if HTML_START_RE.match(stripped):
+        return "code"
+    if HTML_END_RE.search(stripped):
+        return "code"
+
+    # 3. Shebang / CLI Check
+    if SHEBANG_RE.match(stripped):
+        return "code"
+    if CLI_CMD_RE.match(stripped):
+        return "code"
+
+    # 3.5 Curly Braces with Newline Check (typical of block-structured code)
+    if CURLY_NEWLINE_RE.search(text):
+        return "code"
+
+    # 4. Code Heuristics Scorer
+    score = 0
+
+    # Python
+    if PY_DEF_RE.search(stripped):
+        score += 5
+    if PY_CLASS_RE.search(stripped):
+        score += 4
+    if "if __name__ ==" in stripped:
+        score += 5
+    if PY_IMPORT_RE.search(stripped):
+        score += 3
+
+    # C/C++
+    if CPP_INCLUDE_RE.search(stripped):
+        score += 5
+    if CPP_DEFINE_RE.search(stripped):
+        score += 3
+    if "std::cout" in stripped or "std::endl" in stripped:
+        score += 4
+    if CPP_USING_RE.search(stripped):
+        score += 5
+
+    # Java/C#/C++
+    if TYPED_DECL_RE.search(stripped):
+        score += 5
+    if "System.out.print" in stripped:
+        score += 4
+
+    # JS/TS/Go/Rust
+    if JS_CONSOLE_RE.search(stripped):
+        score += 4
+    if JS_VAR_RE.search(stripped):
+        score += 3
+    if JS_FUNC_RE.search(stripped):
+        score += 2
+    if JS_FUNCTION_KW_RE.search(stripped):
+        score += 3
+    if LANG_KEYWORDS_RE.search(stripped):
+        score += 2
+
+    # C-style comments
+    if C_COMMENT_RE.search(stripped):
+        score += 3
+
+    # SQL
+    if SQL_SELECT_RE.search(stripped):
+        score += 5
+    if SQL_MOD_RE.search(stripped):
+        score += 5
+
+    # Shell / Bash
+    bash_assignments = BASH_VAR_ASSIGN_RE.findall(stripped)
+    score += min(5, len(bash_assignments) * 3)
+    if BASH_CMD_SUBST_RE.search(stripped):
+        score += 3
+    if BASH_COND_RE.search(stripped):
+        score += 3
+    if BASH_KEYWORD_RE.search(stripped):
+        score += 3
+    if BASH_LOOP_RE.search(stripped):
+        score += 2
+
+    # Generic specific keywords
+    if GENERIC_KW_RE.search(stripped):
+        score += 2
+
+    # Line ending semicolons
+    semicolons = SEMICOLON_RE.findall(stripped)
+    score += min(3, len(semicolons))
+
+    # Curly braces match
+    left_braces = stripped.count('{')
+    right_braces = stripped.count('}')
+    if left_braces > 0 and left_braces == right_braces:
+        score += min(3, left_braces)
+
+    if score >= 4:
+        return "code"
+    return "text"
+
+def detect_language_name(text: str) -> Optional[str]:
+    stripped = text.strip()
+    if not stripped:
+        return None
+        
+    # 1. JSON Check
+    try:
+        parsed = json.loads(stripped)
+        if isinstance(parsed, (dict, list)) and len(stripped) > 4:
+            return "JSON"
+    except Exception:
+        pass
+
+    # 2. HTML/XML Check
+    if HTML_START_RE.match(stripped) or HTML_END_RE.search(stripped):
+        return "HTML"
+
+    # 3. Shebang / CLI Check
+    if SHEBANG_RE.match(stripped):
+        line = stripped.splitlines()[0]
+        if "python" in line:
+            return "Python"
+        if "bash" in line or "sh" in line:
+            return "Shell"
+        if "node" in line or "js" in line:
+            return "JavaScript"
+        return "Shell"
+        
+    if CLI_CMD_RE.match(stripped):
+        return "Shell"
+
+    # 4. Code Heuristics Scorer - check scores for each language
+    python_score = 0
+    if PY_DEF_RE.search(stripped): python_score += 5
+    if PY_CLASS_RE.search(stripped): python_score += 4
+    if "if __name__ ==" in stripped: python_score += 5
+    if PY_IMPORT_RE.search(stripped): python_score += 3
+
+    cpp_score = 0
+    if CPP_INCLUDE_RE.search(stripped): cpp_score += 5
+    if CPP_DEFINE_RE.search(stripped): cpp_score += 3
+    if "std::cout" in stripped or "std::endl" in stripped: cpp_score += 4
+    if CPP_USING_RE.search(stripped): cpp_score += 5
+
+    java_score = 0
+    if TYPED_DECL_RE.search(stripped): java_score += 5
+    if "System.out.print" in stripped: java_score += 4
+
+    js_score = 0
+    if JS_CONSOLE_RE.search(stripped): js_score += 4
+    if JS_VAR_RE.search(stripped): js_score += 3
+    if JS_FUNC_RE.search(stripped): js_score += 2
+    if JS_FUNCTION_KW_RE.search(stripped): js_score += 3
+
+    rust_go_score = 0
+    if LANG_KEYWORDS_RE.search(stripped): rust_go_score += 2
+
+    sql_score = 0
+    if SQL_SELECT_RE.search(stripped): sql_score += 5
+    if SQL_MOD_RE.search(stripped): sql_score += 5
+
+    bash_score = 0
+    bash_assignments = BASH_VAR_ASSIGN_RE.findall(stripped)
+    bash_score += min(5, len(bash_assignments) * 3)
+    if BASH_CMD_SUBST_RE.search(stripped): bash_score += 3
+    if BASH_COND_RE.search(stripped): bash_score += 3
+    if BASH_KEYWORD_RE.search(stripped): bash_score += 3
+    if BASH_LOOP_RE.search(stripped): bash_score += 2
+
+    scores = {
+        "Python": python_score,
+        "C++": cpp_score,
+        "Java": java_score,
+        "JavaScript": js_score,
+        "Rust/Go": rust_go_score,
+        "SQL": sql_score,
+        "Shell": bash_score
+    }
+    
+    max_lang, max_score = max(scores.items(), key=lambda x: x[1])
+    if max_score > 0:
+        return max_lang
+        
+    if CURLY_BRACE_RE.search(stripped) and SEMICOLON_RE.search(stripped):
+        return "C/JS"
+        
+    return "Code"
+
 class ClipboardStore:
     def __init__(self):
         self._items: List[ClipboardItem] = []
@@ -117,205 +318,10 @@ class ClipboardStore:
             json.dump([asdict(i) for i in self._items], f)
 
     def classify_text(self, text: str) -> str:
-        stripped = text.strip()
-        if not stripped:
-            return "text"
-            
-        if stripped.startswith("http"):
-            return "link"
-            
-        # 1. JSON Check
-        try:
-            parsed = json.loads(stripped)
-            if isinstance(parsed, (dict, list)) and len(stripped) > 4:
-                return "code"
-        except Exception:
-            pass
-
-        # 2. HTML/XML Check
-        if HTML_START_RE.match(stripped):
-            return "code"
-        if HTML_END_RE.search(stripped):
-            return "code"
-
-        # 3. Shebang / CLI Check
-        if SHEBANG_RE.match(stripped):
-            return "code"
-        if CLI_CMD_RE.match(stripped):
-            return "code"
-
-        # 3.5 Curly Braces with Newline Check (typical of block-structured code)
-        if CURLY_NEWLINE_RE.search(text):
-            return "code"
-
-        # 4. Code Heuristics Scorer
-        score = 0
-
-        # Python
-        if PY_DEF_RE.search(stripped):
-            score += 5
-        if PY_CLASS_RE.search(stripped):
-            score += 4
-        if "if __name__ ==" in stripped:
-            score += 5
-        if PY_IMPORT_RE.search(stripped):
-            score += 3
-
-        # C/C++
-        if CPP_INCLUDE_RE.search(stripped):
-            score += 5
-        if CPP_DEFINE_RE.search(stripped):
-            score += 3
-        if "std::cout" in stripped or "std::endl" in stripped:
-            score += 4
-        if CPP_USING_RE.search(stripped):
-            score += 5
-
-        # Java/C#/C++
-        if TYPED_DECL_RE.search(stripped):
-            score += 5
-        if "System.out.print" in stripped:
-            score += 4
-
-        # JS/TS/Go/Rust
-        if JS_CONSOLE_RE.search(stripped):
-            score += 4
-        if JS_VAR_RE.search(stripped):
-            score += 3
-        if JS_FUNC_RE.search(stripped):
-            score += 2
-        if JS_FUNCTION_KW_RE.search(stripped):
-            score += 3
-        if LANG_KEYWORDS_RE.search(stripped):
-            score += 2
-
-        # C-style comments
-        if C_COMMENT_RE.search(stripped):
-            score += 3
-
-        # SQL
-        if SQL_SELECT_RE.search(stripped):
-            score += 5
-        if SQL_MOD_RE.search(stripped):
-            score += 5
-
-        # Shell / Bash
-        bash_assignments = BASH_VAR_ASSIGN_RE.findall(stripped)
-        score += min(5, len(bash_assignments) * 3)
-        if BASH_CMD_SUBST_RE.search(stripped):
-            score += 3
-        if BASH_COND_RE.search(stripped):
-            score += 3
-        if BASH_KEYWORD_RE.search(stripped):
-            score += 3
-        if BASH_LOOP_RE.search(stripped):
-            score += 2
-
-        # Generic specific keywords
-        if GENERIC_KW_RE.search(stripped):
-            score += 2
-
-        # Line ending semicolons
-        semicolons = SEMICOLON_RE.findall(stripped)
-        score += min(3, len(semicolons))
-
-        # Curly braces match
-        left_braces = stripped.count('{')
-        right_braces = stripped.count('}')
-        if left_braces > 0 and left_braces == right_braces:
-            score += min(3, left_braces)
-
-        if score >= 4:
-            return "code"
-        return "text"
+        return classify_text(text)
 
     def detect_language_name(self, text: str) -> Optional[str]:
-        stripped = text.strip()
-        if not stripped:
-            return None
-            
-        # 1. JSON Check
-        try:
-            parsed = json.loads(stripped)
-            if isinstance(parsed, (dict, list)) and len(stripped) > 4:
-                return "JSON"
-        except Exception:
-            pass
-
-        # 2. HTML/XML Check
-        if HTML_START_RE.match(stripped) or HTML_END_RE.search(stripped):
-            return "HTML"
-
-        # 3. Shebang / CLI Check
-        if SHEBANG_RE.match(stripped):
-            line = stripped.splitlines()[0]
-            if "python" in line:
-                return "Python"
-            if "bash" in line or "sh" in line:
-                return "Shell"
-            if "node" in line or "js" in line:
-                return "JavaScript"
-            return "Shell"
-            
-        if CLI_CMD_RE.match(stripped):
-            return "Shell"
-
-        # 4. Code Heuristics Scorer - check scores for each language
-        python_score = 0
-        if PY_DEF_RE.search(stripped): python_score += 5
-        if PY_CLASS_RE.search(stripped): python_score += 4
-        if "if __name__ ==" in stripped: python_score += 5
-        if PY_IMPORT_RE.search(stripped): python_score += 3
-
-        cpp_score = 0
-        if CPP_INCLUDE_RE.search(stripped): cpp_score += 5
-        if CPP_DEFINE_RE.search(stripped): cpp_score += 3
-        if "std::cout" in stripped or "std::endl" in stripped: cpp_score += 4
-        if CPP_USING_RE.search(stripped): cpp_score += 5
-
-        java_score = 0
-        if TYPED_DECL_RE.search(stripped): java_score += 5
-        if "System.out.print" in stripped: java_score += 4
-
-        js_score = 0
-        if JS_CONSOLE_RE.search(stripped): js_score += 4
-        if JS_VAR_RE.search(stripped): js_score += 3
-        if JS_FUNC_RE.search(stripped): js_score += 2
-        if JS_FUNCTION_KW_RE.search(stripped): js_score += 3
-
-        rust_go_score = 0
-        if LANG_KEYWORDS_RE.search(stripped): rust_go_score += 2
-
-        sql_score = 0
-        if SQL_SELECT_RE.search(stripped): sql_score += 5
-        if SQL_MOD_RE.search(stripped): sql_score += 5
-
-        bash_score = 0
-        bash_assignments = BASH_VAR_ASSIGN_RE.findall(stripped)
-        bash_score += min(5, len(bash_assignments) * 3)
-        if BASH_CMD_SUBST_RE.search(stripped): bash_score += 3
-        if BASH_COND_RE.search(stripped): bash_score += 3
-        if BASH_KEYWORD_RE.search(stripped): bash_score += 3
-        if BASH_LOOP_RE.search(stripped): bash_score += 2
-
-        scores = {
-            "Python": python_score,
-            "C++": cpp_score,
-            "Java": java_score,
-            "JavaScript": js_score,
-            "Rust/Go": rust_go_score,
-            "SQL": sql_score,
-            "Shell": bash_score
-        }
-        
-        max_lang, max_score = max(scores.items(), key=lambda x: x[1])
-        if max_score > 0:
-            return max_lang
-            
-        if CURLY_BRACE_RE.search(stripped) and SEMICOLON_RE.search(stripped):
-            return "C/JS"
-            
-        return "Code"
+        return detect_language_name(text)
 
     def add(self, text: str):
         if not text.strip():
