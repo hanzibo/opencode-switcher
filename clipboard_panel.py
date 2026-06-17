@@ -427,7 +427,7 @@ class ClipboardPanel(Gtk.Box):
             ".custom-dialog row:hover, .custom-dialog listrow:hover, .custom-dialog .sort-row:hover { background-color: %(hover_bg)s; }"
             ".custom-dialog row:selected, .custom-dialog listrow:selected, .custom-dialog .sort-row:selected { background-color: %(sel_bg)s; color: %(text_fg)s; }"
             ".dynamic-copy-tag { color: #2ecc71; font-size: 12px; font-weight: bold; }"
-            ".code-lang-tag { color: %(sel_border)s; font-size: 10px; font-weight: bold; margin-bottom: 2px; text-transform: uppercase; }"
+            ".code-lang-tag { color: %(sel_border)s; font-size: 10px; font-weight: bold; margin-bottom: 2px; }"
             ".custom-dialog notebook, .custom-dialog notebook > stack { border: none; background-color: transparent; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
@@ -656,7 +656,7 @@ class ClipboardPanel(Gtk.Box):
                     item.language = lang
                 except Exception:
                     pass
-            lang_display = lang.title() if lang else "Code"
+            lang_display = lang.upper() if lang else "CODE"
             lang_label = Gtk.Label.new(lang_display)
             lang_label.get_style_context().add_class("code-lang-tag")
             lang_label.set_halign(Gtk.Align.END)
