@@ -374,7 +374,7 @@ class ClipboardPanel(Gtk.Box):
             ".cat-tool-btn { font-size: 12px; padding: 4px 6px; border: none; border-radius: 4px; }"
             ".cat-tool-btn:hover { background: %(btn_hover)s; }"
             ".cat-tool-btn:active { background: %(btn_active)s; }"
-            ".filter-tab { padding: 4px 12px; border-radius: 20px; border: 1px solid %(btn_border)s; background: %(btn_bg)s; background-image: none; box-shadow: none; font-size: 13px; color: %(text_fg)s; }"
+            ".filter-tab { padding: 4px 12px; border-radius: 20px; border: 1px solid %(btn_border)s; background: %(btn_bg)s; background-image: none; box-shadow: none; font-size: 13px; color: %(text_secondary)s; }"
             ".filter-tab:hover { background: %(btn_hover)s; background-image: none; color: %(text_fg)s; }"
             ".filter-tab-active { background: %(sel_bg)s; background-image: none; border-color: %(sel_border)s; color: %(text_fg)s; }"
             ".cat-sep-row separator { background: %(cat_sep_color)s; min-height: 1px; }"
