@@ -42,6 +42,11 @@ class App:
     def __init__(self):
         config = _load_config()
         self._theme = config.get("theme", "dark")
+        try:
+            from migrate_history import run_migration
+            run_migration()
+        except Exception as e:
+            print(f"Failed to run history migration: {e}")
         self._clip_store = ClipboardStore()
         self._prompt_store = PromptStore()
         self._cat_store = CategoryStore()

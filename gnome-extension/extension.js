@@ -37,6 +37,19 @@ function getIgnoreHash() {
     return '';
 }
 
+function classifyText(text) {
+    let stripped = text.trim();
+    if (stripped.startsWith("http")) {
+        return "link";
+    }
+    let hasKeywords = /\b(const|function|export)\b/.test(text);
+    let hasCurlyBraceNewline = /[\{\}]\s*[\r\n]|[\r\n]\s*[\{\}]/.test(text);
+    if (hasKeywords || hasCurlyBraceNewline) {
+        return "code";
+    }
+    return "text";
+}
+
 function appendToHistory(text, precomputedHash) {
     let items = [];
     try {
@@ -54,7 +67,8 @@ function appendToHistory(text, precomputedHash) {
 
     if (items.length > 0 && items[items.length - 1].hash === hash) return;
 
-    items.push({ text, timestamp: Date.now(), hash, type: "text", image_path: null });
+    let itemType = classifyText(text);
+    items.push({ text, timestamp: Date.now(), hash, type: itemType, image_path: null });
     if (items.length > MAX_ITEMS) items = items.slice(-MAX_ITEMS);
 
     try {
@@ -145,6 +159,9 @@ export default class ClipboardMonitor {
             if (selectionType === 1) { // Meta.SelectionType.SELECTION_CLIPBOARD
                 try {
                     let mimetypes = sel.get_mimetypes(1) || [];
+                    if (mimetypes.includes('x-kde-passwordManagerHint')) {
+                        return;
+                    }
                     if (mimetypes.includes('image/png')) {
                         notifyImage();
                     } else if (mimetypes.length > 0) {

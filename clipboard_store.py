@@ -1,4 +1,5 @@
 import json
+import re
 import os
 import subprocess
 import time
@@ -76,6 +77,20 @@ class ClipboardStore:
         with open(CLIPBOARD_PATH, "w") as f:
             json.dump([asdict(i) for i in self._items], f)
 
+    def _classify_text(self, text: str) -> str:
+        stripped = text.strip()
+        if stripped.startswith("http"):
+            return "link"
+        
+        # Check JS/Gjs keywords: const, function, export
+        # Check curly braces with newline: {\s*\n or \n\s*}
+        has_keywords = bool(re.search(r'\b(const|function|export)\b', text))
+        has_curly_newline = bool(re.search(r'[\{\}]\s*[\r\n]|[\r\n]\s*[\{\}]', text))
+        if has_keywords or has_curly_newline:
+            return "code"
+            
+        return "text"
+
     def add(self, text: str):
         if not text.strip():
             return
@@ -84,7 +99,8 @@ class ClipboardStore:
             return
         if self._items and self._items[-1].hash == h:
             return
-        self._items.append(ClipboardItem(text=text, timestamp=int(time.time() * 1000), hash=h))
+        item_type = self._classify_text(text)
+        self._items.append(ClipboardItem(text=text, timestamp=int(time.time() * 1000), hash=h, type=item_type))
         if len(self._items) > MAX_CLIPBOARD:
             self._items = self._items[-MAX_CLIPBOARD:]
         self._save()
@@ -467,6 +483,22 @@ def _clipboard_cmd() -> list:
 
 def capture_clipboard_once(store: ClipboardStore):
     try:
+        # Check for sensitive MIME types first to skip recording
+        if is_wayland():
+            try:
+                types = subprocess.check_output(["wl-paste", "--list-types"], stderr=subprocess.DEVNULL, timeout=0.5).decode("utf-8", errors="ignore")
+                if "x-kde-passwordManagerHint" in types:
+                    return
+            except Exception:
+                pass
+        else:
+            try:
+                targets = subprocess.check_output(["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"], stderr=subprocess.DEVNULL, timeout=0.5).decode("utf-8", errors="ignore")
+                if "x-kde-passwordManagerHint" in targets:
+                    return
+            except Exception:
+                pass
+
         image_data = _capture_image()
         if image_data:
             store.add_image(image_data)

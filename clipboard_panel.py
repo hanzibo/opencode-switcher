@@ -69,6 +69,8 @@ class ClipboardPanel(Gtk.Box):
         self._clip_items: List[ClipboardItem] = []
         self._selected_index = 0
         self._filter_query = ""
+        self._active_tab_type = "all"
+        self._tab_buttons = {}
         self._in_category_button = False
 
         self.on_copy_clipboard: Optional[Callable[[str], None]] = None
@@ -143,12 +145,12 @@ class ClipboardPanel(Gtk.Box):
         self._cat_sep = Gtk.DrawingArea.new()
         self._cat_sep.set_size_request(1, -1)
         self._cat_sep.connect("draw", self._on_sep_draw)
-
+ 
         self._content_scrolled = Gtk.ScrolledWindow.new()
         self._content_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self._content_scrolled.set_hexpand(True)
         self._content_scrolled.set_vexpand(True)
-
+ 
         self._content_list = Gtk.ListBox.new()
         self._content_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self._content_list.set_activate_on_single_click(False)
@@ -157,17 +159,47 @@ class ClipboardPanel(Gtk.Box):
         self._content_list.connect("button-press-event", self._on_content_button)
         self._content_list.connect("key-press-event", self._on_content_key)
         self._content_scrolled.add(self._content_list)
+ 
+        # Create content vbox to house the filter tabs and the scrolled list window
+        self._content_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        self._content_vbox.set_hexpand(True)
+        self._content_vbox.set_vexpand(True)
+
+        self._filter_tabs_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+        self._filter_tabs_box.set_margin_start(12)
+        self._filter_tabs_box.set_margin_end(12)
+        self._filter_tabs_box.set_margin_top(8)
+        self._filter_tabs_box.set_margin_bottom(8)
+
+        tab_spec = [
+            ("all", "全部"),
+            ("text", "文本"),
+            ("image", "图片"),
+            ("link", "链接"),
+            ("code", "代码")
+        ]
+        for t_type, t_label in tab_spec:
+            btn = Gtk.Button.new_with_label(t_label)
+            btn.get_style_context().add_class("filter-tab")
+            if t_type == "all":
+                btn.get_style_context().add_class("filter-tab-active")
+            btn.connect("clicked", self._on_filter_tab_clicked, t_type)
+            self._filter_tabs_box.pack_start(btn, True, True, 0)
+            self._tab_buttons[t_type] = btn
+
+        self._content_vbox.pack_start(self._filter_tabs_box, False, False, 0)
+        self._content_vbox.pack_start(self._content_scrolled, True, True, 0)
 
         self._action_sep = Gtk.DrawingArea.new()
         self._action_sep.set_size_request(1, -1)
         self._action_sep.connect("draw", self._on_sep_draw)
-
+ 
         self._action_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
         self._action_box.set_size_request(ACTION_WIDTH, -1)
         self._action_box.set_valign(Gtk.Align.START)
         self._action_box.set_margin_start(12)
         self._action_box.set_margin_top(12)
-
+ 
         self._btn_delete = Gtk.Button.new_with_label("Delete")
         self._btn_delete.connect("clicked", self._on_delete_clicked)
         self._btn_delete_all = Gtk.Button.new_with_label("Delete All")
@@ -178,29 +210,29 @@ class ClipboardPanel(Gtk.Box):
         self._btn_create.connect("clicked", self._on_create_clicked)
         self._btn_edit = Gtk.Button.new_with_label("Edit")
         self._btn_edit.connect("clicked", self._on_edit_clicked)
-
+ 
         self._btn_sort = Gtk.Button.new_with_label("Sort")
         self._btn_sort.connect("clicked", self._on_sort_clicked)
-
+ 
         self._action_sep2 = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
         self._action_sep2.set_margin_top(8)
         self._action_sep2.set_margin_bottom(8)
-
+ 
         self._btn_backup = Gtk.Button.new_with_label("Backup")
         self._btn_backup.connect("clicked", self._on_backup_clicked)
-
+ 
         self._btn_restore = Gtk.Button.new_with_label("Restore")
         self._btn_restore.connect("clicked", self._on_restore_clicked)
-
+ 
         self._btn_recycle_bin = Gtk.Button.new_with_label("Recycle Bin")
         self._btn_recycle_bin.connect("clicked", self._on_recycle_bin_clicked)
-
+ 
         self._btn_sort_cats = Gtk.Button.new_with_label("Sort Categories")
         self._btn_sort_cats.connect("clicked", self._on_sort_cats_clicked)
-
+ 
         self.pack_start(self._cat_vbox, False, True, 0)
         self.pack_start(self._cat_sep, False, False, 0)
-        self.pack_start(self._content_scrolled, True, True, 0)
+        self.pack_start(self._content_vbox, True, True, 0)
         self.pack_start(self._action_sep, False, False, 0)
         self.pack_start(self._action_box, False, False, 0)
 
@@ -342,6 +374,9 @@ class ClipboardPanel(Gtk.Box):
             ".cat-tool-btn { font-size: 12px; padding: 4px 6px; border: none; border-radius: 4px; }"
             ".cat-tool-btn:hover { background: %(btn_hover)s; }"
             ".cat-tool-btn:active { background: %(btn_active)s; }"
+            ".filter-tab { padding: 4px 12px; border-radius: 20px; border: 1px solid %(btn_border)s; background: %(btn_bg)s; background-image: none; box-shadow: none; font-size: 13px; color: %(text_fg)s; }"
+            ".filter-tab:hover { background: %(btn_hover)s; background-image: none; color: %(text_fg)s; }"
+            ".filter-tab-active { background: %(sel_bg)s; background-image: none; border-color: %(sel_border)s; color: %(text_fg)s; }"
             ".cat-sep-row separator { background: %(cat_sep_color)s; min-height: 1px; }"
             "dialog, messagedialog, GtkDialog, GtkMessageDialog, .custom-dialog, "
             "dialog box, messagedialog box, dialog grid, messagedialog grid, .custom-dialog box, "
@@ -407,6 +442,13 @@ class ClipboardPanel(Gtk.Box):
     def reset_filter(self):
         """Public API: Clear filter query without triggering rebuild."""
         self._filter_query = ""
+        self._active_tab_type = "all"
+        for t_type, btn in self._tab_buttons.items():
+            context = btn.get_style_context()
+            if t_type == "all":
+                context.add_class("filter-tab-active")
+            else:
+                context.remove_class("filter-tab-active")
 
     def load_cached(self):
         self._clip_store.reload()
@@ -470,37 +512,74 @@ class ClipboardPanel(Gtk.Box):
         self._content_list.invalidate_filter()
         GLib.idle_add(self._select_first_visible_row)
 
+    def _item_matches_filter(self, item) -> bool:
+        if not item:
+            return False
+            
+        # 1. Apply Search Query Filter
+        if self._filter_query:
+            query = self._filter_query
+            if self._active_category_id == "__clipboard__":
+                if query not in item.text.lower():
+                    return False
+            else:
+                title = getattr(item, "title", "") or ""
+                text = getattr(item, "text", "") or ""
+                if query not in title.lower() and query not in text.lower():
+                    return False
+                    
+        # 2. Apply Tab Filter
+        if self._active_tab_type != "all":
+            # Determine type of this item
+            item_type = getattr(item, "type", None)
+            if item_type is None:
+                # Classify CategoryItem text on the fly
+                item_text = getattr(item, "text", "") or ""
+                item_type = self._clip_store._classify_text(item_text)
+                
+            if item_type != self._active_tab_type:
+                return False
+                
+        return True
+
+    def _on_filter_tab_clicked(self, _btn, tab_type):
+        if self._active_tab_type == tab_type:
+            return
+            
+        # Update active tab button styling
+        for t_type, btn in self._tab_buttons.items():
+            context = btn.get_style_context()
+            if t_type == tab_type:
+                context.add_class("filter-tab-active")
+            else:
+                context.remove_class("filter-tab-active")
+                
+        self._active_tab_type = tab_type
+        
+        # Invalidate filter to trigger Gtk ListBox filter func
+        self._content_list.invalidate_filter()
+        GLib.idle_add(self._select_first_visible_row)
+
     def _list_filter_func(self, row, user_data):
         if getattr(row, "is_placeholder", False):
             if self._active_category_id == "__clipboard__":
                 items = self._clip_items
-                if not items:
-                    return True
-                if not self._filter_query:
-                    return False
-                any_match = any(self._filter_query in i.text.lower() for i in items)
-                return not any_match
             else:
                 cat = self._cat_store.get(self._active_category_id)
                 items = cat.items if cat else []
-                if not items:
-                    return True
-                if not self._filter_query:
-                    return False
-                any_match = any(self._filter_query in i.title.lower() or self._filter_query in i.text.lower() for i in items)
-                return not any_match
-
-        if not self._filter_query:
-            return True
+            
+            if not items:
+                return True
+                
+            # If any item matches the filter, hide placeholder (return False)
+            any_match = any(self._item_matches_filter(i) for i in items)
+            return not any_match
 
         item = getattr(row, "store_item", None)
         if not item:
             return True
-
-        if self._active_category_id == "__clipboard__":
-            return self._filter_query in item.text.lower()
-        else:
-            return self._filter_query in item.title.lower() or self._filter_query in item.text.lower()
+            
+        return self._item_matches_filter(item)
 
     def _select_first_visible_row(self):
         first_visible = None
