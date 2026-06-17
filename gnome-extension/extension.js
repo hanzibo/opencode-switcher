@@ -144,6 +144,22 @@ function classifyText(text) {
         score += 5;
     }
 
+    // Shell / Bash heuristics
+    let bashAssignments = stripped.match(/^\s*[a-zA-Z_]\w*=[^\s=]+/gm) || [];
+    score += Math.min(5, bashAssignments.length * 3);
+    if (/\$\([^)]+\)/.test(stripped)) {
+        score += 3;
+    }
+    if (/\[\[?\s+.*?\s+\]\]?/.test(stripped)) {
+        score += 3;
+    }
+    if (/^\s*(fi|done|esac)\b/m.test(stripped)) {
+        score += 3;
+    }
+    if (/^\s*for\s+[a-zA-Z_]\w*\s+in\b/m.test(stripped)) {
+        score += 2;
+    }
+
     // Generic specific keywords
     let keywords = [
         /\binterface\b/, /\bvoid\b/, /\bprintf\b/, /\bprintln\b/,

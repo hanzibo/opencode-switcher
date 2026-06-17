@@ -12,6 +12,11 @@ HTML_END_RE = re.compile(r'</[a-zA-Z][a-zA-Z0-9]*>')
 SHEBANG_RE = re.compile(r'^#!\s*/(bin|usr)/')
 CLI_CMD_RE = re.compile(r'^\s*(sudo\s+)?(apt-get|yum|docker|systemctl|pip install|npm install|git clone|yarn add|pnpm add|chmod\s+\+x)\b')
 CURLY_NEWLINE_RE = re.compile(r'[\{\}]\s*[\r\n]|[\r\n]\s*[\{\}]')
+BASH_VAR_ASSIGN_RE = re.compile(r'^\s*[a-zA-Z_]\w*=[^\s=]+', re.MULTILINE)
+BASH_CMD_SUBST_RE = re.compile(r'\$\([^)]+\)')
+BASH_COND_RE = re.compile(r'\[\[?\s+.*?\s+\]\]?')
+BASH_KEYWORD_RE = re.compile(r'^\s*(fi|done|esac)\b', re.MULTILINE)
+BASH_LOOP_RE = re.compile(r'^\s*for\s+[a-zA-Z_]\w*\s+in\b', re.MULTILINE)
 
 PY_DEF_RE = re.compile(r'^\s*def\s+[a-zA-Z_]\w*\s*\(.*\)\s*:', re.MULTILINE)
 PY_CLASS_RE = re.compile(r'^\s*class\s+[a-zA-Z_]\w*(\s*\(.*\))?\s*:', re.MULTILINE)
@@ -121,6 +126,18 @@ def classify_text(text: str) -> str:
         score += 5
     if SQL_MOD_RE.search(stripped):
         score += 5
+
+    # Shell / Bash
+    bash_assignments = BASH_VAR_ASSIGN_RE.findall(stripped)
+    score += min(5, len(bash_assignments) * 3)
+    if BASH_CMD_SUBST_RE.search(stripped):
+        score += 3
+    if BASH_COND_RE.search(stripped):
+        score += 3
+    if BASH_KEYWORD_RE.search(stripped):
+        score += 3
+    if BASH_LOOP_RE.search(stripped):
+        score += 2
 
     # Generic specific keywords
     if GENERIC_KW_RE.search(stripped):
