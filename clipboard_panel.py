@@ -166,6 +166,7 @@ class ClipboardPanel(Gtk.Box):
         self._content_vbox.set_vexpand(True)
 
         self._filter_tabs_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+        self._filter_tabs_box.set_no_show_all(True)
         self._filter_tabs_box.set_margin_start(12)
         self._filter_tabs_box.set_margin_end(12)
         self._filter_tabs_box.set_margin_top(8)
