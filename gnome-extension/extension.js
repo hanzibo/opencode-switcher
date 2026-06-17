@@ -39,12 +39,136 @@ function getIgnoreHash() {
 
 function classifyText(text) {
     let stripped = text.trim();
+    if (!stripped) {
+        return "text";
+    }
     if (stripped.startsWith("http")) {
         return "link";
     }
-    let hasKeywords = /\b(const|function|export)\b/.test(text);
-    let hasCurlyBraceNewline = /[\{\}]\s*[\r\n]|[\r\n]\s*[\{\}]/.test(text);
-    if (hasKeywords || hasCurlyBraceNewline) {
+
+    // 1. JSON Check
+    try {
+        let parsed = JSON.parse(stripped);
+        if (parsed && typeof parsed === "object" && stripped.length > 4) {
+            return "code";
+        }
+    } catch (e) {}
+
+    // 2. HTML/XML Check
+    if (/^\s*<(html|head|body|div|span|p|a|ul|ol|li|table|tr|td|script|style|link|meta|xml)\b/i.test(stripped)) {
+        return "code";
+    }
+    if (/<\/?[a-zA-Z][a-zA-Z0-9]*>/.test(stripped) && stripped.includes("<") && stripped.includes(">")) {
+        return "code";
+    }
+
+    // 3. Shebang / CLI Check
+    if (/^#!\s*\/(bin|usr)\//.test(stripped)) {
+        return "code";
+    }
+    if (/^\s*(sudo\s+)?(apt-get|yum|docker|systemctl|pip install|npm install|git clone|yarn add|pnpm add|chmod\s+\+x)\b/.test(stripped)) {
+        return "code";
+    }
+
+    // 3.5 Curly Braces with Newline Check (typical of block-structured code)
+    if (/[\{\}]\s*[\r\n]|[\r\n]\s*[\{\}]/.test(text)) {
+        return "code";
+    }
+
+    // 4. Code Heuristics Scorer
+    let score = 0;
+
+    // Python
+    if (/^\s*def\s+[a-zA-Z_]\w*\s*\(.*\)\s*:/m.test(stripped)) {
+        score += 5;
+    }
+    if (/^\s*class\s+[a-zA-Z_]\w*(\s*\(.*\))?\s*:/m.test(stripped)) {
+        score += 4;
+    }
+    if (stripped.includes("if __name__ ==")) {
+        score += 5;
+    }
+    if (/^\s*(import\s+\w+|from\s+\w+\s+import)\b/m.test(stripped)) {
+        score += 3;
+    }
+
+    // C/C++
+    if (/^\s*#include\s*[<" ]/m.test(stripped)) {
+        score += 5;
+    }
+    if (/^\s*#define\s+[a-zA-Z_]\w*/m.test(stripped)) {
+        score += 3;
+    }
+    if (stripped.includes("std::cout") || stripped.includes("std::endl")) {
+        score += 4;
+    }
+    if (/\busing namespace std\b/.test(stripped)) {
+        score += 5;
+    }
+
+    // Java/C#/C++
+    if (/\b(public|private|protected)\s+(class|interface|void|int|double|float|char|bool|boolean|string)\b/.test(stripped)) {
+        score += 5;
+    }
+    if (stripped.includes("System.out.print")) {
+        score += 4;
+    }
+
+    // JS/TS/Go/Rust
+    if (/\bconsole\.log\(/.test(stripped)) {
+        score += 4;
+    }
+    if (/\b(const|let|var)\s+[a-zA-Z_]\w*\s*=/.test(stripped)) {
+        score += 3;
+    }
+    if (/\b(export|export default)\b/.test(stripped)) {
+        score += 2;
+    }
+    if (/\bfunction\b/.test(stripped)) {
+        score += 3;
+    }
+    if (/\b(fn|pub|struct|impl|package)\b/.test(stripped)) {
+        score += 2;
+    }
+
+    // C-style comments
+    if (/^\s*(\/\/|\/\*).*$/m.test(stripped)) {
+        score += 3;
+    }
+
+    // SQL
+    if (/\bSELECT\s+[\w\s,*()\-]+FROM\b/i.test(stripped)) {
+        score += 5;
+    }
+    if (/\b(INSERT\s+INTO|UPDATE\s+\w+\s+SET|DELETE\s+FROM)\b/i.test(stripped)) {
+        score += 5;
+    }
+
+    // Generic specific keywords
+    let keywords = [
+        /\binterface\b/, /\bvoid\b/, /\bprintf\b/, /\bprintln\b/,
+        /\bnullptr\b/, /\bundefined\b/, /\btypeof\b/, /\belseif\b/,
+        /\belif\b/, /\bsizeof\b/, /\bstruct\b/, /\benum\b/, /\bstatic\b/,
+        /\bclass\b/
+    ];
+    for (let kw of keywords) {
+        if (kw.test(stripped)) {
+            score += 2;
+        }
+    }
+
+    // Line ending semicolons (excluding HTML entities)
+    let semicolonMatches = stripped.match(/(?<!\&[a-zA-Z0-9]{2,6});\s*$/gm) || [];
+    score += Math.min(3, semicolonMatches.length);
+
+    // Curly braces match
+    let leftBraces = (stripped.match(/\{/g) || []).length;
+    let rightBraces = (stripped.match(/\}/g) || []).length;
+    if (leftBraces > 0 && leftBraces === rightBraces) {
+        score += Math.min(3, leftBraces);
+    }
+
+    if (score >= 4) {
         return "code";
     }
     return "text";
