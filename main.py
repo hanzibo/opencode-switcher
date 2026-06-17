@@ -16,7 +16,8 @@ from hotkey import HotkeyManager
 from panel import SearchPanel
 from session_store import get_sessions, delete_session, rename_session
 from launcher import launch_session, launch_new_session, launch_session_pure
-from clipboard_store import ClipboardStore, PromptStore, CategoryStore, capture_clipboard_once
+# ponytail: removed PromptStore import
+from clipboard_store import ClipboardStore, CategoryStore, capture_clipboard_once
 from clipboard_panel import ClipboardPanel
 from utils import is_wayland
 
@@ -48,15 +49,15 @@ class App:
         except Exception as e:
             print(f"Failed to run history migration: {e}")
         self._clip_store = ClipboardStore()
-        self._prompt_store = PromptStore()
+        # ponytail: removed unused self._prompt_store = PromptStore()
         self._cat_store = CategoryStore()
         self._panel = SearchPanel()
         self._panel.set_theme(self._theme)
 
-        clip_panel = ClipboardPanel(self._clip_store, self._prompt_store, self._cat_store)
+        clip_panel = ClipboardPanel(self._clip_store, self._cat_store)
         clip_panel.on_copy_clipboard = self._on_clipboard_copied
         clip_panel.on_hide_request = lambda: GLib.idle_add(self._panel.hide)
-        self._panel.set_clipboard_panel(clip_panel, self._clip_store, self._prompt_store, self._cat_store)
+        self._panel.set_clipboard_panel(clip_panel, self._clip_store, self._cat_store)
 
         self._hotkey = HotkeyManager()
         self._running = True

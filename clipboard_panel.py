@@ -60,7 +60,8 @@ def _copy_to_clipboard(text: str):
 
 
 class ClipboardPanel(Gtk.Box):
-    def __init__(self, clip_store, prompt_store, cat_store):
+    def __init__(self, clip_store, cat_store):
+        # ponytail: removed unused prompt_store parameter
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         self._clip_store = clip_store
         self._cat_store = cat_store

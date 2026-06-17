@@ -26,8 +26,7 @@ class HotkeyManager:
     def _start_pynput(self):
         from pynput.keyboard import Listener, Key
 
-        self._pynput_keys = {Key.ctrl, Key.ctrl_l, Key.ctrl_r,
-                             Key.shift, Key.shift_l, Key.shift_r}
+        # ponytail: removed unused self._pynput_keys assignment
         self._pynput_pressed: set = set()
 
         def on_press(key):
@@ -43,7 +42,6 @@ class HotkeyManager:
 
         self._listener = Listener(on_press=on_press, on_release=on_release)
         self._listener.start()
-        self._pynput_keys = None
 
     def _start_socket_listener(self):
         self._running = True

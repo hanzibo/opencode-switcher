@@ -333,10 +333,10 @@ class SearchPanel:
         if self._window.is_visible():
             self._build_all()
 
-    def set_clipboard_panel(self, panel: ClipboardPanel, clip_store, prompt_store, cat_store=None):
+    def set_clipboard_panel(self, panel: ClipboardPanel, clip_store, cat_store=None):
         self._clipboard_panel = panel
         self._clip_store = clip_store
-        self._prompt_store = prompt_store
+        # ponytail: removed unused self._prompt_store = prompt_store
         self._cat_store = cat_store
         self._content_stack.add_named(panel, "clipboard")
         if self._theme:

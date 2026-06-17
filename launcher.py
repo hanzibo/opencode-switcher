@@ -9,10 +9,7 @@ from utils import is_wayland
 
 _TERMINALS = ["ptyxis", "gnome-terminal", "kgx", "blackbox"]
 
-
-def _on_wayland() -> bool:
-    return is_wayland()
-
+# ponytail: removed redundant _on_wayland wrapper
 
 def _find_terminal() -> Optional[str]:
     for term in _TERMINALS:
@@ -84,12 +81,12 @@ def _launch(terminal: str, opencode: str, directory: str,
         else:
             shell_cmd = f"cd {quoted_dir} && exec {quoted_opencode}{pure_flag}"
 
-        before = _get_terminal_windows(terminal) if not _on_wayland() else set()
+        before = _get_terminal_windows(terminal) if not is_wayland() else set()
         subprocess.Popen(
             [terminal, "--", "bash", "-c", shell_cmd],
             start_new_session=True,
         )
-        if not _on_wayland():
+        if not is_wayland():
             threading.Thread(
                 target=_activate_new_window, args=(before, terminal), daemon=True
             ).start()

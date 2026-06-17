@@ -51,7 +51,7 @@ from utils import is_wayland
 
 CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
 CLIPBOARD_PATH = os.path.join(CONFIG_DIR, "clipboard_history.json")
-PROMPTS_PATH = os.path.join(CONFIG_DIR, "prompts.json")
+# ponytail: removed unused Prompt, PromptStore, and migrate_from_prompts
 MAX_CLIPBOARD = 150
 CATEGORIES_PATH = os.path.join(CONFIG_DIR, "categories.json")
 CUSTOM_PROMPTS_PATH = os.path.join(CONFIG_DIR, "custom_prompts.json")
@@ -71,12 +71,6 @@ class ClipboardItem:
     image_path: Optional[str] = None
     language: Optional[str] = None
 
-
-@dataclass
-class Prompt:
-    title: str
-    text: str
-    timestamp: int
 
 
 @dataclass
@@ -408,46 +402,6 @@ class ClipboardStore:
             pass
 
 
-class PromptStore:
-    def __init__(self):
-        self._prompts: List[Prompt] = []
-        self._load()
-
-    def _load(self):
-        if not os.path.isfile(PROMPTS_PATH):
-            return
-        try:
-            with open(PROMPTS_PATH) as f:
-                data = json.load(f)
-            self._prompts = [Prompt(**d) for d in data]
-        except (json.JSONDecodeError, TypeError):
-            self._prompts = []
-
-    def _save(self):
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(PROMPTS_PATH, "w") as f:
-            json.dump([asdict(p) for p in self._prompts], f)
-
-    def create(self, title: str, text: str):
-        self._prompts.append(Prompt(title=title, text=text, timestamp=int(time.time() * 1000)))
-        self._save()
-
-    def update(self, index: int, title: str, text: str):
-        if 0 <= index < len(self._prompts):
-            self._prompts[index] = Prompt(title=title, text=text, timestamp=int(time.time() * 1000))
-            self._save()
-
-    def delete(self, index: int):
-        if 0 <= index < len(self._prompts):
-            self._prompts.pop(index)
-            self._save()
-
-    def get_all(self) -> List[Prompt]:
-        return list(self._prompts)
-
-    def reload(self):
-        self._load()
-
 
 class CategoryStore:
     def __init__(self):
@@ -667,23 +621,6 @@ class CategoryStore:
                 self._save()
                 return
         raise ValueError(f"Category '{cat_id}' not found")
-
-    def migrate_from_prompts(self):
-        if not os.path.isfile(PROMPTS_PATH):
-            return
-        try:
-            with open(PROMPTS_PATH) as f:
-                data = json.load(f)
-            prompts = [Prompt(**d) for d in data]
-        except (json.JSONDecodeError, TypeError):
-            return
-        if not prompts:
-            return
-        items = [CategoryItem(title=p.title, text=p.text, timestamp=p.timestamp) for p in prompts]
-        self._categories.append(CustomCategory(
-            id=uuid4().hex[:12], name="Prompts", items=items,
-            pinned=False, created_at=int(time.time() * 1000)
-        ))
 
 
 def _capture_image() -> Optional[bytes]:
