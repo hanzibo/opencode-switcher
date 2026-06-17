@@ -187,6 +187,7 @@ class ClipboardPanel(Gtk.Box):
             btn.connect("clicked", self._on_filter_tab_clicked, t_type)
             self._filter_tabs_box.pack_start(btn, True, True, 0)
             self._tab_buttons[t_type] = btn
+            btn.show()
 
         self._content_vbox.pack_start(self._filter_tabs_box, False, False, 0)
         self._content_vbox.pack_start(self._content_scrolled, True, True, 0)
@@ -474,7 +475,7 @@ class ClipboardPanel(Gtk.Box):
             self._content_list.remove(child)
 
         if self._active_category_id == "__clipboard__":
-            self._filter_tabs_box.show_all()
+            self._filter_tabs_box.show()
             items = self._clip_items
         else:
             self._filter_tabs_box.hide()
