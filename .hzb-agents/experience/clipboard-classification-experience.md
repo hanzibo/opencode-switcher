@@ -1,37 +1,58 @@
-# 剪切板内容分类机制优化 开发经验总结
+# 剪切板内容识别与语言显示优化开发经验总结
 
 > **分支名**：`improve-feature-clipboard-classification`  
 > **开发周期**：2026-06-17 至 2026-06-17  
-> **关键词**：`剪切板分类` `启发式打分` `正则匹配` `多端对齐` `GJS正则兼容性`
+> **关键词**：`剪切板分类` `启发式打分` `语言标识` `GTK3-CSS` `代码重构`
 
 ## 一、经验与教训总结
 
 ### 1.1 做得好的地方
-- **多端逻辑的高保真对齐**：保证了 Python 端运行期（[clipboard_store.py](file:///home/hzb/opencode-switcher/clipboard_store.py)）、Python 端数据迁移（[migrate_history.py](file:///home/hzb/opencode-switcher/migrate_history.py)）以及 GNOME Shell JavaScript 扩展端（[extension.js](file:///home/hzb/opencode-switcher/gnome-extension/extension.js)）的分类逻辑 100% 对齐，避免了由于跨语言分类算法不一致导致的前后端数据分类冲突。
-- **混合分类策略（绝对前缀匹配 + 启发式打分）**：采用绝对匹配与启发式相结合的策略，既保证了像 JSON, HTML, Shebang, 典型命令行这类强模式片段的绝对快速匹配，又保证了如 Python, C/C++, Java, JS/TS, SQL 等复杂代码段能根据语法符号和关键字的多维特征进行精确加权判定，实现高识别率与低误判率。
-- **老旧 JavaScript 引擎正则兼容处理**：在 GNOME Shell 扩展端（基于 GJS/SpiderMonkey）排除了对可变长度后行断言等非主流正则语法的使用，采用固定宽度的后行断言来识别分号（`/(?<!\&[a-zA-Z0-9]{2,6});\s*$/gm`），保障了 GNOME Shell 扩展的绝对稳定性与兼容性。
+- **高精度启发式分类设计**：引入了基于绝对前缀匹配（JSON/HTML/Shebang/CLI）与多维特征打分器（Python/CPP/Java/JS/SQL/Shell等）的混合分类算法，大幅提升了代码识别率，同时降低了误判率。
+- **模块化代码与高保真对齐**：通过在 `clipboard_store.py` 中将核心判定和探测算法重构为模块级函数，使 `migrate_history.py` 能够通过 `import` 复用逻辑，消除了 200 余行重复代码，确保运行期与迁移期判定逻辑 100% 同源。
+- **UI 响应式显示与自适应渲染**：在剪切板列表中为已识别的代码内容右侧、时间标签上方，使用显眼颜色高亮标出具体的编程语言，并在 UI 侧进行了上大写转换适配。
 
 ### 1.2 需要改进的地方
-- **前期分析需要将特殊语法孤岛纳入基准**：最初设计的启发式模型忽略了单侧花括号与换行组合（如代码片段的最后一行 `}\n`）或普通大括号块的匹配场景，导致在运行老版测试用例时出现了未判定成功的问题。后续通过补充 `CURLY_NEWLINE_RE` 在未剥离换行文本（unstripped text）上的早期判断，融合了新旧逻辑的优点，才使测试用例完全通过。未来在做此类重构优化前，应提早在分析阶段把所有历史测试用例梳理完备。
-
----
+- **对 GTK/PyGObject 特性的兼容性估计不足**：在实现 UI 样式阶段，由于直接在 CSS 中使用了主流浏览器支持的 `text-transform: uppercase;`，导致 GTK 3 CSS 解析失败抛出致命异常崩溃。应牢记 GTK 3 样式引擎非常局限，无法支持所有标准 CSS 属性，需要尽可能在 Python 数据端完成此类格式转化。
+- **对重构阶段的回顾校验不够充分**：重构早期在 `clipboard_panel.py` 中对语言识别标志的调用中出现拼写错误（错误地把本类的 `self.clipboard_store` 拼写为了 `self._clip_store`），导致特定文本复制时发生运行时属性异常。在以后提交代码前，必须保证所有交互链路（如模拟复制事件）都经历过真实测试覆盖。
 
 ## 二、关键问题与解决方案记录
 
-### 问题1：启发式得分设计中长篇普通英文（如 import, class）的防误判平衡
-- **问题描述**：某些编程语言 of 常用关键字（如 Python 的 `import`, `from`, `class`；C++ 的 `using`；Java/JS 的 `class`）如果直接作为强无条件词出现在纯文本中，有可能在非代码段中累积过高的分数导致错判。
-- **原因分析**：没有对关键字做合理的语义隔离与正则边界限定。
+### 问题1：GTK 3 CSS 不支持 `text-transform` 属性导致服务启动崩溃
+- **问题描述**：在为代码语言标签定义 CSS 样式时，添加了 `text-transform: uppercase;` 以显示大写的语言名称（如 `PYTHON`, `JAVASCRIPT`），但在 `./install.sh install` 重新运行服务后，服务直接报错未运行，托盘与面板全部不可用。
+- **原因分析**：GTK 3 样式引擎对 CSS 标准的支持非常有限，完全不支持 `text-transform` 属性。在此处使用该属性导致 `Gtk.CssProvider` 加载失败抛出致命异常，导致主程序启动崩溃。
 - **解决过程**：
-  1. 通过正则表达式增加边界限制 `\b` 词界定位。
-  2. 调低通用或高频英语词汇（如通用 class 声明）在打分器中的基础权重，将其移至 `GENERIC_KW_RE`（+2 分）或要求它必须搭配其他专有声明模式（如 Python 类声明必须有冒号 `PY_CLASS_RE`；Java 必须有权限限定修饰 `TYPED_DECL_RE`）才能获得更高的独立分（+4 ~ +5 分）。
-  3. 为 `export` 与 `function` 划分不同分值：极其不易被文本混淆的 `function` 独立赋予 +3 分，而可能单独出现的 `export` 赋予 +2 分。
+  1. 移除 CSS 样式中的 `text-transform: uppercase;`。
+  2. 更改为在 Python UI 渲染端进行大写化转换：在 `clipboard_panel.py` 的数据填充处对检测到的语言字符串调用 `.upper()`，再传入 `label.set_text()`。
 - **最终方案**：
-  细化了特定模式的评分权重（Class, Function, Keywords 分类评分），将打分阈值定为 4 分，使得代码片段极易跨过阈值，而普通含词文本绝难积累过 4 分。
+  在 CSS 中仅保留基础的颜色与大小样式，在 Python 代码层将语言名称转为大写后再展示。
 - **预防建议**：
-  在设计文本 analysis 打分机制时，应充分考虑高频天然词汇（Natural Language Keywords）的影响，使用组合正则或边界分级权重隔离技术。
+  在开发 GTK3/PyGObject 应用时，严禁使用任何高级或非主流的 CSS 属性（如 `!important`, `text-transform`, `box-shadow` 的复杂多重阴影等）。如果需要转换文本，应优先在 Python 逻辑层完成。
 
-### 问题2：lone curly braces（孤立/空大括号）在文本 strip 后失去换行符导致误判
-- **问题描述**：在旧版检测脚本中，测试用例 `}\n` 或者是 `{\r\n}` 能够匹配大括号换行被归为 `code`。但是在优化为启发式打分时，该文本被首先 `.strip()` 剥离了首尾所有空格换行符，使正则 `CURLY_NEWLINE_RE` 匹配失效，从而被归为了 `text`。
+### 问题2：引入语言标识后发生拼写错误（AttributeError）导致 JS 复制代码崩溃
+- **问题描述**：在复制一段 JavaScript 代码时，系统托盘图标运行但快捷键无法弹出面板，服务后台日志报错 `AttributeError: 'ClipboardPanel' object has no attribute '_clip_store'`。
+- **原因分析**：在 `clipboard_panel.py` 第 543 行左右的 `on_clipboard_owner_change` / 数据添加事件中，为了获取语言信息以决定是否显示，调用了 `self._clip_store.classify_text(item_text)`。然而在 `ClipboardPanel` 类中，剪切板存储库的实例变量名应为 `self.clipboard_store`。
+- **解决过程**：
+  1. 检查 `clipboard_panel.py` 内部对 clipboard store 的引用，确认类变量为 `self.clipboard_store`。
+  2. 将 `self._clip_store` 替换为 `self.clipboard_store`。
+- **最终方案**：
+  将 `clipboard_panel.py` 中错误引用的属性名称纠正为 `self.clipboard_store`。
+- **预防建议**：
+  在代码修改和重构后，对于任何涉及全局/底层事件监听的逻辑，必须在各种输入条件（如复制 text/code/link）下进行充分的手动触发测试。
+
+### 问题3：多文件判定代码大量重复
+- **问题描述**：为了在历史数据迁移脚本 [migrate_history.py](file:///home/hzb/opencode-switcher/migrate_history.py) 中也进行高精度代码检测，该文件复制了 `clipboard_store.py` 里的 25 个正则以及 `classify_text`/`detect_language_name` 等判定逻辑（共 200+ 行重复代码）。
+- **原因分析**：未将共用算法提取为模块级公共函数。
+- **解决过程**：
+  1. 在 `clipboard_store.py` 中，将 `classify_text` 和 `detect_language_name` 移出 `ClipboardStore` 类，定义为模块级的全局函数。
+  2. 在 `ClipboardStore` 类中保留包装方法，保证对外部库的向后兼容。
+  3. 修改 `migrate_history.py`，彻底删除重复的正则与函数定义，变更为 `from clipboard_store import classify_text, detect_language_name` 导入。
+- **最终方案**：
+  重构核心分类器为模块全局函数并在两端共用，彻底消除了冗余代码，并使用 `test_clipboard_classification.py` 进行了全量用例验证。
+- **预防建议**：
+  如果一个工具类/底层库中包含不依赖实例状态（如 `self`）的纯计算函数，应优先考虑将其设计为模块级别的独立函数，方便其他辅助脚本直接导入使用。
+
+### 问题4：未 strip 的原生字符串对 `CURLY_NEWLINE_RE` 匹配失效导致老旧用例识别失效
+- **问题描述**：测试用例 `}\n` 或者是 `{\r\n}` 能够通过老版分类器被匹配为 `code`。但在优化为启发式打分时，该文本被首先 `.strip()` 剥离了首尾所有空格换行符，使正则 `CURLY_NEWLINE_RE` 匹配失效，从而被归为了 `text`。
 - **原因分析**：大括号换行属于一种极其特殊的跨行片段，对它的匹配对文本周围的换行格式有强依赖，但分类器入口处的全局 `strip` 破坏了该格式。
 - **解决过程**：
   在 `classify_text` 的前半部分设计一个独立的早期快捷退出条件，在对文本进行 `.strip()` 之前（或者通过原生的未 strip 文本 `text`）进行 `CURLY_NEWLINE_RE` 正则检索。
@@ -40,40 +61,21 @@
 - **预防建议**：
   需要匹配结构化格式、缩进、或包含边界换行特征的正则，必须对未剥离空白（unstripped）的原生字符串执行正则检查。
 
----
-
 ## 三、技术要点沉淀
 
-- **跨平台/多语言双端分类算法设计规范**：
-  设计双端（Python + JavaScript）分类正则和逻辑时，需要以最小公共正则特性集为标准（例如，避免在 JavaScript 中使用复杂的 Python 正则特性，反之亦然）。
-- **Python / JS 双端高精度分类核心实现**：
-  - **Python 代码打分段**：
-    ```python
-    # 3.5 Curly Braces with Newline Check (typical of block-structured code)
-    if CURLY_NEWLINE_RE.search(text):
-        return "code"
-    
-    # 4. Code Heuristics Scorer
-    # ... (detailed scorers for Python, CPP, Java, JS, SQL, Semicolon, Curly Braces)
-    ```
-  - **JavaScript 代码打分段**：
-    ```javascript
-    // 3.5 Curly Braces with Newline Check
-    if (/[\{\}]\s*[\r\n]|[\r\n]\s*[\{\}]/.test(text)) {
-        return "code";
-    }
-    ```
-
----
+- **模块级公共辅助函数设计**：
+  将没有实例状态依赖的类方法提取为文件级公共函数，增强了代码的灵活性与可重用性。
+- **多端对齐高保真启发式分类算法**：
+  通过前缀强特征校验（JSON/HTML/Shebang/CLI）+ 多维度关键字权重分级打分模型，实现高稳定高响应的语言检测。
+- **GTK CSS 开发避坑规范**：
+  在为 PyGObject/Gtk.Widget 设计 CSS 时，严禁使用复杂的排版属性（如 `text-transform`, `box-shadow` 的多重效果），必须在 Python 业务逻辑层先行进行数据清洗和大小写转换。
 
 ## 四、后续优化建议
 
-- **模型分类器的极限提效**：若后期剪切板历史极长，可以对频繁的正则匹配做预先的大小写不敏感优化（JS 的 `/i`，Python 的 `re.I`）或基于剪切板首字符进行快速跳过分支。
-- **支持更多语种识别**：例如 Markdown 语法（块引用 \`\`\` 等）的直接提取与打标展示。
-
----
+- **支持更丰富的编程语言**：未来可在打分机制中加入 Markdown、Go、Rust、YML/YAML 等其他常用语言的具体判定与语言标记。
+- **性能优化限制**：如果剪切板历史数量非常大，可以在正则检测时，对匹配较慢的正则（如 SQL）采用针对性的大写首字符优先匹配分支等方式进行过滤加速。
 
 ## 五、参考资料
 
-- copyous 开源剪切板扩展中 Highlight.js 对代码识别的分值计算方法。
-- GJS API 手册及 Mozilla SpiderMonkey 引擎 RegExp 特性限制文档。
+- `copyous` 开源项目关于 Highlight.js 启发式打分机制的实现方法。
+- `PyGObject` 官方 API 关于样式与 CSS Provider 的限制文档。
