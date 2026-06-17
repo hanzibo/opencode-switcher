@@ -6,6 +6,9 @@ import re
 CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
 CLIPBOARD_PATH = os.path.join(CONFIG_DIR, "clipboard_history.json")
 
+CODE_KEYWORDS_RE = re.compile(r'\b(const|function|export)\b')
+CURLY_NEWLINE_RE = re.compile(r'[\{\}]\s*[\r\n]|[\r\n]\s*[\{\}]')
+
 def classify_text(text: str) -> str:
     stripped = text.strip()
     if stripped.startswith("http"):
@@ -13,8 +16,8 @@ def classify_text(text: str) -> str:
     
     # Check JS/Gjs keywords: const, function, export
     # Check curly braces with newline: {\s*\n or \n\s*}
-    has_keywords = bool(re.search(r'\b(const|function|export)\b', text))
-    has_curly_newline = bool(re.search(r'[\{\}]\s*[\r\n]|[\r\n]\s*[\{\}]', text))
+    has_keywords = bool(CODE_KEYWORDS_RE.search(text))
+    has_curly_newline = bool(CURLY_NEWLINE_RE.search(text))
     if has_keywords or has_curly_newline:
         return "code"
         

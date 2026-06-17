@@ -1,6 +1,9 @@
 import json
 import re
 import os
+
+CODE_KEYWORDS_RE = re.compile(r'\b(const|function|export)\b')
+CURLY_NEWLINE_RE = re.compile(r'[\{\}]\s*[\r\n]|[\r\n]\s*[\{\}]')
 import subprocess
 import time
 import hashlib
@@ -66,7 +69,7 @@ class ClipboardStore:
         if not os.path.isfile(CLIPBOARD_PATH):
             return
         try:
-            with open(CLIPBOARD_PATH) as f:
+            with open(CLIPBOARD_PATH, "r") as f:
                 data = json.load(f)
             self._items = [ClipboardItem(**d) for d in data[-MAX_CLIPBOARD:]]
         except (json.JSONDecodeError, TypeError):
@@ -77,15 +80,15 @@ class ClipboardStore:
         with open(CLIPBOARD_PATH, "w") as f:
             json.dump([asdict(i) for i in self._items], f)
 
-    def _classify_text(self, text: str) -> str:
+    def classify_text(self, text: str) -> str:
         stripped = text.strip()
         if stripped.startswith("http"):
             return "link"
         
         # Check JS/Gjs keywords: const, function, export
         # Check curly braces with newline: {\s*\n or \n\s*}
-        has_keywords = bool(re.search(r'\b(const|function|export)\b', text))
-        has_curly_newline = bool(re.search(r'[\{\}]\s*[\r\n]|[\r\n]\s*[\{\}]', text))
+        has_keywords = bool(CODE_KEYWORDS_RE.search(text))
+        has_curly_newline = bool(CURLY_NEWLINE_RE.search(text))
         if has_keywords or has_curly_newline:
             return "code"
             
@@ -99,7 +102,7 @@ class ClipboardStore:
             return
         if self._items and self._items[-1].hash == h:
             return
-        item_type = self._classify_text(text)
+        item_type = self.classify_text(text)
         self._items.append(ClipboardItem(text=text, timestamp=int(time.time() * 1000), hash=h, type=item_type))
         if len(self._items) > MAX_CLIPBOARD:
             self._items = self._items[-MAX_CLIPBOARD:]
