@@ -474,7 +474,7 @@ class ClipboardPanel(Gtk.Box):
             self._content_list.remove(child)
 
         if self._active_category_id == "__clipboard__":
-            self._filter_tabs_box.show()
+            self._filter_tabs_box.show_all()
             items = self._clip_items
         else:
             self._filter_tabs_box.hide()
