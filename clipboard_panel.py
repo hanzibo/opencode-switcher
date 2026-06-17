@@ -473,8 +473,10 @@ class ClipboardPanel(Gtk.Box):
             self._content_list.remove(child)
 
         if self._active_category_id == "__clipboard__":
+            self._filter_tabs_box.show()
             items = self._clip_items
         else:
+            self._filter_tabs_box.hide()
             cat = self._cat_store.get(self._active_category_id)
             items = cat.items if cat else []
 
@@ -528,8 +530,8 @@ class ClipboardPanel(Gtk.Box):
                 if query not in title.lower() and query not in text.lower():
                     return False
                     
-        # 2. Apply Tab Filter
-        if self._active_tab_type != "all":
+        # 2. Apply Tab Filter (only if active category is __clipboard__)
+        if self._active_category_id == "__clipboard__" and self._active_tab_type != "all":
             # Determine type of this item
             item_type = getattr(item, "type", None)
             if item_type is None:
@@ -970,6 +972,16 @@ class ClipboardPanel(Gtk.Box):
             return
         self._active_category_id = row.cat_id
         self._selected_index = 0
+        
+        # Reset the tab type to "all" when switching categories
+        self._active_tab_type = "all"
+        for t_type, btn in self._tab_buttons.items():
+            context = btn.get_style_context()
+            if t_type == "all":
+                context.add_class("filter-tab-active")
+            else:
+                context.remove_class("filter-tab-active")
+                
         if not self._in_category_button:
             self._rebuild()
 
