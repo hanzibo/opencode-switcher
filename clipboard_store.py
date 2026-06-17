@@ -522,7 +522,7 @@ class CustomPrompt:
     id: str
     name: str
     prompt: str
-    categories: List[str] = None
+    categories: Optional[List[str]] = None
 
 
 class CustomPromptsStore:

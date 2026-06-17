@@ -1289,6 +1289,16 @@ class ClipboardPanel(Gtk.Box):
         link_check.connect("toggled", on_check_toggled)
         code_check.connect("toggled", on_check_toggled)
 
+        def get_selected_categories():
+            cats = []
+            if text_check.get_active():
+                cats.append("text")
+            if link_check.get_active():
+                cats.append("link")
+            if code_check.get_active():
+                cats.append("code")
+            return cats
+
         # Bottom buttons
         bottom_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
         bottom_box.set_margin_top(8)
@@ -1321,14 +1331,7 @@ class ClipboardPanel(Gtk.Box):
                 prompts[self._dialog_active_idx].prompt = prompt_text
 
                 # Save categories
-                cats = []
-                if text_check.get_active():
-                    cats.append("text")
-                if link_check.get_active():
-                    cats.append("link")
-                if code_check.get_active():
-                    cats.append("code")
-                prompts[self._dialog_active_idx].categories = cats
+                prompts[self._dialog_active_idx].categories = get_selected_categories()
 
         def load_prompt_to_fields(idx):
             if 0 <= idx < len(prompts):
@@ -1442,13 +1445,7 @@ class ClipboardPanel(Gtk.Box):
 
         def on_confirm_clicked(_btn):
             # Validate categories
-            cats = []
-            if text_check.get_active():
-                cats.append("text")
-            if link_check.get_active():
-                cats.append("link")
-            if code_check.get_active():
-                cats.append("code")
+            cats = get_selected_categories()
 
             if 0 <= self._dialog_active_idx < len(prompts) and not cats:
                 warning = Gtk.MessageDialog(
