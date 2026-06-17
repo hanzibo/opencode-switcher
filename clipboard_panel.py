@@ -1061,14 +1061,21 @@ class ClipboardPanel(Gtk.Box):
 
             custom_prompts = self._custom_prompts_store.get_all()
             if custom_prompts:
-                sep = Gtk.SeparatorMenuItem.new()
-                menu.append(sep)
-
-                for p in custom_prompts:
-                    prompt_item = Gtk.MenuItem.new_with_label(p.name)
-                    prompt_item.set_sensitive(getattr(item, "type", "text") == "text")
-                    prompt_item.connect("activate", lambda *_, p_obj=p: self._ask_custom_prompt(item, p_obj))
-                    menu.append(prompt_item)
+                item_type = getattr(item, "type", "text")
+                if item_type != "image":
+                    applicable_prompts = []
+                    for p in custom_prompts:
+                        p_categories = getattr(p, "categories", None) or ["text"]
+                        if item_type in p_categories:
+                            applicable_prompts.append(p)
+                    
+                    if applicable_prompts:
+                        sep = Gtk.SeparatorMenuItem.new()
+                        menu.append(sep)
+                        for p in applicable_prompts:
+                            prompt_item = Gtk.MenuItem.new_with_label(p.name)
+                            prompt_item.connect("activate", lambda *_, p_obj=p: self._ask_custom_prompt(item, p_obj))
+                            menu.append(prompt_item)
         else:
             copy_item = Gtk.MenuItem.new_with_label("Copy")
             copy_item.connect("activate", lambda *_: self._activate_item(item))
@@ -1231,7 +1238,56 @@ class ClipboardPanel(Gtk.Box):
         prompt_textview.set_wrap_mode(Gtk.WrapMode.WORD)
         prompt_scrolled.add(prompt_textview)
         mid_vbox.pack_start(prompt_scrolled, True, True, 0)
+
+        # Checkboxes for categories
+        applicability_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
+        applicability_hbox.set_margin_top(8)
+        applicability_hbox.set_margin_bottom(8)
+
+        app_label = Gtk.Label.new("适用类别:")
+        app_label.set_xalign(0)
+        applicability_hbox.pack_start(app_label, False, False, 0)
+
+        select_all_check = Gtk.CheckButton.new_with_label("全选")
+        text_check = Gtk.CheckButton.new_with_label("文本")
+        link_check = Gtk.CheckButton.new_with_label("链接")
+        code_check = Gtk.CheckButton.new_with_label("代码")
+
+        applicability_hbox.pack_start(select_all_check, False, False, 0)
+        applicability_hbox.pack_start(text_check, False, False, 0)
+        applicability_hbox.pack_start(link_check, False, False, 0)
+        applicability_hbox.pack_start(code_check, False, False, 0)
+
+        mid_vbox.pack_start(applicability_hbox, False, False, 0)
         vbox.pack_start(mid_vbox, True, True, 0)
+
+        updating_checks = [False]
+
+        def update_select_all_state():
+            if updating_checks[0]:
+                return
+            updating_checks[0] = True
+            all_checked = text_check.get_active() and link_check.get_active() and code_check.get_active()
+            select_all_check.set_active(all_checked)
+            updating_checks[0] = False
+
+        def on_select_all_toggled(widget):
+            if updating_checks[0]:
+                return
+            updating_checks[0] = True
+            active = widget.get_active()
+            text_check.set_active(active)
+            link_check.set_active(active)
+            code_check.set_active(active)
+            updating_checks[0] = False
+
+        def on_check_toggled(widget):
+            update_select_all_state()
+
+        select_all_check.connect("toggled", on_select_all_toggled)
+        text_check.connect("toggled", on_check_toggled)
+        link_check.connect("toggled", on_check_toggled)
+        code_check.connect("toggled", on_check_toggled)
 
         # Bottom buttons
         bottom_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
@@ -1264,25 +1320,62 @@ class ClipboardPanel(Gtk.Box):
                 prompt_text = buffer.get_text(start, end, True)
                 prompts[self._dialog_active_idx].prompt = prompt_text
 
+                # Save categories
+                cats = []
+                if text_check.get_active():
+                    cats.append("text")
+                if link_check.get_active():
+                    cats.append("link")
+                if code_check.get_active():
+                    cats.append("code")
+                prompts[self._dialog_active_idx].categories = cats
+
         def load_prompt_to_fields(idx):
             if 0 <= idx < len(prompts):
+                updating_checks[0] = True
                 # Temporarily block the name_entry changed handler to prevent self-triggering cycle
                 name_entry.handler_block(changed_handler_id)
                 name_entry.set_text(prompts[idx].name)
                 name_entry.handler_unblock(changed_handler_id)
 
                 prompt_textview.get_buffer().set_text(prompts[idx].prompt)
+
+                # Load categories
+                cats = getattr(prompts[idx], "categories", None) or ["text"]
+                text_check.set_active("text" in cats)
+                link_check.set_active("link" in cats)
+                code_check.set_active("code" in cats)
+
+                all_checked = "text" in cats and "link" in cats and "code" in cats
+                select_all_check.set_active(all_checked)
+                updating_checks[0] = False
+
                 name_entry.set_sensitive(True)
                 prompt_textview.set_sensitive(True)
+                text_check.set_sensitive(True)
+                link_check.set_sensitive(True)
+                code_check.set_sensitive(True)
+                select_all_check.set_sensitive(True)
                 delete_btn.set_sensitive(True)
             else:
+                updating_checks[0] = True
                 name_entry.handler_block(changed_handler_id)
                 name_entry.set_text("")
                 name_entry.handler_unblock(changed_handler_id)
 
                 prompt_textview.get_buffer().set_text("")
+                text_check.set_active(False)
+                link_check.set_active(False)
+                code_check.set_active(False)
+                select_all_check.set_active(False)
+                updating_checks[0] = False
+
                 name_entry.set_sensitive(False)
                 prompt_textview.set_sensitive(False)
+                text_check.set_sensitive(False)
+                link_check.set_sensitive(False)
+                code_check.set_sensitive(False)
+                select_all_check.set_sensitive(False)
                 delete_btn.set_sensitive(False)
 
         def rebuild_tabs():
@@ -1312,7 +1405,8 @@ class ClipboardPanel(Gtk.Box):
             new_p = CustomPrompt(
                 id=str(uuid4()),
                 name="New Prompt",
-                prompt=""
+                prompt="",
+                categories=["text"]
             )
             prompts.append(new_p)
             self._dialog_active_idx = len(prompts) - 1
@@ -1347,10 +1441,38 @@ class ClipboardPanel(Gtk.Box):
             confirm.show_all()
 
         def on_confirm_clicked(_btn):
+            # Validate categories
+            cats = []
+            if text_check.get_active():
+                cats.append("text")
+            if link_check.get_active():
+                cats.append("link")
+            if code_check.get_active():
+                cats.append("code")
+
+            if 0 <= self._dialog_active_idx < len(prompts) and not cats:
+                warning = Gtk.MessageDialog(
+                    transient_for=dialog,
+                    modal=True,
+                    message_type=Gtk.MessageType.WARNING,
+                    buttons=Gtk.ButtonsType.OK,
+                    text="配置无效",
+                )
+                warning.format_secondary_text("请至少勾选一个适用类别（文本、链接、代码）。")
+
+                def on_warn_resp(dlg, resp):
+                    dlg.destroy()
+                warning.connect("response", on_warn_resp)
+                warning.show_all()
+                return
+
             save_current_active_prompt()
             for p in prompts:
                 if not p.name.strip():
                     p.name = "New Prompt"
+                # Safe fallback
+                if not getattr(p, "categories", None):
+                    p.categories = ["text"]
             self._custom_prompts_store.save_all(prompts)
             dialog.destroy()
 

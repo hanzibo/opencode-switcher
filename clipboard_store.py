@@ -522,6 +522,7 @@ class CustomPrompt:
     id: str
     name: str
     prompt: str
+    categories: List[str] = None
 
 
 class CustomPromptsStore:
@@ -535,7 +536,8 @@ class CustomPromptsStore:
                 CustomPrompt(
                     id=str(uuid4()),
                     name="Ask Google",
-                    prompt="以上内容是什么意思，如果是代码，请分析并注释。"
+                    prompt="以上内容是什么意思，如果是代码，请分析并注释。",
+                    categories=["text"]
                 )
             ]
             self._save()
@@ -543,13 +545,18 @@ class CustomPromptsStore:
         try:
             with open(CUSTOM_PROMPTS_PATH) as f:
                 data = json.load(f)
-            self._prompts = [CustomPrompt(**p) for p in data]
+            self._prompts = []
+            for p in data:
+                if "categories" not in p or not p["categories"]:
+                    p["categories"] = ["text"]
+                self._prompts.append(CustomPrompt(**p))
             if not self._prompts:
                 self._prompts = [
                     CustomPrompt(
                         id=str(uuid4()),
                         name="Ask Google",
-                        prompt="以上内容是什么意思，如果是代码，请分析并注释。"
+                        prompt="以上内容是什么意思，如果是代码，请分析并注释。",
+                        categories=["text"]
                     )
                 ]
                 self._save()
@@ -558,7 +565,8 @@ class CustomPromptsStore:
                 CustomPrompt(
                     id=str(uuid4()),
                     name="Ask Google",
-                    prompt="以上内容是什么意思，如果是代码，请分析并注释。"
+                    prompt="以上内容是什么意思，如果是代码，请分析并注释。",
+                    categories=["text"]
                 )
             ]
             self._save()
