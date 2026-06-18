@@ -18,6 +18,7 @@ from utils import relative_time, is_wayland, request_window_focus
 # - Group 2: optional prompt, allowing escaped colons (\:) and equals (\=)
 # - Group 3: optional default value, matched if the leading '=' is not escaped (?<!\\)
 TEMPLATE_REGEX = re.compile(r"\$\{(\d+)(?::((?:[^}=]|\\:|\\=)+))?(?<!\\)(?:=([^}]*))?\}")
+PROMPT_PLACEHOLDER_RE = re.compile(r'\\\\|\\(\${&})|(\${&})')
 
 
 CATEGORY_WIDTH = 200
@@ -1134,7 +1135,7 @@ class ClipboardPanel(Gtk.Box):
 
         # Interpolate ${&} placeholder
         has_placeholder = False
-        pattern = re.compile(r'\\\\|\\(\${&})|(\${&})')
+        pattern = PROMPT_PLACEHOLDER_RE
         def replace(match):
             nonlocal has_placeholder
             matched_str = match.group(0)
