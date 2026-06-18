@@ -1131,16 +1131,41 @@ class ClipboardPanel(Gtk.Box):
     def _ask_custom_prompt(self, item: ClipboardItem, prompt_obj: CustomPrompt):
         original_content = item.text.rstrip()
         custom_prompt = prompt_obj.prompt.strip()
-        if custom_prompt:
-            suffix = " " + custom_prompt
-        else:
+
+        # Interpolate ${&} placeholder
+        has_placeholder = False
+        pattern = re.compile(r'\\\\|\\(\${&})|(\${&})')
+        def replace(match):
+            nonlocal has_placeholder
+            matched_str = match.group(0)
+            if matched_str == '\\\\':
+                return '\\\\'
+            elif match.group(1):
+                return match.group(1)
+            else:
+                has_placeholder = True
+                return original_content
+
+        interpolated = pattern.sub(replace, custom_prompt)
+
+        if has_placeholder:
+            final_query = interpolated.replace('\\\\', '\\')
             suffix = ""
-        final_query = original_content + suffix
+        else:
+            unescaped_prompt = interpolated.replace('\\\\', '\\')
+            if unescaped_prompt:
+                suffix = " " + unescaped_prompt
+            else:
+                suffix = ""
+            final_query = original_content + suffix
 
         if len(final_query) > 2000:
-            max_len = 2000 - len(suffix)
-            truncated_original = original_content[:max_len]
-            final_query = truncated_original + suffix
+            if has_placeholder:
+                final_query = final_query[:2000]
+            else:
+                max_len = 2000 - len(suffix)
+                truncated_original = original_content[:max_len]
+                final_query = truncated_original + suffix
 
             dialog = Gtk.MessageDialog(
                 transient_for=self.get_toplevel(),
@@ -1249,9 +1274,23 @@ class ClipboardPanel(Gtk.Box):
         name_hbox.pack_start(name_entry, True, True, 0)
         mid_vbox.pack_start(name_hbox, False, False, 0)
 
+        prompt_label_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
         prompt_label = Gtk.Label.new("追加提示词:")
         prompt_label.set_xalign(0)
-        mid_vbox.pack_start(prompt_label, False, False, 0)
+        prompt_label_hbox.pack_start(prompt_label, True, True, 0)
+
+        insert_btn = Gtk.Button.new_with_label("+ ${&}")
+        insert_btn.set_tooltip_text("插入剪切板内容占位符")
+        insert_btn.get_style_context().add_class("flat")
+
+        def on_insert_clicked(_btn):
+            buffer = prompt_textview.get_buffer()
+            buffer.insert_at_cursor("${&}")
+            prompt_textview.grab_focus()
+
+        insert_btn.connect("clicked", on_insert_clicked)
+        prompt_label_hbox.pack_end(insert_btn, False, False, 0)
+        mid_vbox.pack_start(prompt_label_hbox, False, False, 0)
 
         prompt_scrolled = Gtk.ScrolledWindow.new()
         prompt_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -1378,6 +1417,7 @@ class ClipboardPanel(Gtk.Box):
 
                 name_entry.set_sensitive(True)
                 prompt_textview.set_sensitive(True)
+                insert_btn.set_sensitive(True)
                 text_check.set_sensitive(True)
                 link_check.set_sensitive(True)
                 code_check.set_sensitive(True)
@@ -1398,6 +1438,7 @@ class ClipboardPanel(Gtk.Box):
 
                 name_entry.set_sensitive(False)
                 prompt_textview.set_sensitive(False)
+                insert_btn.set_sensitive(False)
                 text_check.set_sensitive(False)
                 link_check.set_sensitive(False)
                 code_check.set_sensitive(False)
