@@ -4,3 +4,6 @@ run.log
 .deepseek/
 toggle.sock
 venv/
+.hzb-agents/
+.omo/
+codebase_analysis.md
