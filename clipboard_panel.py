@@ -2733,10 +2733,7 @@ class ClipboardPanel(Gtk.Box):
                     start_iter = buf.get_start_iter()
                     end_iter = buf.get_end_iter()
                     val = buf.get_text(start_iter, end_iter, True)
-                    if not val:
-                        replacement = ""
-                    else:
-                        replacement = val
+                    replacement = val or ""
                     pattern = r"\$\{" + str(num) + r"(?:[:=][^}]+)?\}"
                     text = re.sub(pattern, lambda m: replacement, text)
                 preview_buffer.set_text(text)
