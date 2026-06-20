@@ -1357,7 +1357,7 @@ class ClipboardPanel(Gtk.Box):
                         try:
                             chunk_json = json.loads(data_str)
                             delta = chunk_json["choices"][0]["delta"]
-                            if "content" in delta:
+                            if "content" in delta and delta["content"] is not None:
                                 text_chunk = delta["content"]
                                 GLib.idle_add(self._append_ai_text, text_chunk)
                         except Exception:
@@ -1377,6 +1377,8 @@ class ClipboardPanel(Gtk.Box):
             GLib.idle_add(self._on_llm_api_finished)
 
     def _append_ai_text(self, text: str):
+        if not text or not isinstance(text, str):
+            return
         buffer = self._ai_textview.get_buffer()
         end_iter = buffer.get_end_iter()
         buffer.insert(end_iter, text)
