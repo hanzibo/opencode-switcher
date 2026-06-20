@@ -9,7 +9,7 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo
 from typing import Optional, Callable, List
 from uuid import uuid4
-from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore
+from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore
 import time
 from utils import relative_time, is_wayland, request_window_focus
 
@@ -67,6 +67,7 @@ class ClipboardPanel(Gtk.Box):
         self._clip_store = clip_store
         self._cat_store = cat_store
         self._custom_prompts_store = CustomPromptsStore()
+        self._llm_settings_store = LLMSettingsStore()
         self._active_category_id = "__clipboard__"
         self._clip_items: List[ClipboardItem] = []
         self._selected_index = 0
@@ -234,9 +235,80 @@ class ClipboardPanel(Gtk.Box):
         self._btn_sort_cats = Gtk.Button.new_with_label("Sort Categories")
         self._btn_sort_cats.connect("clicked", self._on_sort_cats_clicked)
  
+        # AI Assistant Sidebar Panel (折叠看盘)
+        self._ai_sep = Gtk.Separator.new(Gtk.Orientation.VERTICAL)
+        self._ai_sep.set_no_show_all(True)
+
+        self._ai_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+        self._ai_vbox.set_size_request(300, -1)
+        self._ai_vbox.set_margin_start(8)
+        self._ai_vbox.set_margin_end(8)
+        self._ai_vbox.set_margin_top(12)
+        self._ai_vbox.set_margin_bottom(12)
+        self._ai_vbox.set_no_show_all(True)
+
+        # Title / Header
+        ai_hdr = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+        ai_lbl = Gtk.Label.new()
+        ai_lbl.set_markup("<b>AI 助手看盘</b>")
+        ai_lbl.set_xalign(0)
+        ai_hdr.pack_start(ai_lbl, True, True, 0)
+
+        self._ai_spinner = Gtk.Spinner.new()
+        self._ai_spinner.set_no_show_all(True)
+        ai_hdr.pack_start(self._ai_spinner, False, False, 0)
+
+        # Copy button
+        self._btn_copy_ai = Gtk.Button.new_with_label("📋 复制")
+        self._btn_copy_ai.set_tooltip_text("复制AI分析建议")
+        self._btn_copy_ai.get_style_context().add_class("flat")
+        
+        def on_copy_ai_clicked(_btn):
+            buffer = self._ai_textview.get_buffer()
+            start, end = buffer.get_bounds()
+            text = buffer.get_text(start, end, True)
+            if text:
+                _copy_to_clipboard(text)
+        self._btn_copy_ai.connect("clicked", on_copy_ai_clicked)
+        ai_hdr.pack_start(self._btn_copy_ai, False, False, 0)
+
+        # Close button
+        ai_close = Gtk.Button.new_with_label("❌")
+        ai_close.set_tooltip_text("关闭AI面板")
+        ai_close.get_style_context().add_class("flat")
+        
+        def on_ai_close_clicked(_btn):
+            self._ai_vbox.hide()
+            self._ai_sep.hide()
+            self.queue_resize()
+            
+        ai_close.connect("clicked", on_ai_close_clicked)
+        ai_hdr.pack_start(ai_close, False, False, 0)
+
+        self._ai_vbox.pack_start(ai_hdr, False, False, 0)
+
+        # Separator
+        ai_sep_line = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        self._ai_vbox.pack_start(ai_sep_line, False, False, 0)
+
+        # Scrolled Text view
+        ai_scrolled = Gtk.ScrolledWindow.new()
+        ai_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        ai_scrolled.set_vexpand(True)
+
+        self._ai_textview = Gtk.TextView.new()
+        self._ai_textview.set_editable(False)
+        self._ai_textview.set_wrap_mode(Gtk.WrapMode.WORD)
+        self._ai_textview.set_cursor_visible(False)
+        self._ai_textview.override_font(Pango.FontDescription.from_string("Monospace 10"))
+        ai_scrolled.add(self._ai_textview)
+        self._ai_vbox.pack_start(ai_scrolled, True, True, 0)
+
         self.pack_start(self._cat_vbox, False, True, 0)
         self.pack_start(self._cat_sep, False, False, 0)
         self.pack_start(self._content_vbox, True, True, 0)
+        self.pack_start(self._ai_sep, False, False, 0)
+        self.pack_start(self._ai_vbox, False, False, 0)
         self.pack_start(self._action_sep, False, False, 0)
         self.pack_start(self._action_box, False, False, 0)
 
@@ -1160,6 +1232,12 @@ class ClipboardPanel(Gtk.Box):
                 suffix = ""
             final_query = original_content + suffix
 
+        # Check action type
+        act_type = getattr(prompt_obj, "action_type", "web")
+        if act_type == "api":
+            self._ask_llm_api(final_query)
+            return
+
         if len(final_query) > 2000:
             if has_placeholder:
                 final_query = final_query[:2000]
@@ -1208,6 +1286,106 @@ class ClipboardPanel(Gtk.Box):
             except Exception as e:
                 print(f"Error launching Google search: {e}", flush=True)
 
+    def _ask_llm_api(self, prompt_text: str):
+        # Show the AI panel
+        self._ai_sep.show()
+        self._ai_vbox.show_all()
+        self.queue_resize()
+
+        # Start loading spinner
+        self._ai_spinner.show()
+        self._ai_spinner.start()
+
+        # Clear text view
+        self._ai_textview.get_buffer().set_text("")
+
+        # Read config
+        base_url = self._llm_settings_store.base_url.strip()
+        api_key = self._llm_settings_store.api_key.strip()
+        model_name = self._llm_settings_store.model_name.strip()
+
+        if not api_key:
+            self._ai_spinner.stop()
+            self._ai_spinner.hide()
+            self._ai_textview.get_buffer().set_text(
+                "❌ [错误] API Key 未配置。\n\n"
+                "请点击右下角的「Prompts Config」按钮，并切换到「⚙️ API Settings」面板输入您的 API Key 后保存。"
+            )
+            return
+
+        # Fire off thread
+        threading.Thread(
+            target=self._run_llm_api_request,
+            args=(base_url, api_key, model_name, prompt_text),
+            daemon=True
+        ).start()
+
+    def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, prompt_text: str):
+        import urllib.request
+        import urllib.error
+        import json
+
+        url = base_url.rstrip("/") + "/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+        body = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": prompt_text}],
+            "stream": True
+        }
+
+        req = urllib.request.Request(
+            url=url,
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
+            method="POST"
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=20) as response:
+                for line in response:
+                    line_decoded = line.decode("utf-8", errors="ignore").strip()
+                    if not line_decoded:
+                        continue
+                    if line_decoded.startswith("data:"):
+                        data_str = line_decoded[5:].strip()
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk_json = json.loads(data_str)
+                            delta = chunk_json["choices"][0]["delta"]
+                            if "content" in delta:
+                                text_chunk = delta["content"]
+                                GLib.idle_add(self._append_ai_text, text_chunk)
+                        except Exception:
+                            pass
+            GLib.idle_add(self._on_llm_api_finished)
+        except urllib.error.HTTPError as e:
+            try:
+                err_body = e.read().decode("utf-8", errors="ignore")
+                err_data = json.loads(err_body)
+                err_msg = err_data.get("error", {}).get("message", err_body)
+            except Exception:
+                err_msg = str(e)
+            GLib.idle_add(self._append_ai_text, f"\n\n❌ [请求失败 - HTTP {e.code}]:\n{err_msg}")
+            GLib.idle_add(self._on_llm_api_finished)
+        except Exception as e:
+            GLib.idle_add(self._append_ai_text, f"\n\n❌ [网络或请求错误]:\n{e}")
+            GLib.idle_add(self._on_llm_api_finished)
+
+    def _append_ai_text(self, text: str):
+        buffer = self._ai_textview.get_buffer()
+        end_iter = buffer.get_end_iter()
+        buffer.insert(end_iter, text)
+        mark = buffer.create_mark(None, buffer.get_end_iter(), False)
+        self._ai_textview.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+
+    def _on_llm_api_finished(self):
+        self._ai_spinner.stop()
+        self._ai_spinner.hide()
+
     def _on_prompts_config_clicked(self, _btn):
         self._show_prompts_config_dialog()
 
@@ -1220,11 +1398,14 @@ class ClipboardPanel(Gtk.Box):
         dialog.get_style_context().add_class("custom-dialog")
         dialog.set_title("Prompts Config")
         dialog.set_modal(True)
-        dialog.set_default_size(600, 450)
+        dialog.set_default_size(600, 480)
         dialog.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
         dialog.set_type_hint(Gdk.WindowTypeHint.DIALOG)
         dialog.set_resizable(True)
         dialog.set_transient_for(self.get_toplevel())
+
+        # Track LLM settings edit state
+        self._editing_global_settings = False
 
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         dialog.add(vbox)
@@ -1257,6 +1438,12 @@ class ClipboardPanel(Gtk.Box):
         add_btn = Gtk.Button.new_with_label("➕")
         add_btn.set_tooltip_text("Add new prompt")
         top_bar.pack_start(add_btn, False, False, 0)
+
+        # Global LLM API Config Button
+        settings_btn = Gtk.Button.new_with_label("⚙️ API Settings")
+        settings_btn.set_tooltip_text("Configure Global LLM API credentials")
+        top_bar.pack_start(settings_btn, False, False, 0)
+
         vbox.pack_start(top_bar, False, False, 0)
 
         # Content edit area
@@ -1266,6 +1453,9 @@ class ClipboardPanel(Gtk.Box):
         mid_vbox.set_margin_top(8)
         mid_vbox.set_margin_bottom(8)
 
+        # Container for editing prompts
+        prompt_edit_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 6)
+
         name_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
         name_label = Gtk.Label.new("菜单显示名称:")
         name_label.set_xalign(0)
@@ -1273,7 +1463,7 @@ class ClipboardPanel(Gtk.Box):
         name_entry.set_hexpand(True)
         name_hbox.pack_start(name_label, False, False, 0)
         name_hbox.pack_start(name_entry, True, True, 0)
-        mid_vbox.pack_start(name_hbox, False, False, 0)
+        prompt_edit_box.pack_start(name_hbox, False, False, 0)
 
         prompt_label_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
         prompt_label = Gtk.Label.new("追加提示词:")
@@ -1291,7 +1481,7 @@ class ClipboardPanel(Gtk.Box):
 
         insert_btn.connect("clicked", on_insert_clicked)
         prompt_label_hbox.pack_end(insert_btn, False, False, 0)
-        mid_vbox.pack_start(prompt_label_hbox, False, False, 0)
+        prompt_edit_box.pack_start(prompt_label_hbox, False, False, 0)
 
         prompt_scrolled = Gtk.ScrolledWindow.new()
         prompt_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -1300,12 +1490,24 @@ class ClipboardPanel(Gtk.Box):
         prompt_textview = Gtk.TextView.new()
         prompt_textview.set_wrap_mode(Gtk.WrapMode.WORD)
         prompt_scrolled.add(prompt_textview)
-        mid_vbox.pack_start(prompt_scrolled, True, True, 0)
+        prompt_edit_box.pack_start(prompt_scrolled, True, True, 0)
+
+        # Executing mode toggle buttons
+        mode_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
+        mode_label = Gtk.Label.new("执行模式:")
+        mode_label.set_xalign(0)
+        mode_hbox.pack_start(mode_label, False, False, 0)
+
+        mode_web_radio = Gtk.RadioButton.new_with_label(None, "Web 搜索 (Google)")
+        mode_api_radio = Gtk.RadioButton.new_with_label_from_widget(mode_web_radio, "API 询问 (原生 API)")
+        mode_hbox.pack_start(mode_web_radio, False, False, 0)
+        mode_hbox.pack_start(mode_api_radio, False, False, 0)
+        prompt_edit_box.pack_start(mode_hbox, False, False, 4)
 
         # Checkboxes for categories
         applicability_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
-        applicability_hbox.set_margin_top(8)
-        applicability_hbox.set_margin_bottom(8)
+        applicability_hbox.set_margin_top(4)
+        applicability_hbox.set_margin_bottom(4)
 
         app_label = Gtk.Label.new("适用类别:")
         app_label.set_xalign(0)
@@ -1321,7 +1523,69 @@ class ClipboardPanel(Gtk.Box):
         applicability_hbox.pack_start(link_check, False, False, 0)
         applicability_hbox.pack_start(code_check, False, False, 0)
 
-        mid_vbox.pack_start(applicability_hbox, False, False, 0)
+        prompt_edit_box.pack_start(applicability_hbox, False, False, 0)
+        mid_vbox.pack_start(prompt_edit_box, True, True, 0)
+
+        # Container for global LLM API credentials configuration
+        llm_edit_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+
+        llm_title = Gtk.Label.new()
+        llm_title.set_markup("<b>全局 API 配置 (OpenAI 兼容格式)</b>")
+        llm_title.set_xalign(0)
+        llm_title.set_margin_bottom(6)
+        llm_edit_box.pack_start(llm_title, False, False, 0)
+
+        url_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        url_lbl = Gtk.Label.new("Base URL:")
+        url_lbl.set_size_request(90, -1)
+        url_lbl.set_xalign(0)
+        base_url_entry = Gtk.Entry.new()
+        base_url_entry.set_placeholder_text("例如: https://api.deepseek.com/v1")
+        base_url_entry.set_hexpand(True)
+        url_hbox.pack_start(url_lbl, False, False, 0)
+        url_hbox.pack_start(base_url_entry, True, True, 0)
+        llm_edit_box.pack_start(url_hbox, False, False, 0)
+
+        key_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        key_lbl = Gtk.Label.new("API Key:")
+        key_lbl.set_size_request(90, -1)
+        key_lbl.set_xalign(0)
+        api_key_entry = Gtk.Entry.new()
+        api_key_entry.set_visibility(False)
+        api_key_entry.set_hexpand(True)
+
+        show_key_btn = Gtk.Button.new_with_label("显示")
+        def on_show_key_clicked(_btn):
+            visible = api_key_entry.get_visibility()
+            api_key_entry.set_visibility(not visible)
+            show_key_btn.set_label("隐藏" if not visible else "显示")
+        show_key_btn.connect("clicked", on_show_key_clicked)
+
+        key_hbox.pack_start(key_lbl, False, False, 0)
+        key_hbox.pack_start(api_key_entry, True, True, 0)
+        key_hbox.pack_start(show_key_btn, False, False, 0)
+        llm_edit_box.pack_start(key_hbox, False, False, 0)
+
+        model_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        model_lbl = Gtk.Label.new("Model Name:")
+        model_lbl.set_size_request(90, -1)
+        model_lbl.set_xalign(0)
+        model_name_entry = Gtk.Entry.new()
+        model_name_entry.set_placeholder_text("例如: deepseek-chat, mistral-tiny")
+        model_name_entry.set_hexpand(True)
+        model_hbox.pack_start(model_lbl, False, False, 0)
+        model_hbox.pack_start(model_name_entry, True, True, 0)
+        llm_edit_box.pack_start(model_hbox, False, False, 0)
+
+        note_lbl = Gtk.Label.new("注：敏感 API Key 会以 600 文件权限（仅当前系统用户可读写）安全存储于本地。")
+        note_lbl.set_xalign(0)
+        note_lbl.set_line_wrap(True)
+        note_lbl.get_style_context().add_class("dim-label")
+        llm_edit_box.pack_start(note_lbl, False, False, 6)
+
+        mid_vbox.pack_start(llm_edit_box, False, False, 0)
+        llm_edit_box.hide()  # Hide LLM config pane initially
+
         vbox.pack_start(mid_vbox, True, True, 0)
 
         updating_checks = [False]
@@ -1384,7 +1648,14 @@ class ClipboardPanel(Gtk.Box):
         vbox.reorder_child(bottom_box, -1)
 
         def save_current_active_prompt():
-            if 0 <= self._dialog_active_idx < len(prompts):
+            if self._editing_global_settings:
+                # Save LLM Settings instead of prompt
+                self._llm_settings_store.save(
+                    api_key=api_key_entry.get_text().strip(),
+                    base_url=base_url_entry.get_text().strip(),
+                    model_name=model_name_entry.get_text().strip()
+                )
+            elif 0 <= self._dialog_active_idx < len(prompts):
                 name = name_entry.get_text().strip()
                 prompts[self._dialog_active_idx].name = name if name else "New Prompt"
 
@@ -1396,10 +1667,12 @@ class ClipboardPanel(Gtk.Box):
                 # Save categories
                 prompts[self._dialog_active_idx].categories = get_selected_categories()
 
+                # Save action type
+                prompts[self._dialog_active_idx].action_type = "api" if mode_api_radio.get_active() else "web"
+
         def load_prompt_to_fields(idx):
             if 0 <= idx < len(prompts):
                 updating_checks[0] = True
-                # Temporarily block the name_entry changed handler to prevent self-triggering cycle
                 name_entry.handler_block(changed_handler_id)
                 name_entry.set_text(prompts[idx].name)
                 name_entry.handler_unblock(changed_handler_id)
@@ -1414,6 +1687,14 @@ class ClipboardPanel(Gtk.Box):
 
                 all_checked = "text" in cats and "link" in cats and "code" in cats
                 select_all_check.set_active(all_checked)
+
+                # Load action type
+                act_type = getattr(prompts[idx], "action_type", "web")
+                if act_type == "api":
+                    mode_api_radio.set_active(True)
+                else:
+                    mode_web_radio.set_active(True)
+
                 updating_checks[0] = False
 
                 name_entry.set_sensitive(True)
@@ -1424,6 +1705,8 @@ class ClipboardPanel(Gtk.Box):
                 code_check.set_sensitive(True)
                 select_all_check.set_sensitive(True)
                 delete_btn.set_sensitive(True)
+                mode_web_radio.set_sensitive(True)
+                mode_api_radio.set_sensitive(True)
             else:
                 updating_checks[0] = True
                 name_entry.handler_block(changed_handler_id)
@@ -1445,6 +1728,8 @@ class ClipboardPanel(Gtk.Box):
                 code_check.set_sensitive(False)
                 select_all_check.set_sensitive(False)
                 delete_btn.set_sensitive(False)
+                mode_web_radio.set_sensitive(False)
+                mode_api_radio.set_sensitive(False)
 
         def rebuild_tabs():
             for child in tab_bar_box.get_children():
@@ -1454,11 +1739,18 @@ class ClipboardPanel(Gtk.Box):
             for idx, p in enumerate(prompts):
                 btn = Gtk.Button.new_with_label(p.name)
                 btn.idx = idx
-                if idx == self._dialog_active_idx:
+                if idx == self._dialog_active_idx and not self._editing_global_settings:
                     btn.get_style_context().add_class("suggested-action")
 
                 def on_tab_clicked(b):
+                    nonlocal changed_handler_id
                     save_current_active_prompt()
+                    if self._editing_global_settings:
+                        self._editing_global_settings = False
+                        settings_btn.get_style_context().remove_class("suggested-action")
+                        llm_edit_box.hide()
+                        prompt_edit_box.show()
+
                     self._dialog_active_idx = b.idx
                     rebuild_tabs()
                     load_prompt_to_fields(b.idx)
@@ -1470,11 +1762,18 @@ class ClipboardPanel(Gtk.Box):
 
         def on_add_clicked(_btn):
             save_current_active_prompt()
+            if self._editing_global_settings:
+                self._editing_global_settings = False
+                settings_btn.get_style_context().remove_class("suggested-action")
+                llm_edit_box.hide()
+                prompt_edit_box.show()
+
             new_p = CustomPrompt(
                 id=str(uuid4()),
                 name="New Prompt",
                 prompt="",
-                categories=["text"]
+                categories=["text"],
+                action_type="web"
             )
             prompts.append(new_p)
             self._dialog_active_idx = len(prompts) - 1
@@ -1482,7 +1781,32 @@ class ClipboardPanel(Gtk.Box):
             load_prompt_to_fields(self._dialog_active_idx)
             name_entry.grab_focus()
 
+        def on_settings_clicked(_btn):
+            if self._editing_global_settings:
+                return
+            save_current_active_prompt()
+            self._editing_global_settings = True
+
+            # De-highlight all prompt buttons
+            for b in tab_buttons.values():
+                b.get_style_context().remove_class("suggested-action")
+            settings_btn.get_style_context().add_class("suggested-action")
+
+            prompt_edit_box.hide()
+            llm_edit_box.show_all()
+
+            # Load LLM Settings values to fields
+            base_url_entry.set_text(self._llm_settings_store.base_url)
+            api_key_entry.set_text(self._llm_settings_store.api_key)
+            model_name_entry.set_text(self._llm_settings_store.model_name)
+
+            delete_btn.set_sensitive(False)
+
+        settings_btn.connect("clicked", on_settings_clicked)
+
         def on_delete_clicked(_btn):
+            if self._editing_global_settings:
+                return
             if not (0 <= self._dialog_active_idx < len(prompts)):
                 return
 
@@ -1509,38 +1833,41 @@ class ClipboardPanel(Gtk.Box):
             confirm.show_all()
 
         def on_confirm_clicked(_btn):
-            # Validate categories
-            cats = get_selected_categories()
-
-            if 0 <= self._dialog_active_idx < len(prompts) and not cats:
-                warning = Gtk.MessageDialog(
-                    transient_for=dialog,
-                    modal=True,
-                    message_type=Gtk.MessageType.WARNING,
-                    buttons=Gtk.ButtonsType.OK,
-                    text="配置无效",
-                )
-                warning.format_secondary_text("请至少勾选一个适用类别（文本、链接、代码）。")
-
-                def on_warn_resp(dlg, resp):
-                    dlg.destroy()
-                warning.connect("response", on_warn_resp)
-                warning.show_all()
-                return
-
+            # Save whichever is active currently
             save_current_active_prompt()
+
+            # Validate categories for normal prompts
+            if not self._editing_global_settings and 0 <= self._dialog_active_idx < len(prompts):
+                cats = get_selected_categories()
+                if not cats:
+                    warning = Gtk.MessageDialog(
+                        transient_for=dialog,
+                        modal=True,
+                        message_type=Gtk.MessageType.WARNING,
+                        buttons=Gtk.ButtonsType.OK,
+                        text="配置无效",
+                    )
+                    warning.format_secondary_text("请至少勾选一个适用类别（文本、链接、代码）。")
+
+                    def on_warn_resp(dlg, resp):
+                        dlg.destroy()
+                    warning.connect("response", on_warn_resp)
+                    warning.show_all()
+                    return
+
             for p in prompts:
                 if not p.name.strip():
                     p.name = "New Prompt"
-                # Safe fallback
                 if not getattr(p, "categories", None):
                     p.categories = ["text"]
+                if not getattr(p, "action_type", None):
+                    p.action_type = "web"
             self._custom_prompts_store.save_all(prompts)
             dialog.destroy()
 
         def on_name_changed(entry):
             idx = self._dialog_active_idx
-            if 0 <= idx < len(prompts):
+            if 0 <= idx < len(prompts) and not self._editing_global_settings:
                 new_text = entry.get_text().strip()
                 display_name = new_text if new_text else "New Prompt"
                 prompts[idx].name = display_name

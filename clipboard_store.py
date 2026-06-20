@@ -690,6 +690,47 @@ class CustomPrompt:
     name: str
     prompt: str
     categories: Optional[List[str]] = None
+    action_type: str = "web"
+
+
+LLM_SETTINGS_PATH = os.path.join(CONFIG_DIR, "llm_settings.json")
+
+
+class LLMSettingsStore:
+    def __init__(self):
+        self.api_key = ""
+        self.base_url = "https://api.deepseek.com/v1"
+        self.model_name = "deepseek-chat"
+        self._load()
+
+    def _load(self):
+        if not os.path.isfile(LLM_SETTINGS_PATH):
+            return
+        try:
+            with open(LLM_SETTINGS_PATH) as f:
+                data = json.load(f)
+            self.api_key = data.get("api_key", "")
+            self.base_url = data.get("base_url", "https://api.deepseek.com/v1")
+            self.model_name = data.get("model_name", "deepseek-chat")
+        except Exception:
+            pass
+
+    def save(self, api_key: str, base_url: str, model_name: str):
+        self.api_key = api_key
+        self.base_url = base_url
+        self.model_name = model_name
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        try:
+            fd = os.open(LLM_SETTINGS_PATH, flags, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump({
+                    "api_key": self.api_key,
+                    "base_url": self.base_url,
+                    "model_name": self.model_name
+                }, f, indent=2)
+        except Exception as e:
+            print(f"Error saving LLM settings: {e}", flush=True)
 
 
 class CustomPromptsStore:
@@ -704,7 +745,8 @@ class CustomPromptsStore:
                     id=str(uuid4()),
                     name="Ask Google",
                     prompt="以上内容是什么意思，如果是代码，请分析并注释。",
-                    categories=["text"]
+                    categories=["text"],
+                    action_type="web"
                 )
             ]
             self._save()
@@ -716,14 +758,20 @@ class CustomPromptsStore:
             for p in data:
                 if "categories" not in p or not p["categories"]:
                     p["categories"] = ["text"]
-                self._prompts.append(CustomPrompt(**p))
+                if "action_type" not in p:
+                    p["action_type"] = "web"
+                # Filter out unknown keys to prevent TypeError when loading future/past structures
+                allowed_keys = {"id", "name", "prompt", "categories", "action_type"}
+                filtered_p = {k: v for k, v in p.items() if k in allowed_keys}
+                self._prompts.append(CustomPrompt(**filtered_p))
             if not self._prompts:
                 self._prompts = [
                     CustomPrompt(
                         id=str(uuid4()),
                         name="Ask Google",
                         prompt="以上内容是什么意思，如果是代码，请分析并注释。",
-                        categories=["text"]
+                        categories=["text"],
+                        action_type="web"
                     )
                 ]
                 self._save()
@@ -733,7 +781,8 @@ class CustomPromptsStore:
                     id=str(uuid4()),
                     name="Ask Google",
                     prompt="以上内容是什么意思，如果是代码，请分析并注释。",
-                    categories=["text"]
+                    categories=["text"],
+                    action_type="web"
                 )
             ]
             self._save()
