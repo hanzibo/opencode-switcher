@@ -1305,12 +1305,33 @@ class ClipboardPanel(Gtk.Box):
         api_key = self._llm_settings_store.api_key.strip()
         model_name = self._llm_settings_store.model_name.strip()
 
+        # Fallback to environment variables
+        if not api_key:
+            api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+        if not api_key:
+            api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+
+        if not base_url:
+            base_url = os.environ.get("DEEPSEEK_BASE_URL", "").strip()
+        if not base_url:
+            base_url = os.environ.get("OPENAI_BASE_URL", "").strip()
+        if not base_url:
+            base_url = "https://api.deepseek.com/v1"
+
+        if not model_name:
+            model_name = os.environ.get("DEEPSEEK_MODEL_NAME", "").strip()
+        if not model_name:
+            model_name = os.environ.get("OPENAI_MODEL_NAME", "").strip()
+        if not model_name:
+            model_name = "deepseek-chat"
+
         if not api_key:
             self._ai_spinner.stop()
             self._ai_spinner.hide()
             self._ai_textview.get_buffer().set_text(
                 "❌ [错误] API Key 未配置。\n\n"
-                "请点击右下角的「Prompts Config」按钮，并切换到「⚙️ API Settings」面板输入您的 API Key 后保存。"
+                "请点击右下角的「Prompts Config」按钮，并切换到「⚙️ API Settings」面板输入您的 API Key 后保存。\n"
+                "或在您的环境变量中设置 DEEPSEEK_API_KEY / OPENAI_API_KEY 并从终端重启服务。"
             )
             return
 
@@ -1345,6 +1366,10 @@ class ClipboardPanel(Gtk.Box):
         )
 
         try:
+            has_thinking = False
+            thinking_header_added = False
+            answer_header_added = False
+
             with urllib.request.urlopen(req, timeout=20) as response:
                 for line in response:
                     line_decoded = line.decode("utf-8", errors="ignore").strip()
@@ -1357,9 +1382,21 @@ class ClipboardPanel(Gtk.Box):
                         try:
                             chunk_json = json.loads(data_str)
                             delta = chunk_json["choices"][0]["delta"]
-                            if "content" in delta and delta["content"] is not None:
-                                text_chunk = delta["content"]
-                                GLib.idle_add(self._append_ai_text, text_chunk)
+                            
+                            reasoning = delta.get("reasoning_content")
+                            content = delta.get("content")
+                            
+                            if reasoning:
+                                if not thinking_header_added:
+                                    GLib.idle_add(self._append_ai_text, "💭 [Thinking Mode]:\n")
+                                    thinking_header_added = True
+                                GLib.idle_add(self._append_ai_text, reasoning)
+                                has_thinking = True
+                            elif content:
+                                if has_thinking and not answer_header_added:
+                                    GLib.idle_add(self._append_ai_text, "\n\n💡 [Answer]:\n")
+                                    answer_header_added = True
+                                GLib.idle_add(self._append_ai_text, content)
                         except Exception:
                             pass
             GLib.idle_add(self._on_llm_api_finished)
