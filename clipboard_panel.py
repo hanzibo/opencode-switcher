@@ -6,7 +6,8 @@ import re
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo
+gi.require_version("WebKit2", "4.1")
+from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, WebKit2
 from typing import Optional, Callable, List
 from uuid import uuid4
 from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore
@@ -264,9 +265,7 @@ class ClipboardPanel(Gtk.Box):
         self._btn_copy_ai.get_style_context().add_class("flat")
         
         def on_copy_ai_clicked(_btn):
-            buffer = self._ai_textview.get_buffer()
-            start, end = buffer.get_bounds()
-            text = buffer.get_text(start, end, True)
+            text = getattr(self, "_ai_markdown_text", "")
             if text:
                 _copy_to_clipboard(text)
         self._btn_copy_ai.connect("clicked", on_copy_ai_clicked)
@@ -300,56 +299,24 @@ class ClipboardPanel(Gtk.Box):
         ai_scrolled.set_vexpand(True)
 
         self._ai_streaming = False
-        self._ai_vadj = ai_scrolled.get_vadjustment()
-        
-        def on_ai_vadj_changed(adj):
-            if getattr(self, "_ai_streaming", False):
-                adj.set_value(adj.get_upper() - adj.get_page_size())
-                
-        self._ai_vadj.connect("changed", on_ai_vadj_changed)
+        self._ai_webview = WebKit2.WebView.new()
+        self._ai_webview.set_name("aiWebView")
+        self._ai_webview.load_html(self.get_html_template("dark"), "file:///")
 
-        self._ai_textview = Gtk.TextView.new()
-        self._ai_textview.set_name("aiTextView")
-        self._ai_textview.set_editable(False)
-        self._ai_textview.set_wrap_mode(Gtk.WrapMode.WORD)
-        self._ai_textview.set_cursor_visible(False)
-        self._ai_textview.set_left_margin(8)
-        self._ai_textview.set_right_margin(8)
-        self._ai_textview.set_pixels_above_lines(4)
-        self._ai_textview.set_pixels_below_lines(4)
-        ai_scrolled.add(self._ai_textview)
+        # Open external links in default browser
+        def on_decide_policy(webview, decision, decision_type):
+            if decision_type == WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
+                nav_action = decision.get_navigation_action()
+                uri = nav_action.get_request().get_uri()
+                if uri and not (uri.startswith("file://") or uri == "about:blank"):
+                    Gio.AppInfo.launch_default_for_uri(uri, None)
+                    decision.ignore()
+                    return True
+            return False
+        self._ai_webview.connect("decide-policy", on_decide_policy)
+
+        ai_scrolled.add(self._ai_webview)
         self._ai_vbox.pack_start(ai_scrolled, True, True, 0)
-
-        # Initialize text tags for Markdown rendering
-        tb = self._ai_textview.get_buffer()
-        tag_table = tb.get_tag_table()
-
-        self._tag_bold = Gtk.TextTag.new("bold")
-        self._tag_bold.set_property("weight", Pango.Weight.BOLD)
-        tag_table.add(self._tag_bold)
-
-        self._tag_italic = Gtk.TextTag.new("italic")
-        self._tag_italic.set_property("style", Pango.Style.ITALIC)
-        tag_table.add(self._tag_italic)
-
-        self._tag_header = Gtk.TextTag.new("header")
-        self._tag_header.set_property("weight", Pango.Weight.BOLD)
-        self._tag_header.set_property("scale", 1.2)
-        self._tag_header.set_property("pixels_above_lines", 8)
-        self._tag_header.set_property("pixels_below_lines", 4)
-        tag_table.add(self._tag_header)
-
-        self._tag_code = Gtk.TextTag.new("code")
-        self._tag_code.set_property("font", "Monospace 10")
-        tag_table.add(self._tag_code)
-
-        self._tag_code_block = Gtk.TextTag.new("code_block")
-        self._tag_code_block.set_property("font", "Monospace 10")
-        self._tag_code_block.set_property("left_margin", 12)
-        self._tag_code_block.set_property("right_margin", 12)
-        self._tag_code_block.set_property("pixels_above_lines", 6)
-        self._tag_code_block.set_property("pixels_below_lines", 6)
-        tag_table.add(self._tag_code_block)
 
         self.pack_start(self._cat_vbox, False, True, 0)
         self.pack_start(self._cat_sep, False, False, 0)
@@ -550,33 +517,16 @@ class ClipboardPanel(Gtk.Box):
             ".dynamic-copy-tag { color: #2ecc71; font-size: 12px; font-weight: bold; }"
             ".code-lang-tag { color: %(sel_border)s; font-size: 10px; font-weight: bold; margin-bottom: 2px; }"
             ".custom-dialog notebook, .custom-dialog notebook > stack { border: none; background-color: transparent; }"
-            "#aiScrolled, #aiTextView { background-color: transparent; border: none; box-shadow: none; padding: 0; }"
+            "#aiScrolled, #aiWebView { background-color: transparent; border: none; box-shadow: none; padding: 0; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self, self._cat_list, self._content_scrolled, self._content_list):
             w.override_background_color(Gtk.StateFlags.NORMAL, self._bg_color)
 
-        # Update AI text tags colors dynamically
-        tb = self._ai_textview.get_buffer()
-        tag_table = tb.get_tag_table()
-        
-        tag_code = tag_table.lookup("code")
-        if tag_code:
-            if name == "dark":
-                tag_code.set_property("background", "#1e1e24")
-                tag_code.set_property("foreground", "#e06c75")
-            else:
-                tag_code.set_property("background", "#f3f4f6")
-                tag_code.set_property("foreground", "#e11d48")
-                
-        tag_code_block = tag_table.lookup("code_block")
-        if tag_code_block:
-            if name == "dark":
-                tag_code_block.set_property("background", "#18181f")
-                tag_code_block.set_property("foreground", "#abb2bf")
-            else:
-                tag_code_block.set_property("background", "#f8fafc")
-                tag_code_block.set_property("foreground", "#334155")
+        # Update AI webview theme and reload content
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            html = self.get_html_template(name, getattr(self, "_ai_markdown_text", ""))
+            self._ai_webview.load_html(html, "file:///")
 
     def set_theme(self, name: str):
         self._set_theme(name)
@@ -1376,9 +1326,9 @@ class ClipboardPanel(Gtk.Box):
 
         self._ai_streaming = True
 
-        # Clear text view and accumulator
+        # Clear webview and accumulator
         self._ai_markdown_text = ""
-        self._ai_textview.get_buffer().set_text("")
+        self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
 
         # Read config
         base_url = self._llm_settings_store.base_url.strip()
@@ -1409,11 +1359,15 @@ class ClipboardPanel(Gtk.Box):
             self._ai_streaming = False
             self._ai_spinner.stop()
             self._ai_spinner.hide()
-            self._ai_textview.get_buffer().set_text(
+            error_msg = (
                 "❌ [错误] API Key 未配置。\n\n"
                 "请点击右下角的「Prompts Config」按钮，并切换到「⚙️ API Settings」面板输入您的 API Key 后保存。\n"
                 "或在您的环境变量中设置 DEEPSEEK_API_KEY / OPENAI_API_KEY 并从终端重启服务。"
             )
+            self._ai_markdown_text = error_msg
+            import markdown
+            html = markdown.markdown(error_msg, extensions=['fenced_code', 'codehilite'])
+            self._ai_webview.load_html(self.get_html_template(self._theme, html), "file:///")
             return
 
         # Fire off thread
@@ -1506,74 +1460,103 @@ class ClipboardPanel(Gtk.Box):
         self._ai_markdown_text += text
         self._render_markdown(self._ai_markdown_text)
 
+    def get_html_template(self, theme_name, initial_html=""):
+        if theme_name == "dark":
+            bg_color = "#0a0b10"
+            text_color = "rgba(255,255,255,0.95)"
+            pre_bg = "#12131a"
+            code_bg = "rgba(255,255,255,0.06)"
+            code_fg = "#f43f5e"
+            pre_border = "rgba(255,255,255,0.08)"
+            from pygments.formatters import HtmlFormatter
+            pygments_css = HtmlFormatter(style='monokai').get_style_defs('.codehilite')
+        else:
+            bg_color = "#ffffff"
+            text_color = "rgba(15,23,42,0.92)"
+            pre_bg = "rgba(0,0,0,0.02)"
+            code_bg = "rgba(0,0,0,0.04)"
+            code_fg = "#e11d48"
+            pre_border = "rgba(0,0,0,0.08)"
+            from pygments.formatters import HtmlFormatter
+            pygments_css = HtmlFormatter(style='friendly').get_style_defs('.codehilite')
+
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <style>
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                    color: {text_color};
+                    background-color: {bg_color};
+                    line-height: 1.6;
+                    padding: 8px;
+                    margin: 0;
+                    font-size: 14px;
+                }}
+                pre {{
+                    background-color: {pre_bg};
+                    padding: 12px;
+                    border-radius: 6px;
+                    overflow: auto;
+                    border: 1px solid {pre_border};
+                }}
+                code {{
+                    font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+                    font-size: 85%;
+                    background-color: {code_bg};
+                    padding: 2px 4px;
+                    border-radius: 4px;
+                    color: {code_fg};
+                }}
+                pre code {{
+                    background-color: transparent;
+                    padding: 0;
+                    color: inherit;
+                }}
+                h1, h2, h3, h4, h5, h6 {{
+                    margin-top: 16px;
+                    margin-bottom: 8px;
+                    font-weight: 600;
+                    color: inherit;
+                }}
+                p {{
+                    margin-top: 0;
+                    margin-bottom: 8px;
+                }}
+                {pygments_css}
+            </style>
+            <script>
+                function updateContent(html) {{
+                    const content = document.getElementById('content');
+                    content.innerHTML = html;
+                    window.scrollTo(0, document.body.scrollHeight);
+                }}
+            </script>
+        </head>
+        <body class="{theme_name}">
+            <div id="content">{initial_html}</div>
+            <script>
+                window.scrollTo(0, document.body.scrollHeight);
+            </script>
+        </body>
+        </html>
+        """
+
     def _render_markdown(self, text: str):
-        # Create a new buffer referencing the shared tag table
-        new_buffer = Gtk.TextBuffer.new(self._ai_textview.get_buffer().get_tag_table())
+        if not text:
+            js_code = "updateContent('');"
+            self._ai_webview.run_javascript(js_code, None, None)
+            return
+
+        import markdown
+        # Convert Markdown to HTML with fenced code blocks and pygments syntax highlighting
+        html = markdown.markdown(text, extensions=['fenced_code', 'codehilite'])
         
-        if text:
-            import re
-            # Regex to split inline elements: bold (**), italic (*), inline code (`)
-            inline_re = re.compile(r'(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)')
-            
-            lines = text.split("\n")
-            in_code_block = False
-            
-            for idx, line in enumerate(lines):
-                # Check for code block boundary
-                if line.startswith("```"):
-                    in_code_block = not in_code_block
-                    continue
-                    
-                if in_code_block:
-                    end_iter = new_buffer.get_end_iter()
-                    new_buffer.insert_with_tags_by_name(end_iter, line + "\n", "code_block")
-                    continue
-                    
-                # Check for headers
-                is_header = False
-                if line.startswith("#"):
-                    stripped = line.lstrip("#")
-                    header_level = len(line) - len(stripped)
-                    if header_level > 0 and stripped.startswith(" "):
-                        is_header = True
-                        line = stripped.strip()
-                
-                line_tags = []
-                if is_header:
-                    line_tags.append("header")
-                    
-                # Parse inline elements within the line
-                parts = inline_re.split(line)
-                
-                for part in parts:
-                    if not part:
-                        continue
-                    
-                    tags = line_tags[:]
-                    content = part
-                    
-                    if part.startswith("`") and part.endswith("`"):
-                        tags.append("code")
-                        content = part[1:-1]
-                    elif part.startswith("**") and part.endswith("**"):
-                        tags.append("bold")
-                        content = part[2:-2]
-                    elif part.startswith("*") and part.endswith("*"):
-                        tags.append("italic")
-                        content = part[1:-1]
-                        
-                    end_iter = new_buffer.get_end_iter()
-                    if tags:
-                        new_buffer.insert_with_tags_by_name(end_iter, content, *tags)
-                    else:
-                        new_buffer.insert(end_iter, content)
-                        
-                if idx < len(lines) - 1:
-                    end_iter = new_buffer.get_end_iter()
-                    new_buffer.insert(end_iter, "\n")
-                    
-        # Swap buffer atomically
-        self._ai_textview.set_buffer(new_buffer)
+        import json
+        js_code = f"updateContent({json.dumps(html)});"
+        self._ai_webview.run_javascript(js_code, None, None)
 
     def _on_llm_api_finished(self, req_id: int):
         if getattr(self, "_ai_request_id", 0) != req_id:
@@ -1584,8 +1567,8 @@ class ClipboardPanel(Gtk.Box):
         # Defer disabling streaming to ensure final layout finishes and scrolls to bottom
         def stop_streaming():
             if getattr(self, "_ai_request_id", 0) == req_id:
-                if hasattr(self, "_ai_vadj") and self._ai_vadj:
-                    self._ai_vadj.set_value(self._ai_vadj.get_upper() - self._ai_vadj.get_page_size())
+                if hasattr(self, "_ai_webview") and self._ai_webview:
+                    self._ai_webview.run_javascript("window.scrollTo(0, document.body.scrollHeight);", None, None)
                 self._ai_streaming = False
             return False
 

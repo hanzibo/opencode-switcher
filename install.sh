@@ -131,7 +131,9 @@ install_python_deps() {
     python3 -m venv --system-site-packages "$INSTALL_DIR/venv"
     "$INSTALL_DIR/venv/bin/pip" install --quiet \
         "pynput>=1.7" \
-        "python-xlib>=0.33"
+        "python-xlib>=0.33" \
+        "markdown" \
+        "pygments"
     info "Python 依赖安装完成"
 }
 
