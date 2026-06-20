@@ -301,6 +301,13 @@ class ClipboardPanel(Gtk.Box):
         self._ai_streaming = False
         self._ai_webview = WebKit2.WebView.new()
         self._ai_webview.set_name("aiWebView")
+        
+        # Optimize WebKit settings to reduce memory footprint
+        settings = self._ai_webview.get_settings()
+        settings.set_enable_webgl(False)
+        settings.set_enable_html5_database(False)
+        settings.set_enable_html5_local_storage(False)
+        
         self._ai_webview.load_html(self.get_html_template("dark"), "file:///")
 
         # Open external links in default browser
