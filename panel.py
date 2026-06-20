@@ -362,7 +362,7 @@ class SearchPanel:
         self._menu_active = True
 
     def _on_clip_menu_hidden(self):
-        self._menu_active = False
+        GLib.timeout_add(300, self._clear_menu)
 
     def _switch_tab(self, index: int):
         if index == self._active_tab:

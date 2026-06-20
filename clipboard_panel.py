@@ -1289,6 +1289,7 @@ class ClipboardPanel(Gtk.Box):
     def _ask_llm_api(self, prompt_text: str):
         # Show the AI panel
         self._ai_sep.show()
+        self._ai_vbox.show()
         self._ai_vbox.show_all()
         self.queue_resize()
 
