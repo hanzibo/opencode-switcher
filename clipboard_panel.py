@@ -316,7 +316,10 @@ class ClipboardPanel(Gtk.Box):
                 nav_action = decision.get_navigation_action()
                 uri = nav_action.get_request().get_uri()
                 if uri and not (uri.startswith("file://") or uri == "about:blank"):
-                    Gio.AppInfo.launch_default_for_uri(uri, None)
+                    try:
+                        Gio.AppInfo.launch_default_for_uri(uri, None)
+                    except Exception as e:
+                        print(f"Error launching external link {uri}: {e}", flush=True)
                     decision.ignore()
                     return True
             return False
@@ -1372,8 +1375,11 @@ class ClipboardPanel(Gtk.Box):
                 "或在您的环境变量中设置 DEEPSEEK_API_KEY / OPENAI_API_KEY 并从终端重启服务。"
             )
             self._ai_markdown_text = error_msg
-            import markdown
-            html = markdown.markdown(error_msg, extensions=['fenced_code', 'codehilite'])
+            try:
+                import markdown
+                html = markdown.markdown(error_msg, extensions=['fenced_code', 'codehilite'])
+            except ImportError:
+                html = f"<p style='color: #f43f5e; font-weight: bold;'>{error_msg}</p>"
             self._ai_webview.load_html(self.get_html_template(self._theme, html), "file:///")
             return
 
@@ -1475,8 +1481,11 @@ class ClipboardPanel(Gtk.Box):
             code_bg = "rgba(255,255,255,0.06)"
             code_fg = "#f43f5e"
             pre_border = "rgba(255,255,255,0.08)"
-            from pygments.formatters import HtmlFormatter
-            pygments_css = HtmlFormatter(style='monokai').get_style_defs('.codehilite')
+            try:
+                from pygments.formatters import HtmlFormatter
+                pygments_css = HtmlFormatter(style='monokai').get_style_defs('.codehilite')
+            except ImportError:
+                pygments_css = ""
         else:
             bg_color = "#ffffff"
             text_color = "rgba(15,23,42,0.92)"
@@ -1484,8 +1493,11 @@ class ClipboardPanel(Gtk.Box):
             code_bg = "rgba(0,0,0,0.04)"
             code_fg = "#e11d48"
             pre_border = "rgba(0,0,0,0.08)"
-            from pygments.formatters import HtmlFormatter
-            pygments_css = HtmlFormatter(style='friendly').get_style_defs('.codehilite')
+            try:
+                from pygments.formatters import HtmlFormatter
+                pygments_css = HtmlFormatter(style='friendly').get_style_defs('.codehilite')
+            except ImportError:
+                pygments_css = ""
 
         return f"""
         <!DOCTYPE html>
@@ -1557,9 +1569,17 @@ class ClipboardPanel(Gtk.Box):
             self._ai_webview.run_javascript(js_code, None, None)
             return
 
-        import markdown
-        # Convert Markdown to HTML with fenced code blocks and pygments syntax highlighting
-        html = markdown.markdown(text, extensions=['fenced_code', 'codehilite'])
+        try:
+            import markdown
+            # Convert Markdown to HTML with fenced code blocks and pygments syntax highlighting
+            html = markdown.markdown(text, extensions=['fenced_code', 'codehilite'])
+        except ImportError:
+            html = (
+                "<p style='color: #f43f5e; font-weight: bold;'>❌ [错误] 缺少运行时依赖库。</p>"
+                "<p>请在终端中运行以下命令安装所需依赖，并重启服务：</p>"
+                "<pre><code>~/.local/share/opencode-switcher/venv/bin/pip install markdown pygments</code></pre>"
+                f"<hr><pre><code>{text}</code></pre>"
+            )
         
         import json
         js_code = f"updateContent({json.dumps(html)});"
