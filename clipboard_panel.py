@@ -278,7 +278,9 @@ class ClipboardPanel(Gtk.Box):
         ai_close.get_style_context().add_class("flat")
         
         def on_ai_close_clicked(_btn):
+            self._ai_vbox.set_no_show_all(True)
             self._ai_vbox.hide()
+            self._ai_sep.set_no_show_all(True)
             self._ai_sep.hide()
             self.queue_resize()
             
@@ -293,16 +295,61 @@ class ClipboardPanel(Gtk.Box):
 
         # Scrolled Text view
         ai_scrolled = Gtk.ScrolledWindow.new()
+        ai_scrolled.set_name("aiScrolled")
         ai_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         ai_scrolled.set_vexpand(True)
 
+        self._ai_streaming = False
+        self._ai_vadj = ai_scrolled.get_vadjustment()
+        
+        def on_ai_vadj_changed(adj):
+            if getattr(self, "_ai_streaming", False):
+                adj.set_value(adj.get_upper() - adj.get_page_size())
+                
+        self._ai_vadj.connect("changed", on_ai_vadj_changed)
+
         self._ai_textview = Gtk.TextView.new()
+        self._ai_textview.set_name("aiTextView")
         self._ai_textview.set_editable(False)
         self._ai_textview.set_wrap_mode(Gtk.WrapMode.WORD)
         self._ai_textview.set_cursor_visible(False)
-        self._ai_textview.override_font(Pango.FontDescription.from_string("Monospace 10"))
+        self._ai_textview.set_left_margin(8)
+        self._ai_textview.set_right_margin(8)
+        self._ai_textview.set_pixels_above_lines(4)
+        self._ai_textview.set_pixels_below_lines(4)
         ai_scrolled.add(self._ai_textview)
         self._ai_vbox.pack_start(ai_scrolled, True, True, 0)
+
+        # Initialize text tags for Markdown rendering
+        tb = self._ai_textview.get_buffer()
+        tag_table = tb.get_tag_table()
+
+        self._tag_bold = Gtk.TextTag.new("bold")
+        self._tag_bold.set_property("weight", Pango.Weight.BOLD)
+        tag_table.add(self._tag_bold)
+
+        self._tag_italic = Gtk.TextTag.new("italic")
+        self._tag_italic.set_property("style", Pango.Style.ITALIC)
+        tag_table.add(self._tag_italic)
+
+        self._tag_header = Gtk.TextTag.new("header")
+        self._tag_header.set_property("weight", Pango.Weight.BOLD)
+        self._tag_header.set_property("scale", 1.2)
+        self._tag_header.set_property("pixels_above_lines", 8)
+        self._tag_header.set_property("pixels_below_lines", 4)
+        tag_table.add(self._tag_header)
+
+        self._tag_code = Gtk.TextTag.new("code")
+        self._tag_code.set_property("font", "Monospace 10")
+        tag_table.add(self._tag_code)
+
+        self._tag_code_block = Gtk.TextTag.new("code_block")
+        self._tag_code_block.set_property("font", "Monospace 10")
+        self._tag_code_block.set_property("left_margin", 12)
+        self._tag_code_block.set_property("right_margin", 12)
+        self._tag_code_block.set_property("pixels_above_lines", 6)
+        self._tag_code_block.set_property("pixels_below_lines", 6)
+        tag_table.add(self._tag_code_block)
 
         self.pack_start(self._cat_vbox, False, True, 0)
         self.pack_start(self._cat_sep, False, False, 0)
@@ -503,10 +550,33 @@ class ClipboardPanel(Gtk.Box):
             ".dynamic-copy-tag { color: #2ecc71; font-size: 12px; font-weight: bold; }"
             ".code-lang-tag { color: %(sel_border)s; font-size: 10px; font-weight: bold; margin-bottom: 2px; }"
             ".custom-dialog notebook, .custom-dialog notebook > stack { border: none; background-color: transparent; }"
+            "#aiScrolled, #aiTextView { background-color: transparent; border: none; box-shadow: none; padding: 0; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self, self._cat_list, self._content_scrolled, self._content_list):
             w.override_background_color(Gtk.StateFlags.NORMAL, self._bg_color)
+
+        # Update AI text tags colors dynamically
+        tb = self._ai_textview.get_buffer()
+        tag_table = tb.get_tag_table()
+        
+        tag_code = tag_table.lookup("code")
+        if tag_code:
+            if name == "dark":
+                tag_code.set_property("background", "#1e1e24")
+                tag_code.set_property("foreground", "#e06c75")
+            else:
+                tag_code.set_property("background", "#f3f4f6")
+                tag_code.set_property("foreground", "#e11d48")
+                
+        tag_code_block = tag_table.lookup("code_block")
+        if tag_code_block:
+            if name == "dark":
+                tag_code_block.set_property("background", "#18181f")
+                tag_code_block.set_property("foreground", "#abb2bf")
+            else:
+                tag_code_block.set_property("background", "#f8fafc")
+                tag_code_block.set_property("foreground", "#334155")
 
     def set_theme(self, name: str):
         self._set_theme(name)
@@ -1288,7 +1358,9 @@ class ClipboardPanel(Gtk.Box):
 
     def _ask_llm_api(self, prompt_text: str):
         # Show the AI panel
+        self._ai_sep.set_no_show_all(False)
         self._ai_sep.show()
+        self._ai_vbox.set_no_show_all(False)
         self._ai_vbox.show()
         self._ai_vbox.show_all()
         self.queue_resize()
@@ -1297,7 +1369,15 @@ class ClipboardPanel(Gtk.Box):
         self._ai_spinner.show()
         self._ai_spinner.start()
 
-        # Clear text view
+        if not hasattr(self, "_ai_request_id"):
+            self._ai_request_id = 0
+        self._ai_request_id += 1
+        current_req_id = self._ai_request_id
+
+        self._ai_streaming = True
+
+        # Clear text view and accumulator
+        self._ai_markdown_text = ""
         self._ai_textview.get_buffer().set_text("")
 
         # Read config
@@ -1326,6 +1406,7 @@ class ClipboardPanel(Gtk.Box):
             model_name = "deepseek-chat"
 
         if not api_key:
+            self._ai_streaming = False
             self._ai_spinner.stop()
             self._ai_spinner.hide()
             self._ai_textview.get_buffer().set_text(
@@ -1338,11 +1419,11 @@ class ClipboardPanel(Gtk.Box):
         # Fire off thread
         threading.Thread(
             target=self._run_llm_api_request,
-            args=(base_url, api_key, model_name, prompt_text),
+            args=(base_url, api_key, model_name, prompt_text, current_req_id),
             daemon=True
         ).start()
 
-    def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, prompt_text: str):
+    def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, prompt_text: str, req_id: int):
         import urllib.request
         import urllib.error
         import json
@@ -1372,6 +1453,8 @@ class ClipboardPanel(Gtk.Box):
 
             with urllib.request.urlopen(req, timeout=20) as response:
                 for line in response:
+                    if getattr(self, "_ai_request_id", 0) != req_id:
+                        return
                     line_decoded = line.decode("utf-8", errors="ignore").strip()
                     if not line_decoded:
                         continue
@@ -1388,18 +1471,18 @@ class ClipboardPanel(Gtk.Box):
                             
                             if reasoning:
                                 if not thinking_header_added:
-                                    GLib.idle_add(self._append_ai_text, "💭 [Thinking Mode]:\n")
+                                    GLib.idle_add(self._append_ai_text, "💭 [Thinking Mode]:\n", req_id)
                                     thinking_header_added = True
-                                GLib.idle_add(self._append_ai_text, reasoning)
+                                GLib.idle_add(self._append_ai_text, reasoning, req_id)
                                 has_thinking = True
                             elif content:
                                 if has_thinking and not answer_header_added:
-                                    GLib.idle_add(self._append_ai_text, "\n\n💡 [Answer]:\n")
+                                    GLib.idle_add(self._append_ai_text, "\n\n💡 [Answer]:\n", req_id)
                                     answer_header_added = True
-                                GLib.idle_add(self._append_ai_text, content)
+                                GLib.idle_add(self._append_ai_text, content, req_id)
                         except Exception:
                             pass
-            GLib.idle_add(self._on_llm_api_finished)
+            GLib.idle_add(self._on_llm_api_finished, req_id)
         except urllib.error.HTTPError as e:
             try:
                 err_body = e.read().decode("utf-8", errors="ignore")
@@ -1407,24 +1490,106 @@ class ClipboardPanel(Gtk.Box):
                 err_msg = err_data.get("error", {}).get("message", err_body)
             except Exception:
                 err_msg = str(e)
-            GLib.idle_add(self._append_ai_text, f"\n\n❌ [请求失败 - HTTP {e.code}]:\n{err_msg}")
-            GLib.idle_add(self._on_llm_api_finished)
+            GLib.idle_add(self._append_ai_text, f"\n\n❌ [请求失败 - HTTP {e.code}]:\n{err_msg}", req_id)
+            GLib.idle_add(self._on_llm_api_finished, req_id)
         except Exception as e:
-            GLib.idle_add(self._append_ai_text, f"\n\n❌ [网络或请求错误]:\n{e}")
-            GLib.idle_add(self._on_llm_api_finished)
+            GLib.idle_add(self._append_ai_text, f"\n\n❌ [网络或请求错误]:\n{e}", req_id)
+            GLib.idle_add(self._on_llm_api_finished, req_id)
 
-    def _append_ai_text(self, text: str):
+    def _append_ai_text(self, text: str, req_id: int):
+        if getattr(self, "_ai_request_id", 0) != req_id:
+            return
         if not text or not isinstance(text, str):
             return
-        buffer = self._ai_textview.get_buffer()
-        end_iter = buffer.get_end_iter()
-        buffer.insert(end_iter, text)
-        mark = buffer.create_mark(None, buffer.get_end_iter(), False)
-        self._ai_textview.scroll_to_mark(mark, 0.0, True, 0.0, 1.0)
+        if not hasattr(self, "_ai_markdown_text"):
+            self._ai_markdown_text = ""
+        self._ai_markdown_text += text
+        self._render_markdown(self._ai_markdown_text)
 
-    def _on_llm_api_finished(self):
+    def _render_markdown(self, text: str):
+        # Create a new buffer referencing the shared tag table
+        new_buffer = Gtk.TextBuffer.new(self._ai_textview.get_buffer().get_tag_table())
+        
+        if text:
+            import re
+            # Regex to split inline elements: bold (**), italic (*), inline code (`)
+            inline_re = re.compile(r'(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)')
+            
+            lines = text.split("\n")
+            in_code_block = False
+            
+            for idx, line in enumerate(lines):
+                # Check for code block boundary
+                if line.startswith("```"):
+                    in_code_block = not in_code_block
+                    continue
+                    
+                if in_code_block:
+                    end_iter = new_buffer.get_end_iter()
+                    new_buffer.insert_with_tags_by_name(end_iter, line + "\n", "code_block")
+                    continue
+                    
+                # Check for headers
+                is_header = False
+                if line.startswith("#"):
+                    stripped = line.lstrip("#")
+                    header_level = len(line) - len(stripped)
+                    if header_level > 0 and stripped.startswith(" "):
+                        is_header = True
+                        line = stripped.strip()
+                
+                line_tags = []
+                if is_header:
+                    line_tags.append("header")
+                    
+                # Parse inline elements within the line
+                parts = inline_re.split(line)
+                
+                for part in parts:
+                    if not part:
+                        continue
+                    
+                    tags = line_tags[:]
+                    content = part
+                    
+                    if part.startswith("`") and part.endswith("`"):
+                        tags.append("code")
+                        content = part[1:-1]
+                    elif part.startswith("**") and part.endswith("**"):
+                        tags.append("bold")
+                        content = part[2:-2]
+                    elif part.startswith("*") and part.endswith("*"):
+                        tags.append("italic")
+                        content = part[1:-1]
+                        
+                    end_iter = new_buffer.get_end_iter()
+                    if tags:
+                        new_buffer.insert_with_tags_by_name(end_iter, content, *tags)
+                    else:
+                        new_buffer.insert(end_iter, content)
+                        
+                if idx < len(lines) - 1:
+                    end_iter = new_buffer.get_end_iter()
+                    new_buffer.insert(end_iter, "\n")
+                    
+        # Swap buffer atomically
+        self._ai_textview.set_buffer(new_buffer)
+
+    def _on_llm_api_finished(self, req_id: int):
+        if getattr(self, "_ai_request_id", 0) != req_id:
+            return
         self._ai_spinner.stop()
         self._ai_spinner.hide()
+
+        # Defer disabling streaming to ensure final layout finishes and scrolls to bottom
+        def stop_streaming():
+            if getattr(self, "_ai_request_id", 0) == req_id:
+                if hasattr(self, "_ai_vadj") and self._ai_vadj:
+                    self._ai_vadj.set_value(self._ai_vadj.get_upper() - self._ai_vadj.get_page_size())
+                self._ai_streaming = False
+            return False
+
+        GLib.timeout_add(150, stop_streaming)
 
     def _on_prompts_config_clicked(self, _btn):
         self._show_prompts_config_dialog()
