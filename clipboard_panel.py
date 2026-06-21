@@ -2236,9 +2236,9 @@ class ClipboardPanel(Gtk.Box):
     def _activate_item(self, item):
         if self._active_category_id == "__clipboard__" and isinstance(item, ClipboardItem):
             if hasattr(item, "type") and item.type == "image" and item.image_path:
-                _copy_image_to_clipboard(item.image_path)
                 if self.on_copy_clipboard:
                     self.on_copy_clipboard("[Image]", item.hash)
+                _copy_image_to_clipboard(item.image_path)
                 if self.on_hide_request:
                     self.on_hide_request()
                 return
@@ -2248,9 +2248,9 @@ class ClipboardPanel(Gtk.Box):
             text = self._process_template_text(text)
         else:
             return
-        _copy_to_clipboard(text)
         if self.on_copy_clipboard:
             self.on_copy_clipboard(text, item.hash if isinstance(item, ClipboardItem) else None)
+        _copy_to_clipboard(text)
         if self.on_hide_request:
             self.on_hide_request()
 
@@ -3473,9 +3473,9 @@ class ClipboardPanel(Gtk.Box):
             end_iter = preview_buffer.get_end_iter()
             text = preview_buffer.get_text(start_iter, end_iter, True)
 
-            _copy_to_clipboard(text)
             if self.on_copy_clipboard:
                 self.on_copy_clipboard(text, None)
+            _copy_to_clipboard(text)
 
             dialog.destroy()
 

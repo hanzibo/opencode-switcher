@@ -16,9 +16,9 @@ let focusMonitor = null;
 
 function getTextHash(text) {
     try {
-        let enc = new TextEncoder().encode(text);
-        let digest = GLib.sha256(enc) || [];
-        return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+        let ch = new GLib.Checksum(GLib.ChecksumType.SHA256);
+        ch.update(text);
+        return ch.get_string().slice(0, 16);
     } catch (e) {
         return String(text.length) + '_' + String(Date.now());
     }

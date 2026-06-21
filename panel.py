@@ -932,11 +932,11 @@ class SearchPanel:
         import threading
 
         # 1. Copy prompt to clipboard
+        if hasattr(self, "_clip_store") and self._clip_store:
+            self._clip_store.mark_written(prompt_text)
         clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
         clipboard.set_text(prompt_text, -1)
         clipboard.store()
-        if hasattr(self, "_clip_store") and self._clip_store:
-            self._clip_store.mark_written(prompt_text)
 
         # 2. Check if Firefox is already running to decide on a short/long delay
         firefox_running = False
