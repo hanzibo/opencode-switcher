@@ -142,15 +142,21 @@ class ClipboardPanel(Gtk.Box):
 
         self._cat_list = Gtk.ListBox.new()
         self._cat_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        self._cat_list.set_size_request(CATEGORY_WIDTH, -1)
         self._cat_list.connect("row-selected", self._on_category_selected)
         self._cat_list.connect("button-press-event", self._on_category_button)
+
+        # Wrap in ScrolledWindow to keep window height fixed and allow list scrolling
+        self._cat_scrolled = Gtk.ScrolledWindow.new()
+        self._cat_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self._cat_scrolled.set_size_request(CATEGORY_WIDTH, -1)
+        self._cat_scrolled.add(self._cat_list)
+
         self._cat_toolbar.pack_start(self._btn_new_cat, False, False, 0)
         self._cat_toolbar.pack_start(self._btn_delete_cat, False, False, 0)
         self._cat_toolbar.pack_start(self._btn_rename_cat, False, False, 0)
 
         self._cat_vbox.pack_start(self._cat_toolbar, False, False, 0)
-        self._cat_vbox.pack_start(self._cat_list, True, True, 0)
+        self._cat_vbox.pack_start(self._cat_scrolled, True, True, 0)
 
         self._cat_sep = Gtk.DrawingArea.new()
         self._cat_sep.set_size_request(1, -1)
