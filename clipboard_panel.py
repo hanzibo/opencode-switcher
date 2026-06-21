@@ -1482,7 +1482,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_conversation_id = None
         self._ai_assistant_buffer = ""
         rendered_prompt = _close_unclosed_code_blocks(prompt_text)
-        self._ai_markdown_text = f"**You:** {rendered_prompt}\n\n---\n\n"
+        self._ai_markdown_text = f'<div class="user-header">You:</div>\n\n{rendered_prompt}\n\n---\n\n'
         self._ai_title_generated = False
         self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
 
@@ -1497,7 +1497,7 @@ class ClipboardPanel(Gtk.Box):
             self._ai_render_timeout_id = 0
 
         rendered_text = _close_unclosed_code_blocks(text)
-        self._ai_markdown_text += f"\n\n---\n\n**You:** {rendered_text}\n\n---\n\n"
+        self._ai_markdown_text += f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n---\n\n'
 
         self._ai_spinner.show()
         self._ai_spinner.start()
@@ -1598,7 +1598,7 @@ class ClipboardPanel(Gtk.Box):
             self._ai_assistant_buffer = ""
             has_thinking = False
             thinking_header_added = False
-            answer_header_added = False
+            response_header_added = False
 
             with urllib.request.urlopen(req, timeout=20) as response:
                 for line in response:
@@ -1620,17 +1620,21 @@ class ClipboardPanel(Gtk.Box):
                             
                             if reasoning:
                                 if not thinking_header_added:
-                                    GLib.idle_add(self._append_ai_text, "💭 [Thinking Mode]:\n", req_id)
-                                    self._ai_assistant_buffer += "💭 [Thinking Mode]:\n"
+                                    GLib.idle_add(self._append_ai_text, '<div class="thinking-header">💭 Thinking Mode:</div>\n', req_id)
+                                    self._ai_assistant_buffer += '<div class="thinking-header">💭 Thinking Mode:</div>\n'
                                     thinking_header_added = True
                                 GLib.idle_add(self._append_ai_text, reasoning, req_id)
                                 self._ai_assistant_buffer += reasoning
                                 has_thinking = True
                             elif content:
-                                if has_thinking and not answer_header_added:
-                                    GLib.idle_add(self._append_ai_text, "\n\n💡 [Answer]:\n", req_id)
-                                    self._ai_assistant_buffer += "\n\n💡 [Answer]:\n"
-                                    answer_header_added = True
+                                if not response_header_added:
+                                    response_header_added = True
+                                    if has_thinking:
+                                        GLib.idle_add(self._append_ai_text, '\n\n<div class="answer-header">💡 Answer:</div>\n', req_id)
+                                        self._ai_assistant_buffer += '\n\n<div class="answer-header">💡 Answer:</div>\n'
+                                    else:
+                                        GLib.idle_add(self._append_ai_text, '\n\n<div class="assistant-header">🤖 Assistant:</div>\n', req_id)
+                                        self._ai_assistant_buffer += '\n\n<div class="assistant-header">🤖 Assistant:</div>\n'
                                 GLib.idle_add(self._append_ai_text, content, req_id)
                                 self._ai_assistant_buffer += content
                         except Exception:
@@ -1674,6 +1678,10 @@ class ClipboardPanel(Gtk.Box):
             code_bg = "rgba(255,255,255,0.06)"
             code_fg = "#f43f5e"
             pre_border = "rgba(255,255,255,0.08)"
+            thinking_color = "#38bdf8"
+            answer_color = "#f59e0b"
+            user_color = "#818cf8"
+            assistant_color = "#2dd4bf"
             try:
                 from pygments.formatters import HtmlFormatter
                 pygments_css = HtmlFormatter(style='monokai').get_style_defs('.codehilite')
@@ -1686,6 +1694,10 @@ class ClipboardPanel(Gtk.Box):
             code_bg = "rgba(0,0,0,0.04)"
             code_fg = "#e11d48"
             pre_border = "rgba(0,0,0,0.08)"
+            thinking_color = "#0284c7"
+            answer_color = "#d97706"
+            user_color = "#6366f1"
+            assistant_color = "#0d9488"
             try:
                 from pygments.formatters import HtmlFormatter
                 pygments_css = HtmlFormatter(style='friendly').get_style_defs('.codehilite')
@@ -1738,6 +1750,10 @@ class ClipboardPanel(Gtk.Box):
                     margin-bottom: 8px;
                 }}
                 {pygments_css}
+                .thinking-header {{ color: {thinking_color}; font-weight: bold; margin-top: 12px; }}
+                .answer-header {{ color: {answer_color}; font-weight: bold; margin-top: 12px; }}
+                .user-header {{ color: {user_color}; font-weight: bold; margin-top: 12px; }}
+                .assistant-header {{ color: {assistant_color}; font-weight: bold; margin-top: 12px; }}
             </style>
             <script>
                 function updateContent(html) {{
@@ -1926,10 +1942,10 @@ class ClipboardPanel(Gtk.Box):
                 continue
             if i == 0:
                 rendered_prompt = _close_unclosed_code_blocks(content)
-                parts.append(f"**You:** {rendered_prompt}\n\n---\n\n")
+                parts.append(f'<div class="user-header">You:</div>\n\n{rendered_prompt}\n\n---\n\n')
             elif role == "user":
                 rendered_text = _close_unclosed_code_blocks(content)
-                parts.append(f"\n\n---\n\n**You:** {rendered_text}\n\n---\n\n")
+                parts.append(f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n---\n\n')
             elif role == "assistant":
                 parts.append(content)
         return "".join(parts)
