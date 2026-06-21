@@ -100,6 +100,9 @@ class ClipboardPanel(Gtk.Box):
         # Multi-turn conversation state
         self._ai_messages: List[Dict] = []  # OpenAI-compatible message list
         self._ai_conversation_id: Optional[str] = None
+        self._ai_assistant_buffer: str = ""  # raw assistant response accumulated during streaming
+        self._ai_last_prompt_obj: Optional[object] = None
+        self._ai_conversation_created_at: int = 0
         self._conversation_store = ConversationStore()
 
         self._bg_color = Gdk.RGBA()
@@ -1429,6 +1432,7 @@ class ClipboardPanel(Gtk.Box):
     def _start_new_conversation(self, prompt_text: str):
         self._ai_messages = [{"role": "user", "content": prompt_text}]
         self._ai_conversation_id = None
+        self._ai_assistant_buffer = ""
         self._ai_markdown_text = ""
         self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
 
@@ -1448,11 +1452,11 @@ class ClipboardPanel(Gtk.Box):
         self._ai_spinner.show()
         self._ai_spinner.start()
 
-        base_url, api_key, model_name, _ = self._read_model_config()
+        base_url, api_key, model_name, _ = self._read_model_config(self._ai_last_prompt_obj)
 
         threading.Thread(
             target=self._run_llm_api_request,
-            args=(base_url, api_key, model_name, self._ai_messages, current_req_id, True),
+            args=(base_url, api_key, model_name, self._ai_messages, current_req_id),
             daemon=True
         ).start()
 
@@ -1477,6 +1481,7 @@ class ClipboardPanel(Gtk.Box):
             self._ai_render_timeout_id = 0
 
         self._start_new_conversation(prompt_text)
+        self._ai_last_prompt_obj = prompt_obj
 
         base_url, api_key, model_name, display_name = self._read_model_config(prompt_obj)
         self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
@@ -1504,11 +1509,11 @@ class ClipboardPanel(Gtk.Box):
 
         threading.Thread(
             target=self._run_llm_api_request,
-            args=(base_url, api_key, model_name, self._ai_messages, current_req_id, False),
+            args=(base_url, api_key, model_name, self._ai_messages, current_req_id),
             daemon=True
         ).start()
 
-    def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, messages: list, req_id: int, is_follow_up: bool = False):
+    def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, messages: list, req_id: int):
         import urllib.request
         import urllib.error
         import json
@@ -1532,6 +1537,7 @@ class ClipboardPanel(Gtk.Box):
         )
 
         try:
+            self._ai_assistant_buffer = ""
             has_thinking = False
             thinking_header_added = False
             answer_header_added = False
@@ -1557,14 +1563,18 @@ class ClipboardPanel(Gtk.Box):
                             if reasoning:
                                 if not thinking_header_added:
                                     GLib.idle_add(self._append_ai_text, "💭 [Thinking Mode]:\n", req_id)
+                                    self._ai_assistant_buffer += "💭 [Thinking Mode]:\n"
                                     thinking_header_added = True
                                 GLib.idle_add(self._append_ai_text, reasoning, req_id)
+                                self._ai_assistant_buffer += reasoning
                                 has_thinking = True
                             elif content:
                                 if has_thinking and not answer_header_added:
                                     GLib.idle_add(self._append_ai_text, "\n\n💡 [Answer]:\n", req_id)
+                                    self._ai_assistant_buffer += "\n\n💡 [Answer]:\n"
                                     answer_header_added = True
                                 GLib.idle_add(self._append_ai_text, content, req_id)
+                                self._ai_assistant_buffer += content
                         except Exception:
                             pass
             GLib.idle_add(self._on_llm_api_finished, req_id)
@@ -1677,11 +1687,6 @@ class ClipboardPanel(Gtk.Box):
                     content.innerHTML = html;
                     window.scrollTo(0, document.body.scrollHeight);
                 }}
-                function appendContent(html) {{
-                    const content = document.getElementById('content');
-                    content.insertAdjacentHTML('beforeend', html);
-                    window.scrollTo(0, document.body.scrollHeight);
-                }}
             </script>
         </head>
         <body class="{theme_name}">
@@ -1735,24 +1740,32 @@ class ClipboardPanel(Gtk.Box):
                 self._ai_streaming = False
 
                 if self._ai_messages and self._ai_messages[-1].get("role") == "user":
-                    parts = self._ai_markdown_text.rsplit("\n\n---\n\n", 1)
-                    assistant_content = parts[-1] if len(parts) > 1 else self._ai_markdown_text
-                    self._ai_messages.append({"role": "assistant", "content": assistant_content})
+                    self._ai_messages.append({"role": "assistant", "content": self._ai_assistant_buffer})
 
                 # Auto-save conversation to disk
-                base_url, api_key, model_name, _ = self._read_model_config()
-                if not self._ai_conversation_id:
-                    conv = self._conversation_store.create_conversation(
-                        title=self._ai_messages[0].get("content", "New Conversation")[:80] if self._ai_messages else "New Conversation",
-                        model_config={"base_url": base_url, "model_name": model_name}
-                    )
-                    self._ai_conversation_id = conv.id
-                conv = self._conversation_store.load_conversation(self._ai_conversation_id)
-                if conv:
-                    conv.messages = []
-                    for m in self._ai_messages:
-                        conv.messages.append(ChatMessage(role=m["role"], content=m["content"]))
-                    self._conversation_store.save_conversation(conv)
+                try:
+                    base_url, api_key, model_name, _ = self._read_model_config()
+                    if not self._ai_conversation_id:
+                        now = int(time.time() * 1000)
+                        self._ai_conversation_created_at = now
+                        conv = self._conversation_store.create_conversation(
+                            title=self._ai_messages[0].get("content", "New Conversation")[:80] if self._ai_messages else "New Conversation",
+                            model_config={"base_url": base_url, "model_name": model_name}
+                        )
+                        self._ai_conversation_id = conv.id
+                    else:
+                        conv = Conversation(
+                            id=self._ai_conversation_id,
+                            title=self._ai_messages[0].get("content", "(continued)")[:80] if self._ai_messages else "Conversation",
+                            system_prompt="",
+                            messages=[ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages],
+                            model_config_snapshot={"base_url": base_url, "model_name": model_name},
+                            created_at=self._ai_conversation_created_at,
+                            updated_at=int(time.time() * 1000),
+                        )
+                        self._conversation_store.save_conversation(conv)
+                except Exception as e:
+                    print(f"Error saving conversation: {e}", flush=True)
 
                 if not self._ai_input_area.get_visible():
                     self._ai_input_area.set_no_show_all(False)
@@ -1791,6 +1804,7 @@ class ClipboardPanel(Gtk.Box):
                 conv_id = self._ai_conversation_id
                 self._ai_messages = []
                 self._ai_conversation_id = None
+                self._ai_assistant_buffer = ""
                 self._ai_markdown_text = ""
                 self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
                 self._ai_entry.set_text("")

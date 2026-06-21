@@ -740,10 +740,6 @@ class ConversationStore:
                 pass
         return summaries
 
-    def add_message(self, conv: Conversation, role: str, content: str):
-        conv.messages.append(ChatMessage(role=role, content=content))
-        self.save_conversation(conv)
-
 
 # ── Clipboard capture ─────────────────────────────────────────────────────────
 
