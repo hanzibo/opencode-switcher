@@ -48,7 +48,7 @@ from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Any
 from uuid import uuid4
 
-from utils import is_wayland
+from utils import is_wayland, CONVERSATIONS_DIR
 
 CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
 CLIPBOARD_PATH = os.path.join(CONFIG_DIR, "clipboard_history.json")
@@ -634,6 +634,118 @@ class CategoryStore:
                 return
         raise ValueError(f"Category '{cat_id}' not found")
 
+
+# ── AI Conversation Data Models ────────────────────────────────────────────────
+
+@dataclass
+class ChatMessage:
+    role: str  # "user", "assistant", "system"
+    content: str
+
+
+@dataclass
+class Conversation:
+    id: str
+    title: str
+    system_prompt: str
+    messages: List[ChatMessage]
+    model_config_snapshot: Dict[str, str]  # alias, base_url, model_name
+    created_at: int
+    updated_at: int
+
+
+class ConversationStore:
+    def __init__(self):
+        self._dir = CONVERSATIONS_DIR
+        os.makedirs(self._dir, exist_ok=True)
+
+    def _path(self, conv_id: str) -> str:
+        return os.path.join(self._dir, f"{conv_id}.json")
+
+    def create_conversation(self, title: str = "", system_prompt: str = "",
+                            model_config: Optional[Dict[str, str]] = None) -> Conversation:
+        now = int(time.time() * 1000)
+        conv = Conversation(
+            id=uuid4().hex[:12],
+            title=title or "New Conversation",
+            system_prompt=system_prompt,
+            messages=[],
+            model_config_snapshot=model_config or {},
+            created_at=now,
+            updated_at=now,
+        )
+        self.save_conversation(conv)
+        return conv
+
+    def save_conversation(self, conv: Conversation):
+        conv.updated_at = int(time.time() * 1000)
+        path = self._path(conv.id)
+        with open(path, "w") as f:
+            json.dump({
+                "id": conv.id,
+                "title": conv.title,
+                "system_prompt": conv.system_prompt,
+                "messages": [asdict(m) for m in conv.messages],
+                "model_config_snapshot": conv.model_config_snapshot,
+                "created_at": conv.created_at,
+                "updated_at": conv.updated_at,
+            }, f, indent=2, ensure_ascii=False)
+
+    def load_conversation(self, conv_id: str) -> Optional[Conversation]:
+        path = self._path(conv_id)
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            messages = [ChatMessage(**m) for m in data.get("messages", [])]
+            return Conversation(
+                id=data["id"],
+                title=data.get("title", ""),
+                system_prompt=data.get("system_prompt", ""),
+                messages=messages,
+                model_config_snapshot=data.get("model_config_snapshot", {}),
+                created_at=data.get("created_at", 0),
+                updated_at=data.get("updated_at", 0),
+            )
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return None
+
+    def delete_conversation(self, conv_id: str):
+        path = self._path(conv_id)
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except OSError:
+            pass
+
+    def list_conversations(self) -> List[Dict[str, Any]]:
+        summaries = []
+        if not os.path.isdir(self._dir):
+            return summaries
+        for fname in sorted(os.listdir(self._dir), reverse=True):
+            if not fname.endswith(".json"):
+                continue
+            path = os.path.join(self._dir, fname)
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+                summaries.append({
+                    "id": data.get("id", ""),
+                    "title": data.get("title", "(untitled)"),
+                    "message_count": len(data.get("messages", [])),
+                    "updated_at": data.get("updated_at", 0),
+                })
+            except Exception:
+                pass
+        return summaries
+
+    def add_message(self, conv: Conversation, role: str, content: str):
+        conv.messages.append(ChatMessage(role=role, content=content))
+        self.save_conversation(conv)
+
+
+# ── Clipboard capture ─────────────────────────────────────────────────────────
 
 def _capture_image() -> Optional[bytes]:
     if is_wayland():

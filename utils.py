@@ -33,6 +33,9 @@ def relative_time(ts_ms: int) -> str:
     return f"{int(weeks)}w ago"
 
 
+CACHE_DIR = os.path.expanduser("~/.cache/opencode-switcher")
+CONVERSATIONS_DIR = os.path.join(CACHE_DIR, "conversations")
+
 def request_window_focus(wm_class: str):
     """向 GNOME 扩展发送窗口聚焦请求"""
     try:

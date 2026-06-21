@@ -1,53 +1,117 @@
 # OpenCode Switcher — Agent Instructions
 
-Linux GTK3 desktop tray app that switches between OpenCode (CLI) sessions via a search panel.
+Linux GTK3 desktop tray app switching between OpenCode (CLI) sessions via a search panel. Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker.
 
-## Developer Commands
+## STRUCTURE
 
-- **Run (dev):** `venv/bin/python3 main.py` (requires `opencode` CLI in PATH)
-- **Run (prod):** `./run.sh` (logs to `run.log` with 10MB rotation; loads nvm; uses `venv/bin/python3`)
-- **Venv Setup:** `python3 -m venv --system-site-packages venv && venv/bin/pip install -r requirements.txt` (requires apt system packages: `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard xclip xdotool`)
-- **Install (system-wide):** `./install.sh install` (copies files to `~/.local/share/opencode-switcher/`, enables systemd user service, installs GNOME extension)
+```
+./                          # Flat project root (no __init__.py — not a package)
+├── main.py                 # Entrypoint: flock lock, App(), Gtk.main()
+├── panel.py                # (1260L) Search panel UI, tab switcher, CSS providers
+├── clipboard_panel.py      # (3835L) Clipboard/LLM panel — largest file
+├── clipboard_store.py      # (878L) Clipboard store, heuristic classification, custom prompts
+├── session_store.py        # (212L) SQLite reader + live-session detection via pgrep/proc
+├── hotkey.py               # (89L) X11 pynput + Wayland Unix socket hotkey manager
+├── launcher.py             # (128L) Terminal discovery + session spawner
+├── utils.py                # (45L) is_wayland(), relative_time(), request_window_focus()
+├── migrate_history.py      # Migration utility (dual-use: standalone + imported by main.py)
+├── inspect_db.py           # DB inspector (missing __name__ guard)
+├── dnd_test.py             # Only test file: interactive GTK DnD test (manual)
+├── gnome-extension/        # GNOME Shell extension (Wayland clipboard + focus)
+│   ├── extension.js        # (350L) Clipboard owner-changed listener + focus request
+│   └── metadata.json       # Shell versions [48,49,50]
+├── docs/usage.md           # Chinese-language usage guide
+├── run.sh                  # Prod launcher: log rotation, nvm, exec to main.py
+├── install.sh              # Install/uninstall/status: systemd, venv, GNOME ext
+└── opencode-switcher-toggle # Shell→Python hybrid: sends "toggle" to Unix socket
+```
+
+## WHERE TO LOOK
+
+| Task | File | Notes |
+|------|------|-------|
+| Session list / SQLite | `session_store.py` | WAL pragma, exclude archived+subagent |
+| Clipboard capture+classify | `clipboard_store.py` | Heuristic classify, FIFO 150, image store |
+| Clipboard UI | `clipboard_panel.py` | 3835L — tabbed panel, prompts, backup/restore |
+| Search panel | `panel.py` | Fuzzy scoring, tab switcher, CSS themes |
+| Hotkey / socket | `hotkey.py` | pynput (X11) vs Unix socket (Wayland) |
+| Terminal launch | `launcher.py` | Ptyxis→GNOME Terminal→Console→Black Box |
+| GNOME extension | `gnome-extension/extension.js` | Wayland clipboard monitor + focus |
+| Config + cache paths | `utils.py` + AGENTS.md | `~/.config/...` and `~/.cache/...` |
+
+## COMMANDS
+
+- **Run (dev):** `venv/bin/python3 main.py` (needs `opencode` in PATH)
+- **Run (prod):** `./run.sh` (10MB log rotation, nvm, exec to main.py)
+- **Venv setup:** `python3 -m venv --system-site-packages venv && venv/bin/pip install -r requirements.txt` (system deps: `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard xclip xdotool`)
+- **Install:** `./install.sh install` (copies to `~/.local/share/opencode-switcher/`, enables systemd, installs GNOME extension)
 - **Uninstall / Status:** `./install.sh uninstall` | `./install.sh status`
-- **Testing:** No CI, linter, typechecker (mypy/pyright), or formatter exists. Test drag-and-drop interactively via standalone script: `venv/bin/python3 dnd_test.py`
-- **DB inspection:** `venv/bin/python3 inspect_db.py` — prints OpenCode SQLite table schemas and recent sessions
+- **Test:** `venv/bin/python3 dnd_test.py` (manual GTK DnD test)
+- **DB inspect:** `venv/bin/python3 inspect_db.py`
 
-## Architecture & Data Paths
+## STARTUP FLOW
 
-- `main.py`: Entrypoint, tray menu, single-instance lock (`~/.config/opencode-switcher/lock`), restart relaunch.
-- `panel.py`: GTK3 search panel with tab switcher.
-- `clipboard_panel.py` & `clipboard_store.py`: Clipboard UI and store. Saves history in `clipboard_history.json` (FIFO 150) and custom categories in `categories.json`. Images are stored under `images/<hash>.png`.
-- `session_store.py`: Reads OpenCode SQLite DB (`~/.local/share/opencode/opencode.db`). Detects live sessions via `pgrep -f opencode` with `/proc` fallback.
-- `hotkey.py`: X11 global hotkey (via `pynput`) and Wayland socket listener (Unix socket `~/.cache/opencode-switcher/toggle.sock`).
-- `launcher.py`: Terminal discovery (Ptyxis → GNOME Terminal → Console/kgx → Black Box) and session spawner.
-- `gnome-extension/`: GNOME Shell extension for clipboard capture and window activation on Wayland.
-- `opencode-switcher-toggle`: Thin shell script sending `"toggle"` to the Unix socket — bind this to your GNOME keyboard shortcut.
-- `codebase_analysis.md`: Comprehensive Chinese-language architecture deep read (~160 lines).
+```
+systemd/.desktop → run.sh → main.py (flock lock)
+  → App.__init__(): sync migration → ClipboardStore → SearchPanel+ClipboardPanel → HotkeyManager
+  → App.run(): hotkey thread → clipboard poll thread (X11 only) → Gtk.main()
+  → Ctrl+C: app.stop() → flock release
+  → Restart: release flock BEFORE Popen(self)
+```
 
-## Platform Dual-Mode (X11 vs Wayland)
+## PLATFORM DUAL-MODE (X11 vs Wayland)
 
-- **X11**: Background thread polls clipboard via `xclip` every 3s. Global hotkey `Ctrl+Shift+Space` handled by `pynput`. Window activation via `xdotool`.
-- **Wayland**: Background poll disabled. Clipboard updates captured via GNOME extension (writes to `clipboard_history.json` and signals updates via `~/.cache/opencode-switcher/clipboard.updated`). Global hotkey requires a custom GNOME shortcut bound to `opencode-switcher-toggle`. Window activation uses `focus.request` file watched by GNOME extension.
+- **X11**: Poll clipboard via `xclip` every 3s (background thread). Global hotkey `Ctrl+Shift+Space` via `pynput`. Window activation via `xdotool`.
+- **Wayland**: No clipboard polling. GNOME extension captures clipboard changes (writes `clipboard_history.json`, signals `clipboard.updated`). Hotkey via GNOME shortcut → `opencode-switcher-toggle`. Focus via `focus.request` file watched by extension.
 
-## SQLite Database Coupling
+## SQLITE DATABASE COUPLING
 
-- Read from `~/.local/share/opencode/opencode.db`. Connection must use `timeout=5` and `PRAGMA journal_mode=WAL` to avoid write deadlocks with OpenCode.
-- Exclude archived sessions (`time_archived IS NOT NULL`), subagent sessions (`title LIKE '%(@%subagent)%'`), and directories that no longer exist.
+- **DB**: `~/.local/share/opencode/opencode.db`. Connection: `timeout=5`, `PRAGMA journal_mode=WAL` (prevents deadlock with OpenCode).
+- **Exclude**: archived sessions (`time_archived IS NOT NULL`), subagent sessions (`title LIKE '%(@%subagent)%'`), dirs that no longer exist.
 
-## Critical GTK & PyGObject Quirks (Crash Guards)
+## CONVENTIONS
 
-- **Thread Safety**: GTK is synchronous. All UI updates from background threads use `GLib.idle_add(callback, *args)`. No `asyncio`.
-- **Signal Callback Mutation Safety**: Never modify the widget tree hierarchy (destroy, rebuild, show popup menus) synchronously inside a GTK event callback (`button-press-event`, selection changes). This destroys the C-level signal source and triggers `SIGSEGV`. Always defer via `GLib.idle_add()`.
-- **Focus-Active Widget Safety**: Never destroy or remove a focused widget (e.g., inline edit `Entry`). Shift focus away with `window.set_focus(None)` first.
-- **Dialog Destruction Trap**: Capture dialog properties (`dialog.get_filename()`) *before* calling `dialog.destroy()` — calling `destroy()` first returns `None`.
-- **Global CSS Provider Leak**: Do not use `add_provider_for_screen` for local styles — it leaks globally. Use `widget.get_style_context().add_provider(...)` instead.
-- **Nested Dialog Focus Guard**: The `_dialog_active` flag prevents panel hide on focus-out. Only manage via outermost dialog's `show`/`destroy` signals. Inner nested dialogs must not trigger `on_dialog_hidden()` or clear this flag.
-- **GTK CSS Limits**: GTK 3 CSS has no `!important`. Use higher specificity (e.g., `dialog headerbar.titlebar`). Clear default gradients with `background-image: none;` and `box-shadow: none;` on custom dark-themed nodes.
-- **Wayland Focus Flashing**: Prevent Xwayland dock flashing: use `load_cached()` (reads JSON cache) instead of `load_data()` (calls xclip/wl-paste) on Wayland when rendering the panel.
-- **Anti-Flicker**: Wrap tab-switch placeholder changes with `handler_block()`/`handler_unblock()` on the search entry's `search-changed` signal.
-- **Single Instance Restart Lock Order**: Release the `flock` lock fd *before* calling `subprocess.Popen`. Spawning before release makes the new instance fail lock acquisition.
-- **Compatibility**: Use `typing` annotations (`Tuple`, `Dict`, `List`, `Optional`) instead of Python 3.9+ lowercase generics for backward compatibility.
+- **Strings**: double quotes (3243:194 ratio vs single). Docstrings: `"""`
+- **Imports**: stdlib → third-party → local, `gi.require_version()` before `from gi.repository import ...`
+- **Types**: `from typing import Tuple, Dict, List, Optional` — NOT Python 3.9+ lowercase generics (backward compat)
+- **Thread safety**: `GLib.idle_add(callback, *args)` for any background→UI update. No `asyncio`.
+- **Platform check**: `utils.is_wayland()` (reads `XDG_SESSION_TYPE` / `WAYLAND_DISPLAY`)
+- **Config/cache paths**: `~/.config/opencode-switcher/` (JSON configs), `~/.cache/opencode-switcher/` (socket, images, clipboard history)
+- **Naming**: PascalCase classes, snake_case functions, `_prefix` for private, `UPPER_CASE` for constants
+- **Comments**: `# <space><text>`, Chinese or English. Use `# ponytail:` for intentionally removed code references.
+- **Entry points**: `if __name__ == "__main__":` guard required (current: `inspect_db.py` missing this)
+- **No linter/formatter/CI**: Manual discipline required. No `asyncio`. No `assert` for tests (manual only).
 
-## Systemd Service
+## ANTI-PATTERNS (THIS PROJECT)
 
-- `opencode-switcher.service`: `Restart=on-failure`, `RestartSec=3`, `KillMode=process`. Runs after `graphical-session.target`.
+- **No package structure**: Zero `__init__.py` files. Can't `pip install -e .` or use `python -m`. All modules flat in root.
+- **No tests**: Zero automated tests. `dnd_test.py` is manual-only. No `pytest`, no assertions anywhere.
+- **No CI/CD**: No GitHub Actions, no Makefile, no Dockerfile. `install.sh` is Debian/Ubuntu-only (hardcoded `dpkg`).
+- **`add_provider_for_screen` used despite being forbidden** (panel.py:99, clipboard_panel.py:109 — leaks CSS globally per GTK docs).
+- **`inspect_db.py` missing `__name__` guard**: Top-level SQL executes on import (currently safe, not imported).
+- **`opencode-switcher-toggle`**: Python code inside shell script via `exec python3 -c "..."` — fragile quoting, no linting.
+- **`run.sh` sources NVM**: Couples tray app runtime to user's shell Node.js env. NVM errors pollute app log.
+- **`--system-site-packages` venv**: Breaks isolation. Workaround for PyGObject being a system package.
+- **Hardcoded version** `VERSION="1.0.0"` in `install.sh` — no git tags, no version automation.
+
+## KNOWN DEFERRED WORK (.omo/plans/)
+
+- Fix `_on_category_button` menu popup timing (right-click crash)
+- Fix backup/restore dialog destroy order (capture filename before destroy)
+- Add "Restart" tray menu item
+
+## CRITICAL GTK & PYGObject QUIRKS (Crash Guards)
+
+- **Signal Callback Safety**: Never modify widget tree hierarchy inside GTK event callbacks (destroy, rebuild, popup menus). Destroys C-level signal source → SIGSEGV. Defer via `GLib.idle_add()`.
+- **Focus-Active Widget Safety**: Never destroy/remove a focused `Entry`. Call `window.set_focus(None)` first.
+- **Dialog Destruction Trap**: Read `dialog.get_filename()` *before* `dialog.destroy()` (destroy returns None).
+- **CSS Provider Scope**: Use `widget.get_style_context().add_provider(...)`. Never `add_provider_for_screen` (global leak).
+- **Nested Dialog Focus Guard**: `_dialog_active` flag — manage only via outermost dialog's `show`/`destroy` signals. Inner dialogs must NOT trigger `on_dialog_hidden()` or clear this flag.
+- **GTK3 CSS Limits**: No `!important`. Use higher specificity. Clear default gradients via `background-image: none; box-shadow: none;`.
+- **Wayland Focus Flashing**: Use `load_cached()` (JSON cache) not `load_data()` (xclip/wl-paste) on Wayland.
+- **Anti-Flicker**: Wrap tab-switch placeholder changes with `handler_block()`/`handler_unblock()` on `search-changed`.
+- **Restart Lock Order**: Release `flock` lock fd *before* `subprocess.Popen`. Spawning before release makes new instance fail lock acquisition.
+
+## SYSTEMD SERVICE
+
+`opencode-switcher.service`: `Restart=on-failure`, `RestartSec=3`, `KillMode=process`. Runs after `graphical-session.target`.
