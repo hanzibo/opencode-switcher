@@ -1799,7 +1799,10 @@ class ClipboardPanel(Gtk.Box):
         llm_edit_box.pack_start(note_lbl, False, False, 6)
 
         mid_vbox.pack_start(llm_edit_box, False, False, 0)
-        llm_edit_box.hide()  # Hide LLM config pane initially
+        # 先 show_all 激活所有子控件，再设 no_show_all 并隐藏，防止 dialog.show_all() 递归强制显示
+        llm_edit_box.show_all()
+        llm_edit_box.set_no_show_all(True)
+        llm_edit_box.hide()
 
         vbox.pack_start(mid_vbox, True, True, 0)
 
@@ -1946,6 +1949,13 @@ class ClipboardPanel(Gtk.Box):
                 mode_web_radio.set_sensitive(False)
                 mode_api_radio.set_sensitive(False)
 
+        def switch_to_prompt_edit_mode():
+            if self._editing_global_settings:
+                self._editing_global_settings = False
+                settings_btn.get_style_context().remove_class("suggested-action")
+                llm_edit_box.hide()
+                prompt_edit_box.show()
+
         def rebuild_tabs():
             for child in tab_bar_box.get_children():
                 tab_bar_box.remove(child)
@@ -1960,11 +1970,7 @@ class ClipboardPanel(Gtk.Box):
                 def on_tab_clicked(b):
                     nonlocal changed_handler_id
                     save_current_active_prompt()
-                    if self._editing_global_settings:
-                        self._editing_global_settings = False
-                        settings_btn.get_style_context().remove_class("suggested-action")
-                        llm_edit_box.hide()
-                        prompt_edit_box.show()
+                    switch_to_prompt_edit_mode()
 
                     self._dialog_active_idx = b.idx
                     rebuild_tabs()
@@ -1977,11 +1983,7 @@ class ClipboardPanel(Gtk.Box):
 
         def on_add_clicked(_btn):
             save_current_active_prompt()
-            if self._editing_global_settings:
-                self._editing_global_settings = False
-                settings_btn.get_style_context().remove_class("suggested-action")
-                llm_edit_box.hide()
-                prompt_edit_box.show()
+            switch_to_prompt_edit_mode()
 
             new_p = CustomPrompt(
                 id=str(uuid4()),
@@ -2008,7 +2010,7 @@ class ClipboardPanel(Gtk.Box):
             settings_btn.get_style_context().add_class("suggested-action")
 
             prompt_edit_box.hide()
-            llm_edit_box.show_all()
+            llm_edit_box.show()
 
             # Load LLM Settings values to fields
             base_url_entry.set_text(self._llm_settings_store.base_url)
