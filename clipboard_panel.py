@@ -11,7 +11,7 @@ from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, Web
 from typing import Optional, Callable, List
 from copy import deepcopy
 from uuid import uuid4
-from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig
+from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage
 import time
 from utils import relative_time, is_wayland, request_window_focus
 
@@ -96,6 +96,11 @@ class ClipboardPanel(Gtk.Box):
         self._last_rendered_item_ids = None
         self._loading_data = False
         self._ai_render_timeout_id = 0
+
+        # Multi-turn conversation state
+        self._ai_messages: List[Dict] = []  # OpenAI-compatible message list
+        self._ai_conversation_id: Optional[str] = None
+        self._conversation_store = ConversationStore()
 
         self._bg_color = Gdk.RGBA()
         self._title_color = Gdk.RGBA()
@@ -339,6 +344,28 @@ class ClipboardPanel(Gtk.Box):
 
         ai_scrolled.add(self._ai_webview)
         self._ai_vbox.pack_start(ai_scrolled, True, True, 0)
+
+        # Multi-turn conversation input area (hidden until first response)
+        self._ai_input_area = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+        self._ai_input_area.set_no_show_all(True)
+        self._ai_input_area.set_margin_top(4)
+
+        self._ai_entry = Gtk.Entry.new()
+        self._ai_entry.set_hexpand(True)
+        self._ai_entry.set_placeholder_text("输入后续问题...")
+        self._ai_entry.connect("activate", self._on_entry_activate)
+
+        self._ai_send_btn = Gtk.Button.new_with_label("发送")
+        self._ai_send_btn.connect("clicked", self._on_send_clicked)
+
+        self._ai_clear_btn = Gtk.Button.new_with_label("清空")
+        self._ai_clear_btn.set_tooltip_text("清空当前对话")
+        self._ai_clear_btn.connect("clicked", self._on_clear_conversation)
+
+        self._ai_input_area.pack_start(self._ai_entry, True, True, 0)
+        self._ai_input_area.pack_start(self._ai_send_btn, False, False, 0)
+        self._ai_input_area.pack_start(self._ai_clear_btn, False, False, 0)
+        self._ai_vbox.pack_start(self._ai_input_area, False, False, 0)
 
         self.pack_start(self._cat_vbox, False, True, 0)
         self.pack_start(self._cat_sep, False, False, 0)
@@ -1358,36 +1385,7 @@ class ClipboardPanel(Gtk.Box):
             except Exception as e:
                 print(f"Error launching Google search: {e}", flush=True)
 
-    def _ask_llm_api(self, prompt_text: str, prompt_obj: Optional[CustomPrompt] = None):
-        # Show the AI panel
-        self._ai_sep.set_no_show_all(False)
-        self._ai_sep.show()
-        self._ai_vbox.set_no_show_all(False)
-        self._ai_vbox.show()
-        self._ai_vbox.show_all()
-        self.queue_resize()
-
-        # Start loading spinner
-        self._ai_spinner.show()
-        self._ai_spinner.start()
-
-        if not hasattr(self, "_ai_request_id"):
-            self._ai_request_id = 0
-        self._ai_request_id += 1
-        current_req_id = self._ai_request_id
-
-        self._ai_streaming = True
-
-        # Cancel any pending render timeout
-        if getattr(self, "_ai_render_timeout_id", 0) != 0:
-            GLib.source_remove(self._ai_render_timeout_id)
-            self._ai_render_timeout_id = 0
-
-        # Clear webview and accumulator
-        self._ai_markdown_text = ""
-        self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
-
-        # Read config (Dynamic Routing)
+    def _read_model_config(self, prompt_obj: Optional[CustomPrompt] = None):
         bound_alias = getattr(prompt_obj, "bound_model_alias", None) if prompt_obj else None
         model_config = None
         if bound_alias:
@@ -1406,7 +1404,6 @@ class ClipboardPanel(Gtk.Box):
             api_key = ""
             model_name = ""
 
-        # Fallback to environment variables
         if not api_key:
             api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
         if not api_key:
@@ -1427,7 +1424,65 @@ class ClipboardPanel(Gtk.Box):
             model_name = "deepseek-chat"
 
         display_name = f"{model_config.alias} ({model_name})" if model_config else model_name
+        return base_url, api_key, model_name, display_name
+
+    def _start_new_conversation(self, prompt_text: str):
+        self._ai_messages = [{"role": "user", "content": prompt_text}]
+        self._ai_conversation_id = None
+        self._ai_markdown_text = ""
+        self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
+
+    def _send_user_message(self, text: str):
+        self._ai_messages.append({"role": "user", "content": text})
+        self._ai_request_id += 1
+        current_req_id = self._ai_request_id
+        self._ai_streaming = True
+
+        if getattr(self, "_ai_render_timeout_id", 0) != 0:
+            GLib.source_remove(self._ai_render_timeout_id)
+            self._ai_render_timeout_id = 0
+
+        # Append user message to visible markdown
+        self._ai_markdown_text += f"\n\n---\n\n**You:** {text}\n\n---\n\n"
+
+        self._ai_spinner.show()
+        self._ai_spinner.start()
+
+        base_url, api_key, model_name, _ = self._read_model_config()
+
+        threading.Thread(
+            target=self._run_llm_api_request,
+            args=(base_url, api_key, model_name, self._ai_messages, current_req_id, True),
+            daemon=True
+        ).start()
+
+    def _ask_llm_api(self, prompt_text: str, prompt_obj: Optional[CustomPrompt] = None):
+        # Show the AI panel
+        self._ai_sep.set_no_show_all(False)
+        self._ai_sep.show()
+        self._ai_vbox.set_no_show_all(False)
+        self._ai_vbox.show()
+        self._ai_vbox.show_all()
+        self.queue_resize()
+
+        if not hasattr(self, "_ai_request_id"):
+            self._ai_request_id = 0
+        self._ai_request_id += 1
+        current_req_id = self._ai_request_id
+
+        self._ai_streaming = True
+
+        if getattr(self, "_ai_render_timeout_id", 0) != 0:
+            GLib.source_remove(self._ai_render_timeout_id)
+            self._ai_render_timeout_id = 0
+
+        self._start_new_conversation(prompt_text)
+
+        base_url, api_key, model_name, display_name = self._read_model_config(prompt_obj)
         self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
+
+        self._ai_spinner.show()
+        self._ai_spinner.start()
 
         if not api_key:
             self._ai_streaming = False
@@ -1447,14 +1502,13 @@ class ClipboardPanel(Gtk.Box):
             self._ai_webview.load_html(self.get_html_template(self._theme, html), "file:///")
             return
 
-        # Fire off thread
         threading.Thread(
             target=self._run_llm_api_request,
-            args=(base_url, api_key, model_name, prompt_text, current_req_id),
+            args=(base_url, api_key, model_name, self._ai_messages, current_req_id, False),
             daemon=True
         ).start()
 
-    def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, prompt_text: str, req_id: int):
+    def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, messages: list, req_id: int, is_follow_up: bool = False):
         import urllib.request
         import urllib.error
         import json
@@ -1466,7 +1520,7 @@ class ClipboardPanel(Gtk.Box):
         }
         body = {
             "model": model_name,
-            "messages": [{"role": "user", "content": prompt_text}],
+            "messages": messages,
             "stream": True
         }
 
@@ -1623,6 +1677,11 @@ class ClipboardPanel(Gtk.Box):
                     content.innerHTML = html;
                     window.scrollTo(0, document.body.scrollHeight);
                 }}
+                function appendContent(html) {{
+                    const content = document.getElementById('content');
+                    content.insertAdjacentHTML('beforeend', html);
+                    window.scrollTo(0, document.body.scrollHeight);
+                }}
             </script>
         </head>
         <body class="{theme_name}">
@@ -1660,7 +1719,6 @@ class ClipboardPanel(Gtk.Box):
         if getattr(self, "_ai_request_id", 0) != req_id:
             return
 
-        # Cancel any pending render timeout and force a final render
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
             self._ai_render_timeout_id = 0
@@ -1669,15 +1727,83 @@ class ClipboardPanel(Gtk.Box):
         self._ai_spinner.stop()
         self._ai_spinner.hide()
 
-        # Defer disabling streaming to ensure final layout finishes and scrolls to bottom
+        # Append assistant response to messages
         def stop_streaming():
             if getattr(self, "_ai_request_id", 0) == req_id:
                 if hasattr(self, "_ai_webview") and self._ai_webview:
                     self._ai_webview.run_javascript("window.scrollTo(0, document.body.scrollHeight);", None, None)
                 self._ai_streaming = False
+
+                if self._ai_messages and self._ai_messages[-1].get("role") == "user":
+                    parts = self._ai_markdown_text.rsplit("\n\n---\n\n", 1)
+                    assistant_content = parts[-1] if len(parts) > 1 else self._ai_markdown_text
+                    self._ai_messages.append({"role": "assistant", "content": assistant_content})
+
+                # Auto-save conversation to disk
+                base_url, api_key, model_name, _ = self._read_model_config()
+                if not self._ai_conversation_id:
+                    conv = self._conversation_store.create_conversation(
+                        title=self._ai_messages[0].get("content", "New Conversation")[:80] if self._ai_messages else "New Conversation",
+                        model_config={"base_url": base_url, "model_name": model_name}
+                    )
+                    self._ai_conversation_id = conv.id
+                conv = self._conversation_store.load_conversation(self._ai_conversation_id)
+                if conv:
+                    conv.messages = []
+                    for m in self._ai_messages:
+                        conv.messages.append(ChatMessage(role=m["role"], content=m["content"]))
+                    self._conversation_store.save_conversation(conv)
+
+                if not self._ai_input_area.get_visible():
+                    self._ai_input_area.set_no_show_all(False)
+                    self._ai_input_area.show_all()
+                    self._ai_entry.grab_focus()
+                    self.queue_resize()
+
             return False
 
         GLib.timeout_add(150, stop_streaming)
+
+    def _on_send_clicked(self, _btn=None):
+        text = self._ai_entry.get_text().strip()
+        if not text:
+            return
+        self._ai_entry.set_text("")
+        self._send_user_message(text)
+
+    def _on_entry_activate(self, _entry):
+        self._on_send_clicked()
+
+    def _on_clear_conversation(self, _btn=None):
+        if not self._ai_messages:
+            return
+        dialog = Gtk.MessageDialog(
+            transient_for=self.get_toplevel(),
+            modal=True,
+            message_type=Gtk.MessageType.QUESTION,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="清空当前对话？",
+        )
+        dialog.format_secondary_text("所有对话历史将被清除。")
+        def on_resp(dlg, resp):
+            dlg.destroy()
+            if resp == Gtk.ResponseType.YES:
+                conv_id = self._ai_conversation_id
+                self._ai_messages = []
+                self._ai_conversation_id = None
+                self._ai_markdown_text = ""
+                self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
+                self._ai_input_area.set_no_show_all(True)
+                self._ai_input_area.hide()
+                self.queue_resize()
+                if conv_id:
+                    self._conversation_store.delete_conversation(conv_id)
+            if self.on_dialog_hidden:
+                self.on_dialog_hidden()
+        dialog.connect("response", on_resp)
+        if self.on_dialog_shown:
+            self.on_dialog_shown()
+        dialog.show_all()
 
     def _on_prompts_config_clicked(self, _btn):
         self._show_prompts_config_dialog()
