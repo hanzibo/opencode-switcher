@@ -703,6 +703,16 @@ class CustomPrompt:
     prompt: str
     categories: Optional[List[str]] = None
     action_type: str = "web"
+    bound_model_alias: Optional[str] = None
+
+
+@dataclass
+class LLMModelConfig:
+    alias: str
+    base_url: str
+    api_key: str
+    model_name: str
+    is_default: bool = False
 
 
 LLM_SETTINGS_PATH = os.path.join(CONFIG_DIR, "llm_settings.json")
@@ -710,36 +720,91 @@ LLM_SETTINGS_PATH = os.path.join(CONFIG_DIR, "llm_settings.json")
 
 class LLMSettingsStore:
     def __init__(self):
-        self.api_key = ""
-        self.base_url = "https://api.deepseek.com/v1"
-        self.model_name = "deepseek-chat"
+        self.models: List[LLMModelConfig] = []
         self._load()
 
     def _load(self):
         if not os.path.isfile(LLM_SETTINGS_PATH):
+            self.models = [
+                LLMModelConfig(
+                    alias="Default",
+                    base_url="https://api.deepseek.com/v1",
+                    api_key="",
+                    model_name="deepseek-chat",
+                    is_default=True
+                )
+            ]
             return
         try:
             with open(LLM_SETTINGS_PATH) as f:
                 data = json.load(f)
-            self.api_key = data.get("api_key", "")
-            self.base_url = data.get("base_url", "https://api.deepseek.com/v1")
-            self.model_name = data.get("model_name", "deepseek-chat")
+            
+            if isinstance(data, dict) and "models" in data:
+                self.models = []
+                for m in data["models"]:
+                    self.models.append(LLMModelConfig(
+                        alias=m.get("alias", "Unnamed"),
+                        base_url=m.get("base_url", ""),
+                        api_key=m.get("api_key", ""),
+                        model_name=m.get("model_name", ""),
+                        is_default=m.get("is_default", False)
+                    ))
+            else:
+                # Migrate old format
+                api_key = data.get("api_key", "")
+                base_url = data.get("base_url", "https://api.deepseek.com/v1")
+                model_name = data.get("model_name", "deepseek-chat")
+                self.models = [
+                    LLMModelConfig(
+                        alias="Default",
+                        base_url=base_url,
+                        api_key=api_key,
+                        model_name=model_name,
+                        is_default=True
+                    )
+                ]
+                self.save_all()
         except Exception:
-            pass
+            self.models = [
+                LLMModelConfig(
+                    alias="Default",
+                    base_url="https://api.deepseek.com/v1",
+                    api_key="",
+                    model_name="deepseek-chat",
+                    is_default=True
+                )
+            ]
 
-    def save(self, api_key: str, base_url: str, model_name: str):
-        self.api_key = api_key
-        self.base_url = base_url
-        self.model_name = model_name
+    @property
+    def api_key(self) -> str:
+        default_model = next((m for m in self.models if m.is_default), None)
+        if not default_model and self.models:
+            default_model = self.models[0]
+        return default_model.api_key if default_model else ""
+
+    @property
+    def base_url(self) -> str:
+        default_model = next((m for m in self.models if m.is_default), None)
+        if not default_model and self.models:
+            default_model = self.models[0]
+        return default_model.base_url if default_model else "https://api.deepseek.com/v1"
+
+    @property
+    def model_name(self) -> str:
+        default_model = next((m for m in self.models if m.is_default), None)
+        if not default_model and self.models:
+            default_model = self.models[0]
+        return default_model.model_name if default_model else "deepseek-chat"
+
+    def save_all(self):
         os.makedirs(CONFIG_DIR, exist_ok=True)
         flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
         try:
             fd = os.open(LLM_SETTINGS_PATH, flags, 0o600)
             with os.fdopen(fd, "w") as f:
                 json.dump({
-                    "api_key": self.api_key,
-                    "base_url": self.base_url,
-                    "model_name": self.model_name
+                    "version": 2,
+                    "models": [asdict(m) for m in self.models]
                 }, f, indent=2)
         except Exception as e:
             print(f"Error saving LLM settings: {e}", flush=True)
@@ -773,7 +838,7 @@ class CustomPromptsStore:
                 if "action_type" not in p:
                     p["action_type"] = "web"
                 # Filter out unknown keys to prevent TypeError when loading future/past structures
-                allowed_keys = {"id", "name", "prompt", "categories", "action_type"}
+                allowed_keys = {"id", "name", "prompt", "categories", "action_type", "bound_model_alias"}
                 filtered_p = {k: v for k, v in p.items() if k in allowed_keys}
                 self._prompts.append(CustomPrompt(**filtered_p))
             if not self._prompts:

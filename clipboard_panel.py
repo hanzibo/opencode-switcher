@@ -9,8 +9,9 @@ gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("WebKit2", "4.1")
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, WebKit2
 from typing import Optional, Callable, List
+from copy import deepcopy
 from uuid import uuid4
-from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore
+from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig
 import time
 from utils import relative_time, is_wayland, request_window_focus
 
@@ -24,6 +25,7 @@ PROMPT_PLACEHOLDER_RE = re.compile(r'\\\\|\\(\${&})|(\${&})')
 
 CATEGORY_WIDTH = 200
 ACTION_WIDTH = 140
+AI_PANEL_WIDTH = 450
 
 
 def _copy_image_to_clipboard(image_path: str):
@@ -245,7 +247,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_sep.set_no_show_all(True)
 
         self._ai_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
-        self._ai_vbox.set_size_request(300, -1)
+        self._ai_vbox.set_size_request(AI_PANEL_WIDTH, -1)
         self._ai_vbox.set_margin_start(8)
         self._ai_vbox.set_margin_end(8)
         self._ai_vbox.set_margin_top(12)
@@ -254,10 +256,10 @@ class ClipboardPanel(Gtk.Box):
 
         # Title / Header
         ai_hdr = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
-        ai_lbl = Gtk.Label.new()
-        ai_lbl.set_markup("<b>AI 助手看盘</b>")
-        ai_lbl.set_xalign(0)
-        ai_hdr.pack_start(ai_lbl, True, True, 0)
+        self._ai_lbl = Gtk.Label.new()
+        self._ai_lbl.set_markup("<b>AI 助手看盘</b>")
+        self._ai_lbl.set_xalign(0)
+        ai_hdr.pack_start(self._ai_lbl, True, True, 0)
 
         self._ai_spinner = Gtk.Spinner.new()
         self._ai_spinner.set_no_show_all(True)
@@ -1299,7 +1301,7 @@ class ClipboardPanel(Gtk.Box):
         # Check action type
         act_type = getattr(prompt_obj, "action_type", "web")
         if act_type == "api":
-            self._ask_llm_api(final_query)
+            self._ask_llm_api(final_query, prompt_obj)
             return
 
         if len(final_query) > 2000:
@@ -1350,7 +1352,7 @@ class ClipboardPanel(Gtk.Box):
             except Exception as e:
                 print(f"Error launching Google search: {e}", flush=True)
 
-    def _ask_llm_api(self, prompt_text: str):
+    def _ask_llm_api(self, prompt_text: str, prompt_obj: Optional[CustomPrompt] = None):
         # Show the AI panel
         self._ai_sep.set_no_show_all(False)
         self._ai_sep.show()
@@ -1379,10 +1381,24 @@ class ClipboardPanel(Gtk.Box):
         self._ai_markdown_text = ""
         self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
 
-        # Read config
-        base_url = self._llm_settings_store.base_url.strip()
-        api_key = self._llm_settings_store.api_key.strip()
-        model_name = self._llm_settings_store.model_name.strip()
+        # Read config (Dynamic Routing)
+        bound_alias = getattr(prompt_obj, "bound_model_alias", None) if prompt_obj else None
+        model_config = None
+        if bound_alias:
+            model_config = next((m for m in self._llm_settings_store.models if m.alias == bound_alias), None)
+        if not model_config:
+            model_config = next((m for m in self._llm_settings_store.models if m.is_default), None)
+        if not model_config and self._llm_settings_store.models:
+            model_config = self._llm_settings_store.models[0]
+
+        if model_config:
+            base_url = model_config.base_url.strip()
+            api_key = model_config.api_key.strip()
+            model_name = model_config.model_name.strip()
+        else:
+            base_url = ""
+            api_key = ""
+            model_name = ""
 
         # Fallback to environment variables
         if not api_key:
@@ -1403,6 +1419,9 @@ class ClipboardPanel(Gtk.Box):
             model_name = os.environ.get("OPENAI_MODEL_NAME", "").strip()
         if not model_name:
             model_name = "deepseek-chat"
+
+        display_name = f"{model_config.alias} ({model_name})" if model_config else model_name
+        self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
 
         if not api_key:
             self._ai_streaming = False
@@ -1666,7 +1685,7 @@ class ClipboardPanel(Gtk.Box):
         dialog.get_style_context().add_class("custom-dialog")
         dialog.set_title("Prompts Config")
         dialog.set_modal(True)
-        dialog.set_default_size(600, 480)
+        dialog.set_default_size(750, 550)
         dialog.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
         dialog.set_type_hint(Gdk.WindowTypeHint.DIALOG)
         dialog.set_resizable(True)
@@ -1772,6 +1791,20 @@ class ClipboardPanel(Gtk.Box):
         mode_hbox.pack_start(mode_api_radio, False, False, 0)
         prompt_edit_box.pack_start(mode_hbox, False, False, 4)
 
+        # Backend Model selection
+        model_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
+        model_lbl = Gtk.Label.new("后端模型:")
+        model_lbl.set_xalign(0)
+        model_combo = Gtk.ComboBoxText.new()
+        model_hbox.pack_start(model_lbl, False, False, 0)
+        model_hbox.pack_start(model_combo, True, True, 0)
+        prompt_edit_box.pack_start(model_hbox, False, False, 4)
+
+        def on_mode_toggled(widget):
+            model_combo.set_sensitive(mode_api_radio.get_active())
+        mode_api_radio.connect("toggled", on_mode_toggled)
+        mode_web_radio.connect("toggled", on_mode_toggled)
+
         # Checkboxes for categories
         applicability_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
         applicability_hbox.set_margin_top(4)
@@ -1794,15 +1827,59 @@ class ClipboardPanel(Gtk.Box):
         prompt_edit_box.pack_start(applicability_hbox, False, False, 0)
         mid_vbox.pack_start(prompt_edit_box, True, True, 0)
 
-        # Container for global LLM API credentials configuration
-        llm_edit_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+        # Container for global LLM API credentials configuration (Model Pool Management)
+        llm_edit_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
+
+        # Local model list copy state
+        local_models = []
+        self._active_model_idx = -1
+        self._updating_model_ui = False
+
+        # Left side: Models List
+        vbox_left = Gtk.Box.new(Gtk.Orientation.VERTICAL, 6)
+        vbox_left.set_size_request(160, -1)
+
+        model_list_scrolled = Gtk.ScrolledWindow.new()
+        model_list_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        model_list_scrolled.set_shadow_type(Gtk.ShadowType.IN)
+        model_list_scrolled.set_vexpand(True)
+
+        model_list_box = Gtk.ListBox.new()
+        model_list_scrolled.add(model_list_box)
+        vbox_left.pack_start(model_list_scrolled, True, True, 0)
+
+        btn_add_model = Gtk.Button.new_with_label("➕ 添加模型")
+        vbox_left.pack_start(btn_add_model, False, False, 0)
+
+        llm_edit_box.pack_start(vbox_left, False, False, 0)
+
+        # Separator
+        model_sep = Gtk.Separator.new(Gtk.Orientation.VERTICAL)
+        llm_edit_box.pack_start(model_sep, False, False, 6)
+
+        # Right side: Form Fields
+        vbox_right = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+        vbox_right.set_hexpand(True)
 
         llm_title = Gtk.Label.new()
-        llm_title.set_markup("<b>全局 API 配置 (OpenAI 兼容格式)</b>")
+        llm_title.set_markup("<b>模型参数配置 (OpenAI 兼容格式)</b>")
         llm_title.set_xalign(0)
         llm_title.set_margin_bottom(6)
-        llm_edit_box.pack_start(llm_title, False, False, 0)
+        vbox_right.pack_start(llm_title, False, False, 0)
 
+        # Alias field
+        alias_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        alias_lbl = Gtk.Label.new("模型别名:")
+        alias_lbl.set_size_request(90, -1)
+        alias_lbl.set_xalign(0)
+        alias_entry = Gtk.Entry.new()
+        alias_entry.set_placeholder_text("例如: DeepSeek-V3")
+        alias_entry.set_hexpand(True)
+        alias_hbox.pack_start(alias_lbl, False, False, 0)
+        alias_hbox.pack_start(alias_entry, True, True, 0)
+        vbox_right.pack_start(alias_hbox, False, False, 0)
+
+        # Base URL field
         url_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
         url_lbl = Gtk.Label.new("Base URL:")
         url_lbl.set_size_request(90, -1)
@@ -1812,8 +1889,9 @@ class ClipboardPanel(Gtk.Box):
         base_url_entry.set_hexpand(True)
         url_hbox.pack_start(url_lbl, False, False, 0)
         url_hbox.pack_start(base_url_entry, True, True, 0)
-        llm_edit_box.pack_start(url_hbox, False, False, 0)
+        vbox_right.pack_start(url_hbox, False, False, 0)
 
+        # API Key field
         key_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
         key_lbl = Gtk.Label.new("API Key:")
         key_lbl.set_size_request(90, -1)
@@ -1832,8 +1910,9 @@ class ClipboardPanel(Gtk.Box):
         key_hbox.pack_start(key_lbl, False, False, 0)
         key_hbox.pack_start(api_key_entry, True, True, 0)
         key_hbox.pack_start(show_key_btn, False, False, 0)
-        llm_edit_box.pack_start(key_hbox, False, False, 0)
+        vbox_right.pack_start(key_hbox, False, False, 0)
 
+        # Model ID/Name field
         model_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
         model_lbl = Gtk.Label.new("Model Name:")
         model_lbl.set_size_request(90, -1)
@@ -1843,15 +1922,29 @@ class ClipboardPanel(Gtk.Box):
         model_name_entry.set_hexpand(True)
         model_hbox.pack_start(model_lbl, False, False, 0)
         model_hbox.pack_start(model_name_entry, True, True, 0)
-        llm_edit_box.pack_start(model_hbox, False, False, 0)
+        vbox_right.pack_start(model_hbox, False, False, 0)
 
-        note_lbl = Gtk.Label.new("注：敏感 API Key 会以 600 文件权限（仅当前系统用户可读写）安全存储于本地。")
+        # Default mark check button
+        default_check = Gtk.CheckButton.new_with_label("设为默认模型")
+        default_check.set_margin_top(4)
+        default_check.set_margin_bottom(4)
+        vbox_right.pack_start(default_check, False, False, 0)
+
+        # Actions box (Delete button)
+        action_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        delete_model_btn = Gtk.Button.new_with_label("🗑️ 删除模型")
+        action_hbox.pack_end(delete_model_btn, False, False, 0)
+        vbox_right.pack_start(action_hbox, False, False, 4)
+
+        note_lbl = Gtk.Label.new("注：敏感 API Key 会以 600 文件权限安全存储于本地。")
         note_lbl.set_xalign(0)
         note_lbl.set_line_wrap(True)
         note_lbl.get_style_context().add_class("dim-label")
-        llm_edit_box.pack_start(note_lbl, False, False, 6)
+        vbox_right.pack_start(note_lbl, False, False, 6)
 
-        mid_vbox.pack_start(llm_edit_box, False, False, 0)
+        llm_edit_box.pack_start(vbox_right, True, True, 0)
+
+        mid_vbox.pack_start(llm_edit_box, True, True, 0)
         # 先 show_all 激活所有子控件，再设 no_show_all 并隐藏，防止 dialog.show_all() 递归强制显示
         llm_edit_box.show_all()
         llm_edit_box.set_no_show_all(True)
@@ -1918,14 +2011,179 @@ class ClipboardPanel(Gtk.Box):
         vbox.pack_start(sep2, False, False, 0)
         vbox.reorder_child(bottom_box, -1)
 
+        def save_current_model_fields():
+            if 0 <= self._active_model_idx < len(local_models):
+                m = local_models[self._active_model_idx]
+                m.alias = alias_entry.get_text().strip() or "Unnamed"
+                m.base_url = base_url_entry.get_text().strip()
+                m.api_key = api_key_entry.get_text().strip()
+                m.model_name = model_name_entry.get_text().strip()
+                m.is_default = default_check.get_active()
+
+        def rebuild_model_list():
+            self._updating_model_ui = True
+            has_handler = hasattr(self, "_model_row_selected_handler_id")
+            if has_handler:
+                model_list_box.handler_block(self._model_row_selected_handler_id)
+            try:
+                for child in model_list_box.get_children():
+                    model_list_box.remove(child)
+                for idx, m in enumerate(local_models):
+                    row = Gtk.ListBoxRow.new()
+                    row.idx = idx
+                    label_text = f"{m.alias} (默认)" if m.is_default else m.alias
+                    lbl = Gtk.Label.new(label_text)
+                    lbl.set_xalign(0)
+                    lbl.set_margin_start(8)
+                    lbl.set_margin_end(8)
+                    lbl.set_margin_top(6)
+                    lbl.set_margin_bottom(6)
+                    row.add(lbl)
+                    model_list_box.add(row)
+                model_list_box.show_all()
+                if 0 <= self._active_model_idx < len(local_models):
+                    row = model_list_box.get_row_at_index(self._active_model_idx)
+                    if row:
+                        model_list_box.select_row(row)
+            finally:
+                if has_handler:
+                    model_list_box.handler_unblock(self._model_row_selected_handler_id)
+                self._updating_model_ui = False
+
+        def load_model_to_fields(idx):
+            if 0 <= idx < len(local_models):
+                self._updating_model_ui = True
+                m = local_models[idx]
+                alias_entry.set_text(m.alias)
+                base_url_entry.set_text(m.base_url)
+                api_key_entry.set_text(m.api_key)
+                model_name_entry.set_text(m.model_name)
+                default_check.set_active(m.is_default)
+                self._updating_model_ui = False
+
+                alias_entry.set_sensitive(True)
+                base_url_entry.set_sensitive(True)
+                api_key_entry.set_sensitive(True)
+                model_name_entry.set_sensitive(True)
+                default_check.set_sensitive(True)
+                delete_model_btn.set_sensitive(len(local_models) > 1)
+            else:
+                self._updating_model_ui = True
+                alias_entry.set_text("")
+                base_url_entry.set_text("")
+                api_key_entry.set_text("")
+                model_name_entry.set_text("")
+                default_check.set_active(False)
+                self._updating_model_ui = False
+
+                alias_entry.set_sensitive(False)
+                base_url_entry.set_sensitive(False)
+                api_key_entry.set_sensitive(False)
+                model_name_entry.set_sensitive(False)
+                default_check.set_sensitive(False)
+                delete_model_btn.set_sensitive(False)
+
+        def on_model_row_selected(listbox, row):
+            if self._updating_model_ui:
+                return
+            if not row or row.get_parent() != listbox:
+                return
+            if row.idx == self._active_model_idx:
+                return
+            save_current_model_fields()
+            self._active_model_idx = row.idx
+            load_model_to_fields(self._active_model_idx)
+
+        def on_add_model_clicked(_btn):
+            save_current_model_fields()
+            new_m = LLMModelConfig(
+                alias="New Model",
+                base_url="https://api.deepseek.com/v1",
+                api_key="",
+                model_name="deepseek-chat",
+                is_default=False
+            )
+            local_models.append(new_m)
+            self._active_model_idx = len(local_models) - 1
+            rebuild_model_list()
+            load_model_to_fields(self._active_model_idx)
+            alias_entry.grab_focus()
+
+        def on_delete_model_clicked(_btn):
+            if len(local_models) <= 1:
+                return
+            confirm_dialog = Gtk.MessageDialog(
+                transient_for=dialog,
+                modal=True,
+                message_type=Gtk.MessageType.QUESTION,
+                buttons=Gtk.ButtonsType.YES_NO,
+                text="确认删除模型吗？",
+            )
+            confirm_dialog.format_secondary_text(f"模型 '{local_models[self._active_model_idx].alias}' 将被永久删除。")
+            resp = confirm_dialog.run()
+            confirm_dialog.destroy()
+            if resp == Gtk.ResponseType.YES:
+                was_default = local_models[self._active_model_idx].is_default
+                local_models.pop(self._active_model_idx)
+                self._active_model_idx = max(0, self._active_model_idx - 1)
+                if was_default and local_models:
+                    local_models[self._active_model_idx].is_default = True
+                rebuild_model_list()
+                load_model_to_fields(self._active_model_idx)
+
+        def on_alias_entry_changed(entry):
+            if self._updating_model_ui:
+                return
+            if 0 <= self._active_model_idx < len(local_models):
+                alias_text = entry.get_text()
+                local_models[self._active_model_idx].alias = alias_text
+                row = model_list_box.get_row_at_index(self._active_model_idx)
+                if row:
+                    lbl = row.get_child()
+                    if isinstance(lbl, Gtk.Label):
+                        is_default = local_models[self._active_model_idx].is_default
+                        label_text = f"{alias_text} (默认)" if is_default else alias_text
+                        lbl.set_text(label_text)
+
+        def on_default_toggled(widget):
+            if self._updating_model_ui:
+                return
+            if 0 <= self._active_model_idx < len(local_models):
+                active = widget.get_active()
+                if active:
+                    for idx, m in enumerate(local_models):
+                        m.is_default = (idx == self._active_model_idx)
+                        row = model_list_box.get_row_at_index(idx)
+                        if row:
+                            lbl = row.get_child()
+                            if isinstance(lbl, Gtk.Label):
+                                label_text = f"{m.alias} (默认)" if m.is_default else m.alias
+                                lbl.set_text(label_text)
+                else:
+                    has_other_default = any(m.is_default for idx, m in enumerate(local_models) if idx != self._active_model_idx)
+                    if not has_other_default:
+                        self._updating_model_ui = True
+                        widget.set_active(True)
+                        self._updating_model_ui = False
+
+        def refresh_model_combo():
+            model_combo.remove_all()
+            for m in self._llm_settings_store.models:
+                display_text = f"{m.alias} (默认)" if m.is_default else m.alias
+                model_combo.append(m.alias, display_text)
+
+        self._model_row_selected_handler_id = model_list_box.connect("row-selected", on_model_row_selected)
+        btn_add_model.connect("clicked", on_add_model_clicked)
+        delete_model_btn.connect("clicked", on_delete_model_clicked)
+        alias_entry.connect("changed", on_alias_entry_changed)
+        default_check.connect("toggled", on_default_toggled)
+
+        # Refresh model combo at startup
+        refresh_model_combo()
+
         def save_current_active_prompt():
             if self._editing_global_settings:
-                # Save LLM Settings instead of prompt
-                self._llm_settings_store.save(
-                    api_key=api_key_entry.get_text().strip(),
-                    base_url=base_url_entry.get_text().strip(),
-                    model_name=model_name_entry.get_text().strip()
-                )
+                save_current_model_fields()
             elif 0 <= self._dialog_active_idx < len(prompts):
                 name = name_entry.get_text().strip()
                 prompts[self._dialog_active_idx].name = name if name else "New Prompt"
@@ -1940,6 +2198,9 @@ class ClipboardPanel(Gtk.Box):
 
                 # Save action type
                 prompts[self._dialog_active_idx].action_type = "api" if mode_api_radio.get_active() else "web"
+                
+                # Save bound model
+                prompts[self._dialog_active_idx].bound_model_alias = model_combo.get_active_id()
 
         def load_prompt_to_fields(idx):
             if 0 <= idx < len(prompts):
@@ -1966,6 +2227,17 @@ class ClipboardPanel(Gtk.Box):
                 else:
                     mode_web_radio.set_active(True)
 
+                # Load bound model selection
+                bound_alias = getattr(prompts[idx], "bound_model_alias", None)
+                if bound_alias and any(m.alias == bound_alias for m in self._llm_settings_store.models):
+                    model_combo.set_active_id(bound_alias)
+                else:
+                    default_model = next((m for m in self._llm_settings_store.models if m.is_default), None)
+                    if default_model:
+                        model_combo.set_active_id(default_model.alias)
+                    elif self._llm_settings_store.models:
+                        model_combo.set_active_id(self._llm_settings_store.models[0].alias)
+
                 updating_checks[0] = False
 
                 name_entry.set_sensitive(True)
@@ -1978,6 +2250,7 @@ class ClipboardPanel(Gtk.Box):
                 delete_btn.set_sensitive(True)
                 mode_web_radio.set_sensitive(True)
                 mode_api_radio.set_sensitive(True)
+                model_combo.set_sensitive(mode_api_radio.get_active())
             else:
                 updating_checks[0] = True
                 name_entry.handler_block(changed_handler_id)
@@ -2001,9 +2274,16 @@ class ClipboardPanel(Gtk.Box):
                 delete_btn.set_sensitive(False)
                 mode_web_radio.set_sensitive(False)
                 mode_api_radio.set_sensitive(False)
+                model_combo.set_sensitive(False)
 
         def switch_to_prompt_edit_mode():
             if self._editing_global_settings:
+                # Save settings back to store
+                save_current_model_fields()
+                self._llm_settings_store.models = deepcopy(local_models)
+                self._llm_settings_store.save_all()
+                refresh_model_combo()
+
                 self._editing_global_settings = False
                 settings_btn.get_style_context().remove_class("suggested-action")
                 llm_edit_box.hide()
@@ -2066,9 +2346,17 @@ class ClipboardPanel(Gtk.Box):
             llm_edit_box.show()
 
             # Load LLM Settings values to fields
-            base_url_entry.set_text(self._llm_settings_store.base_url)
-            api_key_entry.set_text(self._llm_settings_store.api_key)
-            model_name_entry.set_text(self._llm_settings_store.model_name)
+            nonlocal local_models
+            local_models = deepcopy(self._llm_settings_store.models)
+            
+            self._active_model_idx = 0
+            for idx, m in enumerate(local_models):
+                if m.is_default:
+                    self._active_model_idx = idx
+                    break
+            
+            rebuild_model_list()
+            load_model_to_fields(self._active_model_idx)
 
             delete_btn.set_sensitive(False)
 
@@ -2105,6 +2393,11 @@ class ClipboardPanel(Gtk.Box):
         def on_confirm_clicked(_btn):
             # Save whichever is active currently
             save_current_active_prompt()
+
+            if self._editing_global_settings:
+                # Save all local_models back to store and write to file
+                self._llm_settings_store.models = deepcopy(local_models)
+                self._llm_settings_store.save_all()
 
             # Validate categories for normal prompts
             if not self._editing_global_settings and 0 <= self._dialog_active_idx < len(prompts):
