@@ -23,6 +23,8 @@ TEMPLATE_REGEX = re.compile(r"\$\{(\d+)(?::((?:[^}=]|\\:|\\=)+))?(?<!\\)(?:=([^}
 PROMPT_PLACEHOLDER_RE = re.compile(r'\\\\|\\(\${&})|(\${&})')
 
 
+_MARKDOWN_EXTENSIONS = ['fenced_code', 'codehilite', 'tables']
+
 CATEGORY_WIDTH = 200
 ACTION_WIDTH = 140
 # ponytail: removed fixed AI_PANEL_WIDTH — now uses equal expand with content area
@@ -606,7 +608,7 @@ class ClipboardPanel(Gtk.Box):
             if md_text:
                 try:
                     import markdown
-                    html_content = markdown.markdown(md_text, extensions=['fenced_code', 'codehilite'])
+                    html_content = markdown.markdown(md_text, extensions=_MARKDOWN_EXTENSIONS)
                 except ImportError:
                     html_content = f"<pre><code>{md_text}</code></pre>"
             html = self.get_html_template(name, html_content)
@@ -1559,7 +1561,7 @@ class ClipboardPanel(Gtk.Box):
             self._ai_markdown_text = error_msg
             try:
                 import markdown
-                html = markdown.markdown(error_msg, extensions=['fenced_code', 'codehilite'])
+                html = markdown.markdown(error_msg, extensions=_MARKDOWN_EXTENSIONS)
             except ImportError:
                 html = f"<p style='color: #f43f5e; font-weight: bold;'>{error_msg}</p>"
             self._ai_webview.load_html(self.get_html_template(self._theme, html), "file:///")
@@ -1682,6 +1684,8 @@ class ClipboardPanel(Gtk.Box):
             answer_color = "#f59e0b"
             user_color = "#818cf8"
             assistant_color = "#2dd4bf"
+            table_header_bg = "rgba(255,255,255,0.06)"
+            table_alt_bg = "rgba(255,255,255,0.03)"
             try:
                 from pygments.formatters import HtmlFormatter
                 pygments_css = HtmlFormatter(style='monokai').get_style_defs('.codehilite')
@@ -1698,6 +1702,8 @@ class ClipboardPanel(Gtk.Box):
             answer_color = "#d97706"
             user_color = "#6366f1"
             assistant_color = "#0d9488"
+            table_header_bg = "rgba(0,0,0,0.04)"
+            table_alt_bg = "rgba(0,0,0,0.02)"
             try:
                 from pygments.formatters import HtmlFormatter
                 pygments_css = HtmlFormatter(style='friendly').get_style_defs('.codehilite')
@@ -1754,6 +1760,10 @@ class ClipboardPanel(Gtk.Box):
                 .answer-header {{ color: {answer_color}; font-weight: bold; margin-top: 12px; }}
                 .user-header {{ color: {user_color}; font-weight: bold; margin-top: 12px; }}
                 .assistant-header {{ color: {assistant_color}; font-weight: bold; margin-top: 12px; }}
+                table {{ border-collapse: collapse; width: 100%; margin: 8px 0; }}
+                th, td {{ border: 1px solid {pre_border}; padding: 6px 10px; text-align: left; }}
+                th {{ background-color: {table_header_bg}; font-weight: 600; }}
+                tr:nth-child(even) {{ background-color: {table_alt_bg}; }}
             </style>
             <script>
                 function updateContent(html) {{
@@ -1780,8 +1790,8 @@ class ClipboardPanel(Gtk.Box):
 
         try:
             import markdown
-            # Convert Markdown to HTML with fenced code blocks and pygments syntax highlighting
-            html = markdown.markdown(text, extensions=['fenced_code', 'codehilite'])
+            # Convert Markdown to HTML with fenced code blocks, tables and pygments syntax highlighting
+            html = markdown.markdown(text, extensions=_MARKDOWN_EXTENSIONS)
         except ImportError:
             html = (
                 "<p style='color: #f43f5e; font-weight: bold;'>❌ [错误] 缺少运行时依赖库。</p>"
