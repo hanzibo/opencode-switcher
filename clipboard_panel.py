@@ -60,6 +60,13 @@ def _copy_to_clipboard(text: str):
             pass
 
 
+def _close_unclosed_code_blocks(text: str) -> str:
+    """Ensure that any unclosed markdown code blocks (triple backticks) are closed."""
+    if text.count("```") % 2 != 0:
+        return text + "\n```"
+    return text
+
+
 
 
 
@@ -1474,9 +1481,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_messages = [{"role": "user", "content": prompt_text}]
         self._ai_conversation_id = None
         self._ai_assistant_buffer = ""
-        rendered_prompt = prompt_text
-        if rendered_prompt.count("```") % 2 != 0:
-            rendered_prompt += "\n```"
+        rendered_prompt = _close_unclosed_code_blocks(prompt_text)
         self._ai_markdown_text = f"**You:** {rendered_prompt}\n\n---\n\n"
         self._ai_title_generated = False
         self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
@@ -1491,9 +1496,7 @@ class ClipboardPanel(Gtk.Box):
             GLib.source_remove(self._ai_render_timeout_id)
             self._ai_render_timeout_id = 0
 
-        rendered_text = text
-        if rendered_text.count("```") % 2 != 0:
-            rendered_text += "\n```"
+        rendered_text = _close_unclosed_code_blocks(text)
         self._ai_markdown_text += f"\n\n---\n\n**You:** {rendered_text}\n\n---\n\n"
 
         self._ai_spinner.show()
@@ -1922,14 +1925,10 @@ class ClipboardPanel(Gtk.Box):
             if not content:
                 continue
             if i == 0:
-                rendered_prompt = content
-                if rendered_prompt.count("```") % 2 != 0:
-                    rendered_prompt += "\n```"
+                rendered_prompt = _close_unclosed_code_blocks(content)
                 parts.append(f"**You:** {rendered_prompt}\n\n---\n\n")
             elif role == "user":
-                rendered_text = content
-                if rendered_text.count("```") % 2 != 0:
-                    rendered_text += "\n```"
+                rendered_text = _close_unclosed_code_blocks(content)
                 parts.append(f"\n\n---\n\n**You:** {rendered_text}\n\n---\n\n")
             elif role == "assistant":
                 parts.append(content)

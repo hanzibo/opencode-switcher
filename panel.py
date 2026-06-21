@@ -493,6 +493,8 @@ class SearchPanel:
         return False
 
     def _on_focus_out(self, *_args):
+        if not self._window.is_visible():
+            return False
         # 延迟 100 毫秒评估，以防 ComboBox popup 信号由于时序滞后于失焦事件执行
         def do_hide():
             if self._menu_active or self._delete_in_progress or self._dialog_active:
@@ -500,6 +502,7 @@ class SearchPanel:
             self.hide()
             return False
         GLib.timeout_add(100, do_hide)
+        return False
 
     def load_sessions(self, sessions: List[Session]):
         self._sessions = sessions
