@@ -1,6 +1,7 @@
 import json
 import re
 import os
+import threading
 
 # Heuristic Code Classification Regexes
 HTML_START_RE = re.compile(r'^\s*<(html|head|body|div|span|p|a|ul|ol|li|table|tr|td|script|style|link|meta|xml)\b', re.IGNORECASE)
@@ -292,24 +293,28 @@ def detect_language_name(text: str) -> Optional[str]:
 
 class ClipboardStore:
     def __init__(self):
+        self._lock = threading.RLock()
         self._items: List[ClipboardItem] = []
         self._last_written_hash: Optional[str] = None
-        self._load()
+        with self._lock:
+            self._load()
 
     def _load(self):
-        if not os.path.isfile(CLIPBOARD_PATH):
-            return
-        try:
-            with open(CLIPBOARD_PATH, "r") as f:
-                data = json.load(f)
-            self._items = [ClipboardItem(**d) for d in data[-MAX_CLIPBOARD:]]
-        except (json.JSONDecodeError, TypeError):
-            self._items = []
+        with self._lock:
+            if not os.path.isfile(CLIPBOARD_PATH):
+                return
+            try:
+                with open(CLIPBOARD_PATH, "r") as f:
+                    data = json.load(f)
+                self._items = [ClipboardItem(**d) for d in data[-MAX_CLIPBOARD:]]
+            except (json.JSONDecodeError, TypeError):
+                self._items = []
 
     def _save(self):
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(CLIPBOARD_PATH, "w") as f:
-            json.dump([asdict(i) for i in self._items], f)
+        with self._lock:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            with open(CLIPBOARD_PATH, "w") as f:
+                json.dump([asdict(i) for i in self._items], f)
 
     def classify_text(self, text: str) -> str:
         return classify_text(text)
@@ -318,50 +323,52 @@ class ClipboardStore:
         return detect_language_name(text)
 
     def add(self, text: str):
-        if not text.strip():
-            return
-        h = _content_hash(text)
-        if h == self._last_written_hash:
-            return
-        if self._items and self._items[-1].hash == h:
-            return
-        item_type = self.classify_text(text)
-        language = self.detect_language_name(text) if item_type == "code" else None
-        self._items.append(ClipboardItem(text=text, timestamp=int(time.time() * 1000), hash=h, type=item_type, language=language))
-        if len(self._items) > MAX_CLIPBOARD:
-            self._items = self._items[-MAX_CLIPBOARD:]
-        self._save()
+        with self._lock:
+            if not text.strip():
+                return
+            h = _content_hash(text)
+            if h == self._last_written_hash:
+                return
+            if self._items and self._items[-1].hash == h:
+                return
+            item_type = self.classify_text(text)
+            language = self.detect_language_name(text) if item_type == "code" else None
+            self._items.append(ClipboardItem(text=text, timestamp=int(time.time() * 1000), hash=h, type=item_type, language=language))
+            if len(self._items) > MAX_CLIPBOARD:
+                self._items = self._items[-MAX_CLIPBOARD:]
+            self._save()
 
     def add_image(self, image_data: bytes):
-        if not image_data:
-            return
-        h = hashlib.sha256(image_data).hexdigest()[:16]
-        if h == self._last_written_hash:
-            return
-        if self._items and self._items[-1].hash == h:
-            return
-        
-        img_dir = os.path.join(CONFIG_DIR, "images")
-        os.makedirs(img_dir, exist_ok=True)
-        img_path = os.path.join(img_dir, f"{h}.png")
-        
-        if not os.path.exists(img_path):
-            try:
-                with open(img_path, "wb") as f:
-                    f.write(image_data)
-            except Exception:
+        with self._lock:
+            if not image_data:
                 return
-                
-        self._items.append(ClipboardItem(
-            text="[Image]",
-            timestamp=int(time.time() * 1000),
-            hash=h,
-            type="image",
-            image_path=img_path
-        ))
-        if len(self._items) > MAX_CLIPBOARD:
-            self._items = self._items[-MAX_CLIPBOARD:]
-        self._save()
+            h = hashlib.sha256(image_data).hexdigest()[:16]
+            if h == self._last_written_hash:
+                return
+            if self._items and self._items[-1].hash == h:
+                return
+            
+            img_dir = os.path.join(CONFIG_DIR, "images")
+            os.makedirs(img_dir, exist_ok=True)
+            img_path = os.path.join(img_dir, f"{h}.png")
+            
+            if not os.path.exists(img_path):
+                try:
+                    with open(img_path, "wb") as f:
+                        f.write(image_data)
+                except Exception:
+                    return
+                    
+            self._items.append(ClipboardItem(
+                text="[Image]",
+                timestamp=int(time.time() * 1000),
+                hash=h,
+                type="image",
+                image_path=img_path
+            ))
+            if len(self._items) > MAX_CLIPBOARD:
+                self._items = self._items[-MAX_CLIPBOARD:]
+            self._save()
         
         # Notify UI by writing marker
         cache_dir = os.path.expanduser("~/.cache/opencode-switcher")
@@ -374,32 +381,37 @@ class ClipboardStore:
             pass
 
     def delete(self, index: int):
-        if 0 <= index < len(self._items):
-            self._items.pop(index)
-            self._save()
+        with self._lock:
+            if 0 <= index < len(self._items):
+                self._items.pop(index)
+                self._save()
 
     def clear_all(self):
-        self._items.clear()
-        self._save()
+        with self._lock:
+            self._items.clear()
+            self._save()
 
     def get_all(self) -> List[ClipboardItem]:
-        return list(self._items)
+        with self._lock:
+            return list(self._items)
 
     def reload(self):
-        self._load()
+        with self._lock:
+            self._load()
 
     def mark_written(self, text: str, item_hash: Optional[str] = None):
-        h = item_hash if item_hash else _content_hash(text)
-        self._last_written_hash = h
-        # Write to cache file for the GNOME extension to read
-        cache_dir = os.path.expanduser("~/.cache/opencode-switcher")
-        hash_path = os.path.join(cache_dir, "last_written_hash")
-        try:
-            os.makedirs(cache_dir, exist_ok=True)
-            with open(hash_path, "w") as f:
-                f.write(h)
-        except Exception:
-            pass
+        with self._lock:
+            h = item_hash if item_hash else _content_hash(text)
+            self._last_written_hash = h
+            # Write to cache file for the GNOME extension to read
+            cache_dir = os.path.expanduser("~/.cache/opencode-switcher")
+            hash_path = os.path.join(cache_dir, "last_written_hash")
+            try:
+                os.makedirs(cache_dir, exist_ok=True)
+                with open(hash_path, "w") as f:
+                    f.write(h)
+            except Exception:
+                pass
 
 
 

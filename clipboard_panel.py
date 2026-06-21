@@ -90,6 +90,10 @@ class ClipboardPanel(Gtk.Box):
         self._rename_activate_id = 0
         self._rename_focus_out_id = 0
         self._setup_marker_monitor()
+        self._last_rendered_category_id = None
+        self._last_rendered_item_ids = None
+        self._loading_data = False
+        self._ai_render_timeout_id = 0
 
         self._bg_color = Gdk.RGBA()
         self._title_color = Gdk.RGBA()
@@ -539,6 +543,8 @@ class ClipboardPanel(Gtk.Box):
             self._ai_webview.load_html(html, "file:///")
 
     def set_theme(self, name: str):
+        self._last_rendered_category_id = None
+        self._last_rendered_item_ids = None
         self._set_theme(name)
 
     def set_filter(self, query: str):
@@ -564,8 +570,19 @@ class ClipboardPanel(Gtk.Box):
         self._rebuild()
 
     def load_data(self):
-        capture_clipboard_once(self._clip_store)
-        GLib.idle_add(self._finish_load)
+        if getattr(self, "_loading_data", False):
+            return
+        self._loading_data = True
+        def worker():
+            try:
+                capture_clipboard_once(self._clip_store)
+            finally:
+                GLib.idle_add(self._finish_load_and_reset)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_load_and_reset(self):
+        self._loading_data = False
+        self._finish_load()
 
     def _finish_load(self):
         self._clip_store.reload()
@@ -576,16 +593,33 @@ class ClipboardPanel(Gtk.Box):
     def _rebuild(self):
         if not hasattr(self, '_content_list'):
             return
+
+        if self._active_category_id == "__clipboard__":
+            items = self._clip_items
+        else:
+            cat = self._cat_store.get(self._active_category_id)
+            items = cat.items if cat else []
+
+        # Check if we can skip rebuild because category and items haven't changed
+        current_item_ids = []
+        for item in items:
+            item_id = getattr(item, "hash", None) or getattr(item, "title", None) or getattr(item, "text", "")
+            item_ts = getattr(item, "timestamp", 0) if hasattr(item, "timestamp") else 0
+            current_item_ids.append((item_id, item_ts))
+
+        if self._last_rendered_category_id == self._active_category_id and self._last_rendered_item_ids == current_item_ids:
+            return  # Skip expensive rebuild
+
+        self._last_rendered_category_id = self._active_category_id
+        self._last_rendered_item_ids = current_item_ids
+
         for child in self._content_list.get_children():
             self._content_list.remove(child)
 
         if self._active_category_id == "__clipboard__":
             self._filter_tabs_box.show()
-            items = self._clip_items
         else:
             self._filter_tabs_box.hide()
-            cat = self._cat_store.get(self._active_category_id)
-            items = cat.items if cat else []
 
         self._update_actions()
 
@@ -1336,6 +1370,11 @@ class ClipboardPanel(Gtk.Box):
 
         self._ai_streaming = True
 
+        # Cancel any pending render timeout
+        if getattr(self, "_ai_render_timeout_id", 0) != 0:
+            GLib.source_remove(self._ai_render_timeout_id)
+            self._ai_render_timeout_id = 0
+
         # Clear webview and accumulator
         self._ai_markdown_text = ""
         self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
@@ -1471,7 +1510,14 @@ class ClipboardPanel(Gtk.Box):
         if not hasattr(self, "_ai_markdown_text"):
             self._ai_markdown_text = ""
         self._ai_markdown_text += text
-        self._render_markdown(self._ai_markdown_text)
+        
+        if getattr(self, "_ai_render_timeout_id", 0) == 0:
+            def do_render():
+                if getattr(self, "_ai_request_id", 0) == req_id:
+                    self._render_markdown(self._ai_markdown_text)
+                self._ai_render_timeout_id = 0
+                return False  # 返回 False 确保 GLib 定时器只执行一次后自动销毁
+            self._ai_render_timeout_id = GLib.timeout_add(100, do_render)
 
     def get_html_template(self, theme_name, initial_html=""):
         if theme_name == "dark":
@@ -1588,6 +1634,13 @@ class ClipboardPanel(Gtk.Box):
     def _on_llm_api_finished(self, req_id: int):
         if getattr(self, "_ai_request_id", 0) != req_id:
             return
+
+        # Cancel any pending render timeout and force a final render
+        if getattr(self, "_ai_render_timeout_id", 0) != 0:
+            GLib.source_remove(self._ai_render_timeout_id)
+            self._ai_render_timeout_id = 0
+        self._render_markdown(getattr(self, "_ai_markdown_text", ""))
+
         self._ai_spinner.stop()
         self._ai_spinner.hide()
 
