@@ -111,6 +111,9 @@ systemd/.desktop → run.sh → main.py (flock lock)
 - **Wayland Focus Flashing**: Use `load_cached()` (JSON cache) not `load_data()` (xclip/wl-paste) on Wayland.
 - **Anti-Flicker**: Wrap tab-switch placeholder changes with `handler_block()`/`handler_unblock()` on `search-changed`.
 - **Restart Lock Order**: Release `flock` lock fd *before* `subprocess.Popen`. Spawning before release makes new instance fail lock acquisition.
+- **Signal Loop Storms (UI Freezing)**: ListBox rows removal/addition inside selection or change callbacks will trigger recursive selection/changed signals. Use `listbox.handler_block(handler_id)` and `handler_unblock(handler_id)` during rebuilding, check `row.get_parent() == listbox` in row selection callbacks, and prefer in-place label updates over widget tree rebuilding.
+- **Window Stretching Prevention**: `Gtk.ListBox` content expansion can override fixed-height windows (`set_resizable(False)`). Always wrap variable-length list containers in `Gtk.ScrolledWindow` with policies `(NEVER, AUTOMATIC)`.
+- **Swallowed/Silenced Exceptions**: PyGObject callbacks swallow general Python tracebacks, rendering UI buttons silently unresponsive. Always inspect `~/.local/share/opencode-switcher/run.log` to check for NameErrors or syntax errors.
 
 ## SYSTEMD SERVICE
 

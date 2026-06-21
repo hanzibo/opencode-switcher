@@ -11,7 +11,7 @@ from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, Web
 from typing import Optional, Callable, List
 from copy import deepcopy
 from uuid import uuid4
-from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage
+from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation
 import time
 from utils import relative_time, is_wayland, request_window_focus
 
@@ -103,6 +103,9 @@ class ClipboardPanel(Gtk.Box):
         self._ai_assistant_buffer: str = ""  # raw assistant response accumulated during streaming
         self._ai_last_prompt_obj: Optional[object] = None
         self._ai_conversation_created_at: int = 0
+        self._ai_title_generated: bool = False  # guard: title generation only once per conversation
+        self._ai_history_combo: Optional[Gtk.ComboBoxText] = None
+        self._ai_history_switching: bool = False  # guard against re-entrant combo changed signals
         self._conversation_store = ConversationStore()
 
         self._bg_color = Gdk.RGBA()
@@ -111,6 +114,7 @@ class ClipboardPanel(Gtk.Box):
         self._snippet_color = Gdk.RGBA()
 
         self._build_ui()
+        self._refresh_conversation_dropdown()
 
         self._css_provider = Gtk.CssProvider()
         screen = self.get_screen() or Gdk.Screen.get_default()
@@ -278,6 +282,22 @@ class ClipboardPanel(Gtk.Box):
         self._ai_spinner = Gtk.Spinner.new()
         self._ai_spinner.set_no_show_all(True)
         ai_hdr.pack_start(self._ai_spinner, False, False, 0)
+
+        # Conversation history dropdown (inserted before copy button)
+        self._ai_history_combo = Gtk.ComboBoxText.new()
+        self._ai_history_combo.set_size_request(140, -1)
+        self._ai_history_combo.set_no_show_all(True)
+        self._ai_history_combo.set_tooltip_text("切换对话历史")
+        self._ai_history_combo.set_sensitive(False)
+        self._ai_history_combo.connect("changed", self._on_history_combo_changed)
+        self._ai_history_combo.connect("button-press-event",
+            lambda w, e: ((self.on_dialog_shown() if self.on_dialog_shown else None) or False)
+            if e.button == 1 else False)
+        self._ai_history_combo.connect("key-press-event",
+            lambda w, e: ((self.on_dialog_shown() if self.on_dialog_shown else None) or False)
+            if e.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space) else False)
+        self._ai_history_combo.connect("popdown", lambda *_: self.on_dialog_hidden and self.on_dialog_hidden())
+        ai_hdr.pack_start(self._ai_history_combo, False, False, 0)
 
         # Copy button
         self._btn_copy_ai = Gtk.Button.new_with_label("📋 复制")
@@ -513,6 +533,8 @@ class ClipboardPanel(Gtk.Box):
             " border: 1px solid %(btn_border)s; border-radius: 6px; padding: 8px 16px; font-size: 14px; font-weight: 500; }"
             "button:hover { background: %(btn_hover)s; border-color: %(sel_border)s; }"
             "button:active { background: %(btn_active)s; }"
+            "combobox { font-size: 13px; }"
+            "combobox button { padding: 0px 8px; min-height: 24px; }"
             ".cat-tool-btn { font-size: 12px; padding: 4px 6px; border: none; border-radius: 4px; }"
             ".cat-tool-btn:hover { background: %(btn_hover)s; }"
             ".cat-tool-btn:active { background: %(btn_active)s; }"
@@ -1434,6 +1456,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_conversation_id = None
         self._ai_assistant_buffer = ""
         self._ai_markdown_text = ""
+        self._ai_title_generated = False
         self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
 
     def _send_user_message(self, text: str):
@@ -1767,6 +1790,22 @@ class ClipboardPanel(Gtk.Box):
                 except Exception as e:
                     print(f"Error saving conversation: {e}", flush=True)
 
+                # Trigger background title generation for new conversations
+                if (not self._ai_title_generated
+                        and self._ai_conversation_id
+                        and self._ai_messages
+                        and base_url and api_key):
+                    self._ai_title_generated = True
+                    first_msg = self._ai_messages[0].get("content", "")
+                    if first_msg:
+                        threading.Thread(
+                            target=self._generate_conversation_title,
+                            args=(first_msg, self._ai_conversation_id, base_url, api_key, model_name),
+                            daemon=True
+                        ).start()
+                    # Refresh dropdown to show new entry immediately (title will update later)
+                    self._refresh_conversation_dropdown()
+
                 if not self._ai_input_area.get_visible():
                     self._ai_input_area.set_no_show_all(False)
                     self._ai_input_area.show_all()
@@ -1812,12 +1851,204 @@ class ClipboardPanel(Gtk.Box):
                 self.queue_resize()
                 if conv_id:
                     self._conversation_store.delete_conversation(conv_id)
+                    self._refresh_conversation_dropdown()
             if self.on_dialog_hidden:
                 self.on_dialog_hidden()
         dialog.connect("response", on_resp)
         if self.on_dialog_shown:
             self.on_dialog_shown()
         dialog.show_all()
+
+    # ── Conversation history dropdown methods ─────────────────────────────────────
+
+    @staticmethod
+    def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
+        """Convert OpenAI-format message list back to rendered markdown text."""
+        if not messages:
+            return ""
+        parts = []
+        for i, m in enumerate(messages):
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if not content:
+                continue
+            if i == 0:
+                parts.append(content)
+            elif role == "user":
+                parts.append(f"\n\n---\n\n**You:** {content}\n\n---\n\n")
+            elif role == "assistant":
+                parts.append(content)
+        return "".join(parts)
+
+    def _switch_to_conversation(self, conv_id: str):
+        """Switch AI panel to display a different conversation by ID."""
+        if self._ai_streaming:
+            return  # block switching while streaming is in progress
+
+        # Save current conversation if it has content
+        if self._ai_messages and self._ai_conversation_id:
+            try:
+                base_url, api_key, model_name, _ = self._read_model_config()
+                conv = Conversation(
+                    id=self._ai_conversation_id,
+                    title=self._ai_messages[0].get("content", "(continued)")[:80],
+                    system_prompt="",
+                    messages=[ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages],
+                    model_config_snapshot={"base_url": base_url, "model_name": model_name},
+                    created_at=self._ai_conversation_created_at,
+                    updated_at=int(time.time() * 1000),
+                )
+                self._conversation_store.save_conversation(conv)
+            except Exception as e:
+                print(f"Error saving before switch: {e}", flush=True)
+
+        # Cancel any pending render timeout
+        if getattr(self, "_ai_render_timeout_id", 0) != 0:
+            GLib.source_remove(self._ai_render_timeout_id)
+            self._ai_render_timeout_id = 0
+
+        # Load target conversation
+        conv = self._conversation_store.load_conversation(conv_id)
+        if not conv:
+            return
+
+        # Restore state from loaded conversation
+        self._ai_messages = [{"role": m.role, "content": m.content} for m in conv.messages]
+        self._ai_conversation_id = conv.id
+        self._ai_conversation_created_at = conv.created_at
+        self._ai_assistant_buffer = ""
+        self._ai_title_generated = True  # already generated (if ever), skip re-generation
+
+        # Rebuild markdown and re-render
+        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+        self._render_markdown(self._ai_markdown_text)
+
+        # Ensure AI panel + input area are visible
+        self._ai_sep.set_no_show_all(False)
+        self._ai_sep.show()
+        self._ai_vbox.set_no_show_all(False)
+        self._ai_vbox.show()
+        self._ai_vbox.show_all()
+        self._ai_entry.set_text("")
+        self._ai_entry.grab_focus()
+        self.queue_resize()
+
+    def _refresh_conversation_dropdown(self):
+        """Repopulate the history dropdown from the conversation store."""
+        if not self._ai_history_combo:
+            return
+        store = self._ai_history_combo.get_model()
+        if store:
+            store.clear()
+        # Block changed signal during programmatic update
+        self._ai_history_switching = True
+
+        summaries = self._conversation_store.list_conversations()
+        # Sort by updated_at descending (list_conversations sorts by filename only)
+        summaries.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
+
+        for s in summaries:
+            sid = s.get("id", "")
+            title = s.get("title", "(untitled)")[:12]
+            count = s.get("message_count", 0)
+            label = f"{title} ({count}条)"
+            self._ai_history_combo.append(sid, label)
+
+        if summaries:
+            self._ai_history_combo.set_sensitive(True)
+            self._ai_history_combo.set_no_show_all(False)
+            self._ai_history_combo.show()
+            if self._ai_conversation_id:
+                self._ai_history_combo.set_active_id(self._ai_conversation_id)
+        else:
+            self._ai_history_combo.set_sensitive(False)
+
+        self._ai_history_switching = False
+
+    def _on_history_combo_changed(self, combo):
+        """Handle user selecting a conversation from the history dropdown."""
+        conv_id = combo.get_active_id()
+        if not conv_id or self._ai_history_switching:
+            return
+        if conv_id == self._ai_conversation_id:
+            return  # already viewing this conversation
+        if self._ai_streaming:
+            # Revert selection back to current — block switching while streaming
+            self._ai_history_switching = True
+            combo.set_active_id(self._ai_conversation_id)
+            self._ai_history_switching = False
+            return
+        self._switch_to_conversation(conv_id)
+
+    # ── Synchronous LLM call for background title generation ──────────────────────
+
+    def _call_llm_sync(self, messages: list, base_url: str, api_key: str,
+                        model_name: str, timeout: int = 15) -> Optional[str]:
+        """Non-streaming LLM API call for background tasks (e.g. title generation)."""
+        import urllib.request
+        import urllib.error
+        import json as json_mod
+
+        url = base_url.rstrip("/") + "/chat/completions"
+        body = {
+            "model": model_name,
+            "messages": messages,
+            "stream": False,
+        }
+        req = urllib.request.Request(
+            url=url,
+            data=json_mod.dumps(body).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json_mod.loads(resp.read())
+            return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            print(f"Error in sync LLM call: {e}", flush=True)
+            return None
+
+    def _generate_conversation_title(self, first_message: str, conv_id: str,
+                                      base_url: str, api_key: str, model_name: str):
+        """Background thread: silently generate a short title for a new conversation."""
+        try:
+            title_prompt = (
+                f"<{first_message}>\n"
+                f"请为本次对话生成一个标题。\n"
+                f"规则：\n"
+                f"1. 仅基于用户发送的第一条消息提炼标题，忽略后续所有问答内容。\n"
+                f"2. 标题字数严格控制在 15 个汉字以内（含标点）。\n"
+                f"3. 必须按照以下固定格式输出，不得附加任何解释、前缀或后缀内容：\n"
+                f"   ** 标题 ** = * 具体标题 *\n"
+                f"示例：\n"
+                f"用户首条消息：\"如何用Python爬取动态网页数据？\"\n"
+                f"输出：** 标题 ** = * Python动态爬虫入门 *\n"
+                f"现在，请根据本次对话的第一条用户消息，按上述规则输出标题。"
+            )
+            content = self._call_llm_sync(
+                [{"role": "user", "content": title_prompt}],
+                base_url, api_key, model_name,
+            )
+            if content:
+                import re
+                m = re.search(r'\*\*\s*标题\s*\*\*\s*=\s*\*\s*(.+?)\s*\*', content)
+                if m:
+                    title = m.group(1).strip()
+                    GLib.idle_add(self._on_title_generated, conv_id, title)
+        except Exception as e:
+            print(f"Error generating conversation title: {e}", flush=True)
+
+    def _on_title_generated(self, conv_id: str, title: str):
+        """Idle callback: update conversation title in store and refresh dropdown."""
+        conv = self._conversation_store.load_conversation(conv_id)
+        if conv:
+            conv.title = title
+            self._conversation_store.save_conversation(conv)
+        self._refresh_conversation_dropdown()
 
     def _on_prompts_config_clicked(self, _btn):
         self._show_prompts_config_dialog()
