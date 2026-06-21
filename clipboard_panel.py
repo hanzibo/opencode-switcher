@@ -25,7 +25,7 @@ PROMPT_PLACEHOLDER_RE = re.compile(r'\\\\|\\(\${&})|(\${&})')
 
 CATEGORY_WIDTH = 200
 ACTION_WIDTH = 140
-AI_PANEL_WIDTH = 450
+# ponytail: removed fixed AI_PANEL_WIDTH — now uses equal expand with content area
 
 
 def _copy_image_to_clipboard(image_path: str):
@@ -258,7 +258,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_sep.set_no_show_all(True)
 
         self._ai_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
-        self._ai_vbox.set_size_request(AI_PANEL_WIDTH, -1)
+        # self._ai_vbox.set_size_request(AI_PANEL_WIDTH, -1)  # ponytail: removed fixed width, now uses equal expand
         self._ai_vbox.set_margin_start(8)
         self._ai_vbox.set_margin_end(8)
         self._ai_vbox.set_margin_top(12)
@@ -371,7 +371,7 @@ class ClipboardPanel(Gtk.Box):
         self.pack_start(self._cat_sep, False, False, 0)
         self.pack_start(self._content_vbox, True, True, 0)
         self.pack_start(self._ai_sep, False, False, 0)
-        self.pack_start(self._ai_vbox, False, False, 0)
+        self.pack_start(self._ai_vbox, True, True, 0)
         self.pack_start(self._action_sep, False, False, 0)
         self.pack_start(self._action_box, False, False, 0)
 
@@ -1793,8 +1793,8 @@ class ClipboardPanel(Gtk.Box):
                 self._ai_conversation_id = None
                 self._ai_markdown_text = ""
                 self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
-                self._ai_input_area.set_no_show_all(True)
-                self._ai_input_area.hide()
+                self._ai_entry.set_text("")
+                self._ai_entry.grab_focus()
                 self.queue_resize()
                 if conv_id:
                     self._conversation_store.delete_conversation(conv_id)
