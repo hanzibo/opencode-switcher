@@ -8,7 +8,7 @@ gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("WebKit2", "4.1")
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, WebKit2
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Dict, Any
 from copy import deepcopy
 from uuid import uuid4
 from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation
@@ -102,6 +102,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_conversation_id: Optional[str] = None
         self._ai_assistant_buffer: str = ""  # raw assistant response accumulated during streaming
         self._ai_last_prompt_obj: Optional[object] = None
+        self._ai_active_model_info: Optional[Dict[str, str]] = None
         self._ai_conversation_created_at: int = 0
         self._ai_title_generated: bool = False  # guard: title generation only once per conversation
         self._ai_history_combo: Optional[Gtk.ComboBoxText] = None
@@ -290,13 +291,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_history_combo.set_tooltip_text("切换对话历史")
         self._ai_history_combo.set_sensitive(False)
         self._ai_history_combo.connect("changed", self._on_history_combo_changed)
-        self._ai_history_combo.connect("button-press-event",
-            lambda w, e: ((self.on_dialog_shown() if self.on_dialog_shown else None) or False)
-            if e.button == 1 else False)
-        self._ai_history_combo.connect("key-press-event",
-            lambda w, e: ((self.on_dialog_shown() if self.on_dialog_shown else None) or False)
-            if e.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter, Gdk.KEY_space) else False)
-        self._ai_history_combo.connect("popdown", lambda *_: self.on_dialog_hidden and self.on_dialog_hidden())
+        self._ai_history_combo.connect("notify::popup-shown", self._on_ai_history_combo_popup_shown)
         ai_hdr.pack_start(self._ai_history_combo, False, False, 0)
 
         # Copy button
@@ -364,7 +359,7 @@ class ClipboardPanel(Gtk.Box):
                     return True
             return False
         self._ai_webview.connect("decide-policy", on_decide_policy)
-
+        self._ai_webview.connect("context-menu", lambda *_: True)
         ai_scrolled.add(self._ai_webview)
         self._ai_vbox.pack_start(ai_scrolled, True, True, 0)
 
@@ -599,7 +594,15 @@ class ClipboardPanel(Gtk.Box):
 
         # Update AI webview theme and reload content
         if hasattr(self, "_ai_webview") and self._ai_webview:
-            html = self.get_html_template(name, getattr(self, "_ai_markdown_text", ""))
+            md_text = getattr(self, "_ai_markdown_text", "")
+            html_content = ""
+            if md_text:
+                try:
+                    import markdown
+                    html_content = markdown.markdown(md_text, extensions=['fenced_code', 'codehilite'])
+                except ImportError:
+                    html_content = f"<pre><code>{md_text}</code></pre>"
+            html = self.get_html_template(name, html_content)
             self._ai_webview.load_html(html, "file:///")
 
     def set_theme(self, name: str):
@@ -1351,7 +1354,7 @@ class ClipboardPanel(Gtk.Box):
         else:
             unescaped_prompt = interpolated.replace('\\\\', '\\')
             if unescaped_prompt:
-                suffix = " " + unescaped_prompt
+                suffix = "\n\n" + unescaped_prompt
             else:
                 suffix = ""
             final_query = original_content + suffix
@@ -1410,11 +1413,27 @@ class ClipboardPanel(Gtk.Box):
             except Exception as e:
                 print(f"Error launching Google search: {e}", flush=True)
 
-    def _read_model_config(self, prompt_obj: Optional[CustomPrompt] = None):
-        bound_alias = getattr(prompt_obj, "bound_model_alias", None) if prompt_obj else None
+    def _read_model_config(self, prompt_obj: Optional[CustomPrompt] = None, model_info: Optional[Dict] = None):
+        bound_alias = None
+        if model_info:
+            bound_alias = model_info.get("alias")
+        elif prompt_obj:
+            bound_alias = getattr(prompt_obj, "bound_model_alias", None)
+
         model_config = None
         if bound_alias:
             model_config = next((m for m in self._llm_settings_store.models if m.alias == bound_alias), None)
+
+        # Try matching by base_url and model_name if alias match didn't resolve a valid model
+        if not model_config and model_info:
+            base_url_info = model_info.get("base_url", "").strip()
+            model_name_info = model_info.get("model_name", "").strip()
+            model_config = next(
+                (m for m in self._llm_settings_store.models 
+                 if m.base_url.strip() == base_url_info and m.model_name.strip() == model_name_info),
+                None
+            )
+
         if not model_config:
             model_config = next((m for m in self._llm_settings_store.models if m.is_default), None)
         if not model_config and self._llm_settings_store.models:
@@ -1455,7 +1474,10 @@ class ClipboardPanel(Gtk.Box):
         self._ai_messages = [{"role": "user", "content": prompt_text}]
         self._ai_conversation_id = None
         self._ai_assistant_buffer = ""
-        self._ai_markdown_text = ""
+        rendered_prompt = prompt_text
+        if rendered_prompt.count("```") % 2 != 0:
+            rendered_prompt += "\n```"
+        self._ai_markdown_text = f"**You:** {rendered_prompt}\n\n---\n\n"
         self._ai_title_generated = False
         self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
 
@@ -1469,13 +1491,18 @@ class ClipboardPanel(Gtk.Box):
             GLib.source_remove(self._ai_render_timeout_id)
             self._ai_render_timeout_id = 0
 
-        # Append user message to visible markdown
-        self._ai_markdown_text += f"\n\n---\n\n**You:** {text}\n\n---\n\n"
+        rendered_text = text
+        if rendered_text.count("```") % 2 != 0:
+            rendered_text += "\n```"
+        self._ai_markdown_text += f"\n\n---\n\n**You:** {rendered_text}\n\n---\n\n"
 
         self._ai_spinner.show()
         self._ai_spinner.start()
 
-        base_url, api_key, model_name, _ = self._read_model_config(self._ai_last_prompt_obj)
+        base_url, api_key, model_name, _ = self._read_model_config(
+            self._ai_last_prompt_obj,
+            getattr(self, "_ai_active_model_info", None)
+        )
 
         threading.Thread(
             target=self._run_llm_api_request,
@@ -1507,6 +1534,11 @@ class ClipboardPanel(Gtk.Box):
         self._ai_last_prompt_obj = prompt_obj
 
         base_url, api_key, model_name, display_name = self._read_model_config(prompt_obj)
+        self._ai_active_model_info = {
+            "alias": display_name.split(" (")[0] if " (" in display_name else display_name,
+            "base_url": base_url,
+            "model_name": model_name
+        }
         self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
 
         self._ai_spinner.show()
@@ -1767,22 +1799,32 @@ class ClipboardPanel(Gtk.Box):
 
                 # Auto-save conversation to disk
                 try:
-                    base_url, api_key, model_name, _ = self._read_model_config()
+                    base_url, api_key, model_name, _ = self._read_model_config(
+                        self._ai_last_prompt_obj,
+                        getattr(self, "_ai_active_model_info", None)
+                    )
+                    model_snapshot = getattr(self, "_ai_active_model_info", None) or {
+                        "alias": "Default",
+                        "base_url": base_url,
+                        "model_name": model_name
+                    }
                     if not self._ai_conversation_id:
                         now = int(time.time() * 1000)
                         self._ai_conversation_created_at = now
                         conv = self._conversation_store.create_conversation(
                             title=self._ai_messages[0].get("content", "New Conversation")[:80] if self._ai_messages else "New Conversation",
-                            model_config={"base_url": base_url, "model_name": model_name}
+                            model_config=model_snapshot
                         )
                         self._ai_conversation_id = conv.id
+                        conv.messages = [ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages]
+                        self._conversation_store.save_conversation(conv)
                     else:
                         conv = Conversation(
                             id=self._ai_conversation_id,
                             title=self._ai_messages[0].get("content", "(continued)")[:80] if self._ai_messages else "Conversation",
                             system_prompt="",
                             messages=[ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages],
-                            model_config_snapshot={"base_url": base_url, "model_name": model_name},
+                            model_config_snapshot=model_snapshot,
                             created_at=self._ai_conversation_created_at,
                             updated_at=int(time.time() * 1000),
                         )
@@ -1847,6 +1889,13 @@ class ClipboardPanel(Gtk.Box):
                 self._ai_markdown_text = ""
                 self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
                 self._ai_entry.set_text("")
+                self._ai_lbl.set_markup("<b>AI 助手看盘</b>")
+                self._ai_active_model_info = None
+                self._ai_last_prompt_obj = None
+                
+                self._ai_input_area.set_no_show_all(True)
+                self._ai_input_area.hide()
+                
                 self._ai_entry.grab_focus()
                 self.queue_resize()
                 if conv_id:
@@ -1873,9 +1922,15 @@ class ClipboardPanel(Gtk.Box):
             if not content:
                 continue
             if i == 0:
-                parts.append(content)
+                rendered_prompt = content
+                if rendered_prompt.count("```") % 2 != 0:
+                    rendered_prompt += "\n```"
+                parts.append(f"**You:** {rendered_prompt}\n\n---\n\n")
             elif role == "user":
-                parts.append(f"\n\n---\n\n**You:** {content}\n\n---\n\n")
+                rendered_text = content
+                if rendered_text.count("```") % 2 != 0:
+                    rendered_text += "\n```"
+                parts.append(f"\n\n---\n\n**You:** {rendered_text}\n\n---\n\n")
             elif role == "assistant":
                 parts.append(content)
         return "".join(parts)
@@ -1888,13 +1943,21 @@ class ClipboardPanel(Gtk.Box):
         # Save current conversation if it has content
         if self._ai_messages and self._ai_conversation_id:
             try:
-                base_url, api_key, model_name, _ = self._read_model_config()
+                base_url, api_key, model_name, _ = self._read_model_config(
+                    self._ai_last_prompt_obj,
+                    getattr(self, "_ai_active_model_info", None)
+                )
+                model_snapshot = getattr(self, "_ai_active_model_info", None) or {
+                    "alias": "Default",
+                    "base_url": base_url,
+                    "model_name": model_name
+                }
                 conv = Conversation(
                     id=self._ai_conversation_id,
                     title=self._ai_messages[0].get("content", "(continued)")[:80],
                     system_prompt="",
                     messages=[ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages],
-                    model_config_snapshot={"base_url": base_url, "model_name": model_name},
+                    model_config_snapshot=model_snapshot,
                     created_at=self._ai_conversation_created_at,
                     updated_at=int(time.time() * 1000),
                 )
@@ -1918,10 +1981,16 @@ class ClipboardPanel(Gtk.Box):
         self._ai_conversation_created_at = conv.created_at
         self._ai_assistant_buffer = ""
         self._ai_title_generated = True  # already generated (if ever), skip re-generation
+        self._ai_last_prompt_obj = None
+        self._ai_active_model_info = conv.model_config_snapshot
 
         # Rebuild markdown and re-render
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         self._render_markdown(self._ai_markdown_text)
+
+        # Update model info display label
+        _, _, _, display_name = self._read_model_config(None, self._ai_active_model_info)
+        self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
 
         # Ensure AI panel + input area are visible
         self._ai_sep.set_no_show_all(False)
@@ -1980,6 +2049,14 @@ class ClipboardPanel(Gtk.Box):
             return
         self._switch_to_conversation(conv_id)
 
+    def _on_ai_history_combo_popup_shown(self, combo, pspec):
+        if combo.get_property("popup-shown"):
+            if self.on_dialog_shown:
+                self.on_dialog_shown()
+        else:
+            if self.on_dialog_hidden:
+                self.on_dialog_hidden()
+
     # ── Synchronous LLM call for background title generation ──────────────────────
 
     def _call_llm_sync(self, messages: list, base_url: str, api_key: str,
@@ -2018,16 +2095,17 @@ class ClipboardPanel(Gtk.Box):
         try:
             title_prompt = (
                 f"<{first_message}>\n"
-                f"请为本次对话生成一个标题。\n"
+                f"请为以上对话的第一条消息生成一个简明、专业的中文标题。\n"
                 f"规则：\n"
-                f"1. 仅基于用户发送的第一条消息提炼标题，忽略后续所有问答内容。\n"
-                f"2. 标题字数严格控制在 15 个汉字以内（含标点）。\n"
-                f"3. 必须按照以下固定格式输出，不得附加任何解释、前缀或后缀内容：\n"
-                f"   ** 标题 ** = * 具体标题 *\n"
+                f"1. 概括用户提问的核心意图、主题或所涉及的关键技术，避免“代码分析”、“陈述文本解释”等泛泛而谈的废话。\n"
+                f"2. 标题长度严格控制在 12 个汉字以内。\n"
+                f"3. 必须且只能按照以下 XML 标签格式输出，不要附加任何解释、前缀、后缀、反引号或多余字符：\n"
+                f"   <title>具体标题</title>\n"
                 f"示例：\n"
-                f"用户首条消息：\"如何用Python爬取动态网页数据？\"\n"
-                f"输出：** 标题 ** = * Python动态爬虫入门 *\n"
-                f"现在，请根据本次对话的第一条用户消息，按上述规则输出标题。"
+                f"输入：\"如何用Python爬取动态网页数据？\"\n"
+                f"输出：<title>Python动态爬虫</title>\n"
+                f"输入：\"try {{ await client.session.get(id) }} catch {{ ... }}\"\n"
+                f"输出：<title>异步错误处理</title>"
             )
             content = self._call_llm_sync(
                 [{"role": "user", "content": title_prompt}],
@@ -2035,7 +2113,7 @@ class ClipboardPanel(Gtk.Box):
             )
             if content:
                 import re
-                m = re.search(r'\*\*\s*标题\s*\*\*\s*=\s*\*\s*(.+?)\s*\*', content)
+                m = re.search(r'<title>(.+?)</title>', content, re.IGNORECASE)
                 if m:
                     title = m.group(1).strip()
                     GLib.idle_add(self._on_title_generated, conv_id, title)
