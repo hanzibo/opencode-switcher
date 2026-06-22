@@ -2022,9 +2022,7 @@ class ClipboardPanel(Gtk.Box):
                     self._ai_entry.grab_focus()
                     self.queue_resize()
 
-            return False
-
-        GLib.timeout_add(150, stop_streaming)
+        stop_streaming()
 
     def _on_send_clicked(self, _btn=None):
         text = self._ai_entry.get_text().strip()
