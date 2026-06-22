@@ -1935,7 +1935,8 @@ class ClipboardPanel(Gtk.Box):
                 self._ai_markdown_text = ""
                 self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
                 self._ai_entry.set_text("")
-                self._ai_lbl.set_markup("<b>AI 助手看盘</b>")
+                _, _, _, display_name = self._read_model_config(None, None)
+                self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
                 self._ai_active_model_info = None
                 self._ai_last_prompt_obj = None
                 self._ai_title_generated = False
