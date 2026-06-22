@@ -2279,6 +2279,59 @@ class ClipboardPanel(Gtk.Box):
             self._conversation_store.save_conversation(conv)
         self._refresh_conversation_dropdown()
 
+    def is_ai_panel_visible(self) -> bool:
+        return self._ai_vbox.get_visible()
+
+    def hide_ai_panel(self):
+        self._ai_vbox.set_no_show_all(True)
+        self._ai_vbox.hide()
+        self._ai_sep.set_no_show_all(True)
+        self._ai_sep.hide()
+        self._ai_panel_visible_saved = False
+        self.queue_resize()
+
+    def _reset_ai_panel_silent(self):
+        self._ai_messages = []
+        self._ai_conversation_id = None
+        self._ai_assistant_buffer = ""
+        self._ai_markdown_text = ""
+        self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
+        self._ai_entry.set_text("")
+        _, _, _, display_name = self._read_model_config(None, None)
+        self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
+        self._ai_active_model_info = None
+        self._ai_last_prompt_obj = None
+        self._ai_title_generated = False
+        
+        self._ai_input_area.set_no_show_all(False)
+        self._ai_input_area.show_all()
+        
+        self._ai_entry.grab_focus()
+        self.queue_resize()
+        self._refresh_conversation_dropdown()
+
+    def open_ai_and_load_recent(self):
+        self._ai_sep.set_no_show_all(False)
+        self._ai_sep.show()
+        self._ai_vbox.set_no_show_all(False)
+        self._ai_vbox.show()
+        self._ai_vbox.show_all()
+        self.queue_resize()
+
+        summaries = self._conversation_store.list_conversations()
+        if summaries:
+            summaries.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
+            latest_id = summaries[0].get("id")
+            if latest_id:
+                if latest_id == self._ai_conversation_id and self._ai_messages:
+                    self._refresh_conversation_dropdown()
+                    if self._ai_input_area.get_visible():
+                        self._ai_entry.grab_focus()
+                else:
+                    self._switch_to_conversation(latest_id)
+        else:
+            self._reset_ai_panel_silent()
+
     def _on_prompts_config_clicked(self, _btn):
         self._show_prompts_config_dialog()
 

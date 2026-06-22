@@ -70,6 +70,7 @@ class App:
         self._panel.on_rename_session = self._on_rename_session
         self._panel.on_launch_pure = self._on_session_launch_pure
         self._hotkey.on_trigger = lambda: self._on_hotkey()
+        self._hotkey.on_trigger_ai = lambda: self._on_hotkey_ai()
 
     def _clipboard_loop(self):
         """Background daemon thread: initial capture + periodic polling on X11."""
@@ -150,6 +151,9 @@ class App:
 
     def _on_hotkey(self):
         GLib.idle_add(self._panel.toggle)
+
+    def _on_hotkey_ai(self):
+        GLib.idle_add(self._panel.toggle_ai)
 
     def run(self):
         self._hotkey.start()

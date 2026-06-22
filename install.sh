@@ -178,7 +178,7 @@ EOF
 
     cat > "$BIN_DIR/opencode-switcher-toggle" <<EOF
 #!/usr/bin/env bash
-exec "$INSTALL_DIR/opencode-switcher-toggle"
+exec "$INSTALL_DIR/opencode-switcher-toggle" "\$@"
 EOF
     chmod +x "$BIN_DIR/opencode-switcher-toggle"
 
@@ -236,12 +236,17 @@ cmd_install() {
     echo "  │     命令: opencode-switcher-toggle         │"
     echo "  │     绑定: Ctrl+Shift+Space                 │"
     echo "  │                                          │"
-    echo "  │  2. 如果扩展未启用 (见上一步提示):          │"
+    echo "  │  2. AI快捷键: GNOME 设置 → 键盘 → 自定义  │"
+    echo "  │     名称: OpenCode Switcher AI            │"
+    echo "  │     命令: opencode-switcher-toggle --ai    │"
+    echo "  │     绑定: Ctrl+Shift+X                     │"
+    echo "  │                                          │"
+    echo "  │  3. 如果扩展未启用 (见上一步提示):          │"
     echo "  │     gnome-extensions enable               │"
     echo "  │       clipboard-monitor@opencode-switcher  │"
     echo "  │     然后登出再登入                         │"
     echo "  │                                          │"
-    echo "  │  3. 确保 opencode CLI 可用:                │"
+    echo "  │  4. 确保 opencode CLI 可用:                │"
     echo "  │     npm install -g opencode-ai │"
     echo "  │                                          │"
     echo "  └──────────────────────────────────────────┘"

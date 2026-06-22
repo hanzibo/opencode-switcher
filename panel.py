@@ -73,6 +73,7 @@ class SearchPanel:
         self._combo_popup_active = False
         self._show_time = 0.0
         self._active_tab = 0
+        self._opened_by_ai_hotkey = False
         self._clipboard_panel: Optional[ClipboardPanel] = None
         self._tab_bar = None
 
@@ -377,6 +378,7 @@ class SearchPanel:
         if index == self._active_tab:
             return
         self._active_tab = index
+        self._opened_by_ai_hotkey = False
         for i, child in enumerate(self._tab_bar.get_children()):
             ctx = child.get_style_context()
             if i == index:
@@ -411,12 +413,39 @@ class SearchPanel:
         self._search_entry.grab_focus()
 
     def toggle(self):
+        self._opened_by_ai_hotkey = False
         if self._window.is_visible():
             self.hide()
         else:
             self.show()
 
-    def show(self):
+    def toggle_ai(self):
+        is_ai_open = (
+            self._window.is_visible() and 
+            self._active_tab == 1 and 
+            self._clipboard_panel and 
+            self._clipboard_panel.is_ai_panel_visible()
+        )
+        
+        if is_ai_open:
+            if self._opened_by_ai_hotkey:
+                self.hide()
+            else:
+                if self._clipboard_panel:
+                    self._clipboard_panel.hide_ai_panel()
+                self._search_entry.grab_focus()
+        else:
+            was_hidden = not self._window.is_visible()
+            self._switch_tab(1)
+            if was_hidden:
+                self.show(keep_ai=True)
+                self._opened_by_ai_hotkey = True
+            else:
+                self._opened_by_ai_hotkey = False
+            if self._clipboard_panel:
+                self._clipboard_panel.open_ai_and_load_recent()
+
+    def show(self, keep_ai=False):
         self._show_time = time.time()
         if self._active_tab == 0:
             if self.on_open:
@@ -427,6 +456,9 @@ class SearchPanel:
                 self._clipboard_panel.load_cached()
             else:
                 self._clipboard_panel.load_data()
+
+        if not keep_ai and self._clipboard_panel:
+            self._clipboard_panel.hide_ai_panel()
 
         mx, my, mw, mh = _get_active_monitor_geometry()
         x = mx + (mw - self.PANEL_WIDTH) // 2
@@ -468,6 +500,7 @@ class SearchPanel:
         self._search_entry.set_text("")
         self._dialog_active = False
         self._menu_active = False
+        self._opened_by_ai_hotkey = False
 
     def _on_window_draw(self, widget, cr):
         cr.set_source_rgba(

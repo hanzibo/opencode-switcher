@@ -15,6 +15,7 @@ class HotkeyManager:
         self._running = False
         self._use_pynput = False
         self.on_trigger: Optional[Callable[[], None]] = None
+        self.on_trigger_ai: Optional[Callable[[], None]] = None
 
     def start(self):
         self._use_pynput = not is_wayland()
@@ -24,23 +25,16 @@ class HotkeyManager:
             self._start_socket_listener()
 
     def _start_pynput(self):
-        from pynput.keyboard import Listener, Key
+        from pynput.keyboard import GlobalHotKeys
 
-        # ponytail: removed unused self._pynput_keys assignment
-        self._pynput_pressed: set = set()
+        hotkeys = {}
+        if self.on_trigger:
+            hotkeys['<ctrl>+<shift>+<space>'] = self.on_trigger
+        if self.on_trigger_ai:
+            hotkeys['<ctrl>+<shift>+x'] = self.on_trigger_ai
+            hotkeys['<ctrl>+<shift>+X'] = self.on_trigger_ai
 
-        def on_press(key):
-            self._pynput_pressed.add(key)
-            is_space = key == Key.space or getattr(key, 'char', None) == ' '
-            has_ctrl = bool(self._pynput_pressed & {Key.ctrl, Key.ctrl_l, Key.ctrl_r})
-            has_shift = bool(self._pynput_pressed & {Key.shift, Key.shift_l, Key.shift_r})
-            if is_space and has_ctrl and has_shift and self.on_trigger:
-                self.on_trigger()
-
-        def on_release(key):
-            self._pynput_pressed.discard(key)
-
-        self._listener = Listener(on_press=on_press, on_release=on_release)
+        self._listener = GlobalHotKeys(hotkeys)
         self._listener.start()
 
     def _start_socket_listener(self):
@@ -64,8 +58,12 @@ class HotkeyManager:
                 conn, _ = self._socket.accept()
                 data = conn.recv(1024)
                 conn.close()
-                if data and data.strip() == b"toggle" and self.on_trigger:
-                    self.on_trigger()
+                if data:
+                    msg = data.strip()
+                    if msg == b"toggle" and self.on_trigger:
+                        self.on_trigger()
+                    elif msg == b"toggle_ai" and self.on_trigger_ai:
+                        self.on_trigger_ai()
             except socket.timeout:
                 continue
             except OSError:

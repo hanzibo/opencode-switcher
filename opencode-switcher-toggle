@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 exec python3 -c "
-import os, socket
+import os, socket, sys
+msg = b'toggle_ai' if '--ai' in sys.argv else b'toggle'
 sock = os.path.expanduser('~/.cache/opencode-switcher/toggle.sock')
 if os.path.exists(sock):
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect(sock)
-    s.send(b'toggle')
+    s.send(msg)
     s.close()
-"
+" "$@"
