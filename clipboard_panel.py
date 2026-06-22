@@ -13,6 +13,7 @@ from copy import deepcopy
 from uuid import uuid4
 from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation
 import time
+import requests
 from utils import relative_time, is_wayland, request_window_focus
 
 # Regex to match placeholders: ${index[:prompt][=default]}
@@ -98,10 +99,122 @@ def _clean_history_title(title: str) -> str:
                 
     if not cleaned:
         return "(untitled)"
-        
     return cleaned
 
 
+class _LLMHttpError(Exception):
+    pass
+
+
+class _LLMHttpClient:
+    def __init__(self):
+        import json
+        self._json = json
+        self._session = requests.Session()
+        retry_strategy = requests.packages.urllib3.util.retry.Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST"],
+        )
+        adapter = requests.adapters.HTTPAdapter(max_retries=retry_strategy)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
+
+    def stream_chat_completion(
+        self,
+        base_url: str,
+        api_key: str,
+        model_name: str,
+        messages: list,
+        timeout: int = 30,
+        cancel_event: Optional["threading.Event"] = None,
+    ):
+        """SSE streaming. Yields delta dicts with optional 'content'/'reasoning_content'."""
+        url = base_url.rstrip("/") + "/chat/completions"
+        body = {
+            "model": model_name,
+            "messages": messages,
+            "stream": True,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+
+        try:
+            response = self._session.post(
+                url,
+                json=body,
+                headers=headers,
+                stream=True,
+                timeout=timeout,
+            )
+            response.raise_for_status()
+
+            for line in response.iter_lines(decode_unicode=True):
+                if cancel_event and cancel_event.is_set():
+                    return
+                if not line:
+                    continue
+                if line.startswith("data:"):
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        return
+                    if not data_str:
+                        continue
+                    try:
+                        chunk = self._json.loads(data_str)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        yield delta
+                    except (self._json.JSONDecodeError, IndexError, KeyError):
+                        continue
+
+        except requests.exceptions.Timeout:
+            raise _LLMHttpError(f"请求超时（{timeout}秒）")
+        except requests.exceptions.ConnectionError as e:
+            raise _LLMHttpError(f"网络连接失败：{e}")
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else "?"
+            try:
+                err_body = e.response.json() if e.response is not None else {}
+                err_msg = err_body.get("error", {}).get("message", str(e))
+            except Exception:
+                err_msg = str(e)
+            raise _LLMHttpError(f"HTTP {status}: {err_msg}")
+        except requests.exceptions.RequestException as e:
+            raise _LLMHttpError(f"请求异常：{e}")
+
+    def sync_chat_completion(
+        self,
+        base_url: str,
+        api_key: str,
+        model_name: str,
+        messages: list,
+        timeout: int = 15,
+    ) -> Optional[str]:
+        url = base_url.rstrip("/") + "/chat/completions"
+        body = {
+            "model": model_name,
+            "messages": messages,
+            "stream": False,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+
+        try:
+            resp = self._session.post(url, json=body, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]
+        except requests.exceptions.RequestException as e:
+            print(f"_LLMHttpClient sync error: {e}", flush=True)
+            return None
+        except (KeyError, IndexError, self._json.JSONDecodeError) as e:
+            print(f"_LLMHttpClient parse error: {e}", flush=True)
+            return None
 
 
 
@@ -154,6 +267,8 @@ class ClipboardPanel(Gtk.Box):
         self._ai_history_combo: Optional[Gtk.ComboBoxText] = None
         self._ai_history_switching: bool = False  # guard against re-entrant combo changed signals
         self._conversation_store = ConversationStore()
+        self._ai_cancel_event = threading.Event()
+        self._llm_client = _LLMHttpClient()
 
         self._bg_color = Gdk.RGBA()
         self._title_color = Gdk.RGBA()
@@ -1578,6 +1693,7 @@ class ClipboardPanel(Gtk.Box):
             getattr(self, "_ai_active_model_info", None)
         )
 
+        self._ai_cancel_event.clear()
         threading.Thread(
             target=self._run_llm_api_request,
             args=(base_url, api_key, model_name, self._ai_messages, current_req_id),
@@ -1636,6 +1752,7 @@ class ClipboardPanel(Gtk.Box):
             self._ai_webview.load_html(self.get_html_template(self._theme, html), "file:///")
             return
 
+        self._ai_cancel_event.clear()
         threading.Thread(
             target=self._run_llm_api_request,
             args=(base_url, api_key, model_name, self._ai_messages, current_req_id),
@@ -1643,85 +1760,49 @@ class ClipboardPanel(Gtk.Box):
         ).start()
 
     def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, messages: list, req_id: int):
-        import urllib.request
-        import urllib.error
-        import json
-
-        url = base_url.rstrip("/") + "/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-        body = {
-            "model": model_name,
-            "messages": messages,
-            "stream": True
-        }
-
-        req = urllib.request.Request(
-            url=url,
-            data=json.dumps(body).encode("utf-8"),
-            headers=headers,
-            method="POST"
-        )
+        self._ai_assistant_buffer = ""
+        has_thinking = False
+        thinking_header_added = False
+        response_header_added = False
 
         try:
-            self._ai_assistant_buffer = ""
-            has_thinking = False
-            thinking_header_added = False
-            response_header_added = False
+            cancel_event = getattr(self, "_ai_cancel_event", None)
+            for delta in self._llm_client.stream_chat_completion(
+                base_url, api_key, model_name, messages,
+                timeout=30, cancel_event=cancel_event,
+            ):
+                if getattr(self, "_ai_request_id", 0) != req_id:
+                    return
 
-            with urllib.request.urlopen(req, timeout=20) as response:
-                for line in response:
-                    if getattr(self, "_ai_request_id", 0) != req_id:
-                        return
-                    line_decoded = line.decode("utf-8", errors="ignore").strip()
-                    if not line_decoded:
-                        continue
-                    if line_decoded.startswith("data:"):
-                        data_str = line_decoded[5:].strip()
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            chunk_json = json.loads(data_str)
-                            delta = chunk_json["choices"][0]["delta"]
-                            
-                            reasoning = delta.get("reasoning_content")
-                            content = delta.get("content")
-                            
-                            if reasoning:
-                                if not thinking_header_added:
-                                    GLib.idle_add(self._append_ai_text, '<div class="thinking-header">💭 Thinking Mode:</div>\n', req_id)
-                                    self._ai_assistant_buffer += '<div class="thinking-header">💭 Thinking Mode:</div>\n'
-                                    thinking_header_added = True
-                                GLib.idle_add(self._append_ai_text, reasoning, req_id)
-                                self._ai_assistant_buffer += reasoning
-                                has_thinking = True
-                            elif content:
-                                if not response_header_added:
-                                    response_header_added = True
-                                    if has_thinking:
-                                        GLib.idle_add(self._append_ai_text, '\n\n<div class="answer-header">💡 Answer:</div>\n', req_id)
-                                        self._ai_assistant_buffer += '\n\n<div class="answer-header">💡 Answer:</div>\n'
-                                    else:
-                                        GLib.idle_add(self._append_ai_text, '\n\n<div class="assistant-header">🤖 Assistant:</div>\n', req_id)
-                                        self._ai_assistant_buffer += '\n\n<div class="assistant-header">🤖 Assistant:</div>\n'
-                                GLib.idle_add(self._append_ai_text, content, req_id)
-                                self._ai_assistant_buffer += content
-                        except Exception:
-                            pass
+                reasoning = delta.get("reasoning_content")
+                content = delta.get("content")
+
+                if reasoning:
+                    if not thinking_header_added:
+                        GLib.idle_add(self._append_ai_text, '<div class="thinking-header">💭 Thinking Mode:</div>\n', req_id)
+                        self._ai_assistant_buffer += '<div class="thinking-header">💭 Thinking Mode:</div>\n'
+                        thinking_header_added = True
+                    GLib.idle_add(self._append_ai_text, reasoning, req_id)
+                    self._ai_assistant_buffer += reasoning
+                    has_thinking = True
+                elif content:
+                    if not response_header_added:
+                        response_header_added = True
+                        if has_thinking:
+                            GLib.idle_add(self._append_ai_text, '\n\n<div class="answer-header">💡 Answer:</div>\n', req_id)
+                            self._ai_assistant_buffer += '\n\n<div class="answer-header">💡 Answer:</div>\n'
+                        else:
+                            GLib.idle_add(self._append_ai_text, '\n\n<div class="assistant-header">🤖 Assistant:</div>\n', req_id)
+                            self._ai_assistant_buffer += '\n\n<div class="assistant-header">🤖 Assistant:</div>\n'
+                    GLib.idle_add(self._append_ai_text, content, req_id)
+                    self._ai_assistant_buffer += content
+
             GLib.idle_add(self._on_llm_api_finished, req_id)
-        except urllib.error.HTTPError as e:
-            try:
-                err_body = e.read().decode("utf-8", errors="ignore")
-                err_data = json.loads(err_body)
-                err_msg = err_data.get("error", {}).get("message", err_body)
-            except Exception:
-                err_msg = str(e)
-            GLib.idle_add(self._append_ai_text, f"\n\n❌ [请求失败 - HTTP {e.code}]:\n{err_msg}", req_id)
+        except _LLMHttpError as e:
+            GLib.idle_add(self._append_ai_text, f"\n\n❌ [请求失败]:\n{e}", req_id)
             GLib.idle_add(self._on_llm_api_finished, req_id)
         except Exception as e:
-            GLib.idle_add(self._append_ai_text, f"\n\n❌ [网络或请求错误]:\n{e}", req_id)
+            GLib.idle_add(self._append_ai_text, f"\n\n❌ [内部错误]:\n{e}", req_id)
             GLib.idle_add(self._on_llm_api_finished, req_id)
 
     def _append_ai_text(self, text: str, req_id: int):
@@ -2213,33 +2294,9 @@ class ClipboardPanel(Gtk.Box):
 
     def _call_llm_sync(self, messages: list, base_url: str, api_key: str,
                         model_name: str, timeout: int = 15) -> Optional[str]:
-        """Non-streaming LLM API call for background tasks (e.g. title generation)."""
-        import urllib.request
-        import urllib.error
-        import json as json_mod
-
-        url = base_url.rstrip("/") + "/chat/completions"
-        body = {
-            "model": model_name,
-            "messages": messages,
-            "stream": False,
-        }
-        req = urllib.request.Request(
-            url=url,
-            data=json_mod.dumps(body).encode("utf-8"),
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
-            },
-            method="POST",
+        return self._llm_client.sync_chat_completion(
+            base_url, api_key, model_name, messages, timeout=timeout,
         )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json_mod.loads(resp.read())
-            return data["choices"][0]["message"]["content"]
-        except Exception as e:
-            print(f"Error in sync LLM call: {e}", flush=True)
-            return None
 
     def _generate_conversation_title(self, first_message: str, conv_id: str,
                                       base_url: str, api_key: str, model_name: str):
@@ -2284,6 +2341,7 @@ class ClipboardPanel(Gtk.Box):
         return self._ai_vbox.get_visible()
 
     def hide_ai_panel(self):
+        self._ai_cancel_event.set()
         self._ai_vbox.set_no_show_all(True)
         self._ai_vbox.hide()
         self._ai_sep.set_no_show_all(True)
@@ -2292,6 +2350,7 @@ class ClipboardPanel(Gtk.Box):
         self.queue_resize()
 
     def _reset_ai_panel_silent(self):
+        self._ai_cancel_event.set()
         self._ai_messages = []
         self._ai_conversation_id = None
         self._ai_assistant_buffer = ""
