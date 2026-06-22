@@ -246,6 +246,11 @@ class ClipboardPanel(Gtk.Box):
         self._loading_data = False
         self._ai_render_timeout_id = 0
         self._ai_request_id = 0
+        self._ai_current_assistant_text = ""
+        self._ai_response_div_added = False
+        self._ai_stream_lock = threading.Lock()
+        self._ai_stream_queue = []
+        self._ai_markdown_text = ""
 
         # Multi-turn conversation state
         self._ai_messages: List[Dict] = []  # OpenAI-compatible message list
@@ -1688,16 +1693,28 @@ class ClipboardPanel(Gtk.Box):
         self._ai_messages = [{"role": "user", "content": prompt_text}]
         self._ai_conversation_id = None
         self._ai_assistant_buffer = ""
+        self._ai_current_assistant_text = ""
+        self._ai_response_div_added = False
         rendered_prompt = _close_unclosed_code_blocks(prompt_text)
         self._ai_markdown_text = f'<div class="user-header">You:</div>\n\n{rendered_prompt}\n\n---\n\n'
         self._ai_title_generated = False
-        self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
+        try:
+            import markdown
+            user_html = markdown.markdown(self._ai_markdown_text, extensions=_MARKDOWN_EXTENSIONS)
+        except ImportError:
+            user_html = f'<div class="user-header">You:</div>\n\n<p>{prompt_text}</p>\n\n<hr>'
+        self._ai_webview.load_html(self.get_html_template(self._theme, user_html), "file:///")
 
     def _send_user_message(self, text: str):
         self._ai_messages.append({"role": "user", "content": text})
         self._ai_request_id += 1
         current_req_id = self._ai_request_id
         self._ai_streaming = True
+        self._ai_current_assistant_text = ""
+        self._ai_response_div_added = False
+        with self._ai_stream_lock:
+            self._ai_stream_queue = []
+        GLib.timeout_add(100, self._poll_stream_queue, current_req_id)
 
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
@@ -1705,6 +1722,7 @@ class ClipboardPanel(Gtk.Box):
 
         rendered_text = _close_unclosed_code_blocks(text)
         self._ai_markdown_text += f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n---\n\n'
+        self._render_markdown(self._ai_markdown_text)
 
         self._ai_spinner.show()
         self._ai_spinner.start()
@@ -1736,6 +1754,11 @@ class ClipboardPanel(Gtk.Box):
         current_req_id = self._ai_request_id
 
         self._ai_streaming = True
+        self._ai_current_assistant_text = ""
+        self._ai_response_div_added = False
+        with self._ai_stream_lock:
+            self._ai_stream_queue = []
+        GLib.timeout_add(100, self._poll_stream_queue, current_req_id)
 
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
@@ -1799,48 +1822,77 @@ class ClipboardPanel(Gtk.Box):
 
                 if reasoning:
                     if not thinking_header_added:
-                        GLib.idle_add(self._append_ai_text, '<div class="thinking-header">💭 Thinking Mode:</div>\n', req_id)
-                        self._ai_assistant_buffer += '<div class="thinking-header">💭 Thinking Mode:</div>\n'
+                        with self._ai_stream_lock:
+                            self._ai_stream_queue.append('<div class="thinking-header">💭 Thinking Mode:</div>\n')
                         thinking_header_added = True
-                    GLib.idle_add(self._append_ai_text, reasoning, req_id)
-                    self._ai_assistant_buffer += reasoning
+                    with self._ai_stream_lock:
+                        self._ai_stream_queue.append(reasoning)
                     has_thinking = True
                 elif content:
                     if not response_header_added:
                         response_header_added = True
                         if has_thinking:
-                            GLib.idle_add(self._append_ai_text, '\n\n<div class="answer-header">💡 Answer:</div>\n', req_id)
-                            self._ai_assistant_buffer += '\n\n<div class="answer-header">💡 Answer:</div>\n'
+                            with self._ai_stream_lock:
+                                self._ai_stream_queue.append('\n\n<div class="answer-header">💡 Answer:</div>\n')
                         else:
-                            GLib.idle_add(self._append_ai_text, '\n\n<div class="assistant-header">🤖 Assistant:</div>\n', req_id)
-                            self._ai_assistant_buffer += '\n\n<div class="assistant-header">🤖 Assistant:</div>\n'
-                    GLib.idle_add(self._append_ai_text, content, req_id)
-                    self._ai_assistant_buffer += content
+                            with self._ai_stream_lock:
+                                self._ai_stream_queue.append('\n\n<div class="assistant-header">🤖 Assistant:</div>\n')
+                    with self._ai_stream_lock:
+                        self._ai_stream_queue.append(content)
 
             GLib.idle_add(self._on_llm_api_finished, req_id)
         except _LLMHttpError as e:
-            GLib.idle_add(self._append_ai_text, f"\n\n❌ [请求失败]:\n{e}", req_id)
+            with self._ai_stream_lock:
+                self._ai_stream_queue.append(f"\n\n❌ [请求失败]:\n{e}")
             GLib.idle_add(self._on_llm_api_finished, req_id)
         except Exception as e:
-            GLib.idle_add(self._append_ai_text, f"\n\n❌ [内部错误]:\n{e}", req_id)
+            with self._ai_stream_lock:
+                self._ai_stream_queue.append(f"\n\n❌ [内部错误]:\n{e}")
             GLib.idle_add(self._on_llm_api_finished, req_id)
 
-    def _append_ai_text(self, text: str, req_id: int):
+    def _flush_stream_queue(self) -> bool:
+        new_text_list = []
+        with self._ai_stream_lock:
+            if self._ai_stream_queue:
+                new_text_list = self._ai_stream_queue
+                self._ai_stream_queue = []
+        
+        if new_text_list:
+            joined = "".join(new_text_list)
+            self._ai_markdown_text += joined
+            self._ai_current_assistant_text += joined
+            self._ai_assistant_buffer += joined
+            return True
+        return False
+
+    def _poll_stream_queue(self, req_id: int) -> bool:
+        if getattr(self, "_ai_request_id", 0) != req_id:
+            return False
+        
+        if self._flush_stream_queue():
+            self._render_current_assistant_message(req_id)
+            
+        return self._ai_streaming
+
+    def _render_current_assistant_message(self, req_id: int):
         if getattr(self, "_ai_request_id", 0) != req_id:
             return
-        if not text or not isinstance(text, str):
-            return
-        if not hasattr(self, "_ai_markdown_text"):
-            self._ai_markdown_text = ""
-        self._ai_markdown_text += text
         
-        if getattr(self, "_ai_render_timeout_id", 0) == 0:
-            def do_render():
-                if getattr(self, "_ai_request_id", 0) == req_id:
-                    self._render_markdown(self._ai_markdown_text)
-                self._ai_render_timeout_id = 0
-                return False
-            self._ai_render_timeout_id = GLib.timeout_add(100, do_render)
+        msg_id = f"msg-{req_id}"
+        if not self._ai_response_div_added:
+            js_append = f"appendMessageContainer('{msg_id}');"
+            self._ai_webview.run_javascript(js_append, None, None)
+            self._ai_response_div_added = True
+            
+        text = _close_unclosed_code_blocks(self._ai_current_assistant_text)
+        try:
+            import markdown
+            html = markdown.markdown(text, extensions=_MARKDOWN_EXTENSIONS)
+        except ImportError:
+            html = f"<pre><code>{text}</code></pre>"
+            
+        js_update = f"updateMessageContainer('{msg_id}', {json.dumps(html)});"
+        self._ai_webview.run_javascript(js_update, None, None)
 
     def _get_pygments_css(self, theme: str) -> str:
         cached = self._pygments_css_cache.get(theme)
@@ -1946,6 +1998,22 @@ class ClipboardPanel(Gtk.Box):
                     content.innerHTML = html;
                     window.scrollTo(0, document.body.scrollHeight);
                 }}
+                function appendMessageContainer(msgId) {{
+                    const content = document.getElementById('content');
+                    if (!document.getElementById(msgId)) {{
+                        const div = document.createElement('div');
+                        div.id = msgId;
+                        content.appendChild(div);
+                    }}
+                    window.scrollTo(0, document.body.scrollHeight);
+                }}
+                function updateMessageContainer(msgId, html) {{
+                    const div = document.getElementById(msgId);
+                    if (div) {{
+                        div.innerHTML = html;
+                    }}
+                    window.scrollTo(0, document.body.scrollHeight);
+                }}
             </script>
         </head>
         <body class="{theme_name}">
@@ -1983,6 +2051,8 @@ class ClipboardPanel(Gtk.Box):
         if getattr(self, "_ai_request_id", 0) != req_id:
             return
 
+        self._flush_stream_queue()
+
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
             self._ai_render_timeout_id = 0
@@ -2001,6 +2071,8 @@ class ClipboardPanel(Gtk.Box):
                 if self._ai_messages and self._ai_messages[-1].get("role") == "user":
                     self._ai_messages.append({"role": "assistant", "content": self._ai_assistant_buffer})
                 self._ai_assistant_buffer = ""
+                self._ai_current_assistant_text = ""
+                self._ai_response_div_added = False
 
                 # Auto-save conversation to disk
                 try:
@@ -2073,6 +2145,8 @@ class ClipboardPanel(Gtk.Box):
                 self._ai_conversation_id = None
                 self._ai_assistant_buffer = ""
                 self._ai_markdown_text = ""
+                self._ai_current_assistant_text = ""
+                self._ai_response_div_added = False
                 self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
                 self._ai_entry.set_text("")
                 _, _, _, display_name = self._read_model_config(None, None)
@@ -2195,6 +2269,8 @@ class ClipboardPanel(Gtk.Box):
         self._ai_conversation_id = conv.id
         self._ai_conversation_created_at = conv.created_at
         self._ai_assistant_buffer = ""
+        self._ai_current_assistant_text = ""
+        self._ai_response_div_added = False
         self._ai_title_generated = True  # already generated (if ever), skip re-generation
         self._ai_last_prompt_obj = None
         self._ai_active_model_info = conv.model_config_snapshot
