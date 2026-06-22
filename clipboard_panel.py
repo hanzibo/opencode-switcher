@@ -106,6 +106,34 @@ def _clean_history_title(title: str) -> str:
     return cleaned
 
 
+def _textview_draw_placeholder(widget, cr):
+    """Draw placeholder text on a Gtk.TextView when its buffer is empty.
+
+    Connect via: textview.connect_after("draw", _textview_draw_placeholder)
+    Set placeholder via: textview.placeholder_text = "..."
+    """
+    buf = widget.get_buffer()
+    if buf.get_char_count() == 0:
+        placeholder = getattr(widget, "placeholder_text", "")
+        if placeholder:
+            text_window = widget.get_window(Gtk.TextWindowType.TEXT)
+            if text_window and Gtk.cairo_should_draw_window(cr, text_window):
+                cr.save()
+                start_iter = buf.get_start_iter()
+                rect = widget.get_iter_location(start_iter)
+                left, top = widget.buffer_to_window_coords(Gtk.TextWindowType.TEXT, rect.x, rect.y)
+                cr.translate(left, top)
+                layout = widget.create_pango_layout(placeholder)
+                context = widget.get_style_context()
+                font_desc = context.get_property("font", Gtk.StateFlags.NORMAL)
+                layout.set_font_description(font_desc)
+                color = context.get_color(Gtk.StateFlags.NORMAL)
+                cr.set_source_rgba(color.red, color.green, color.blue, 0.45)
+                PangoCairo.show_layout(cr, layout)
+                cr.restore()
+    return False
+
+
 class _LLMHttpError(Exception):
     pass
 
@@ -557,28 +585,6 @@ class ClipboardPanel(Gtk.Box):
         self._ai_input_area.set_no_show_all(True)
         self._ai_input_area.set_margin_top(4)
 
-        def _ai_entry_placeholder_draw(widget, cr):
-            buf = widget.get_buffer()
-            if buf.get_char_count() == 0:
-                placeholder = getattr(widget, "placeholder_text", "")
-                if placeholder:
-                    text_window = widget.get_window(Gtk.TextWindowType.TEXT)
-                    if text_window and Gtk.cairo_should_draw_window(cr, text_window):
-                        cr.save()
-                        start_iter = buf.get_start_iter()
-                        rect = widget.get_iter_location(start_iter)
-                        left, top = widget.buffer_to_window_coords(Gtk.TextWindowType.TEXT, rect.x, rect.y)
-                        cr.translate(left, top)
-                        layout = widget.create_pango_layout(placeholder)
-                        context = widget.get_style_context()
-                        font_desc = context.get_property("font", Gtk.StateFlags.NORMAL)
-                        layout.set_font_description(font_desc)
-                        color = context.get_color(Gtk.StateFlags.NORMAL)
-                        cr.set_source_rgba(color.red, color.green, color.blue, 0.45)
-                        PangoCairo.show_layout(cr, layout)
-                        cr.restore()
-            return False
-
         self._ai_entry = Gtk.TextView.new()
         self._ai_entry.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         self._ai_entry.set_hexpand(True)
@@ -587,13 +593,13 @@ class ClipboardPanel(Gtk.Box):
         self._ai_entry.set_top_margin(4)
         self._ai_entry.set_bottom_margin(4)
         self._ai_entry.set_accepts_tab(False)
+        self._ai_entry.get_buffer().connect("changed", lambda *_: self._adjust_ai_entry_height())
         self._ai_entry.placeholder_text = "输入后续问题..."
-        self._ai_entry.connect_after("draw", _ai_entry_placeholder_draw)
+        self._ai_entry.connect_after("draw", _textview_draw_placeholder)
         self._ai_entry.connect("key-press-event", self._on_ai_entry_key_press)
 
         self._ai_entry_sw = Gtk.ScrolledWindow.new()
         self._ai_entry_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self._ai_entry_sw.set_size_request(-1, 64)
         self._ai_entry_sw.add(self._ai_entry)
 
         self._ai_send_btn = Gtk.Button.new_with_label("发送")
@@ -2149,6 +2155,24 @@ class ClipboardPanel(Gtk.Box):
                     self.queue_resize()
 
         stop_streaming()
+
+    def _adjust_ai_entry_height(self):
+        buf = self._ai_entry.get_buffer()
+        start = buf.get_start_iter()
+        end = buf.get_end_iter()
+        text = buf.get_text(start, end, True)
+
+        newline_count = text.count('\n')
+        target_lines = min(max(1, newline_count + 1), 5)
+
+        layout = self._ai_entry.create_pango_layout("Ag")
+        _, logical = layout.get_pixel_extents()
+        line_height = logical.height + 2
+        margin_px = 8
+        height = int(target_lines * line_height + margin_px)
+
+        self._ai_entry_sw.set_size_request(-1, height)
+        self._ai_entry.queue_resize()
 
     def _on_send_clicked(self, _btn=None):
         buf = self._ai_entry.get_buffer()
@@ -4538,30 +4562,7 @@ class ClipboardPanel(Gtk.Box):
 
             return False
 
-        def on_textview_draw(widget, cr):
-            buf = widget.get_buffer()
-            if buf.get_char_count() == 0:
-                placeholder = getattr(widget, "placeholder_text", "")
-                if placeholder:
-                    text_window = widget.get_window(Gtk.TextWindowType.TEXT)
-                    if text_window and Gtk.cairo_should_draw_window(cr, text_window):
-                        cr.save()
-                        start_iter = buf.get_start_iter()
-                        rect = widget.get_iter_location(start_iter)
-                        left, top = widget.buffer_to_window_coords(Gtk.TextWindowType.TEXT, rect.x, rect.y)
-                        cr.translate(left, top)
-                        
-                        layout = widget.create_pango_layout(placeholder)
-                        context = widget.get_style_context()
-                        font_desc = context.get_property("font", Gtk.StateFlags.NORMAL)
-                        layout.set_font_description(font_desc)
-                        
-                        color = context.get_color(Gtk.StateFlags.NORMAL)
-                        cr.set_source_rgba(color.red, color.green, color.blue, 0.45)
-                        
-                        PangoCairo.show_layout(cr, layout)
-                        cr.restore()
-            return False
+        on_textview_draw = _textview_draw_placeholder
 
         for num in nums:
             scr_in = Gtk.ScrolledWindow.new()
