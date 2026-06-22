@@ -1874,33 +1874,7 @@ class ClipboardPanel(Gtk.Box):
                         "base_url": base_url,
                         "model_name": model_name
                     }
-                    if not self._ai_conversation_id:
-                        now = int(time.time() * 1000)
-                        self._ai_conversation_created_at = now
-                        conv = self._conversation_store.create_conversation(
-                            title="untitled",
-                            model_config=model_snapshot
-                        )
-                        self._ai_conversation_id = conv.id
-                        conv.messages = [ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages]
-                        self._conversation_store.save_conversation(conv)
-                    else:
-                        conv = self._conversation_store.load_conversation(self._ai_conversation_id)
-                        if conv:
-                            conv.messages = [ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages]
-                            conv.model_config_snapshot = model_snapshot
-                            conv.updated_at = int(time.time() * 1000)
-                        else:
-                            conv = Conversation(
-                                id=self._ai_conversation_id,
-                                title="untitled",
-                                system_prompt="",
-                                messages=[ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages],
-                                model_config_snapshot=model_snapshot,
-                                created_at=self._ai_conversation_created_at,
-                                updated_at=int(time.time() * 1000),
-                            )
-                        self._conversation_store.save_conversation(conv)
+                    self._save_current_conversation(model_snapshot)
                 except Exception as e:
                     print(f"Error saving conversation: {e}", flush=True)
 
@@ -2003,6 +1977,36 @@ class ClipboardPanel(Gtk.Box):
                 parts.append(content)
         return "".join(parts)
 
+    def _save_current_conversation(self, model_snapshot: Dict[str, Any]):
+        """Save or update the current active conversation to the store, preserving its title."""
+        if not self._ai_conversation_id:
+            now = int(time.time() * 1000)
+            self._ai_conversation_created_at = now
+            conv = self._conversation_store.create_conversation(
+                title="untitled",
+                model_config=model_snapshot
+            )
+            self._ai_conversation_id = conv.id
+            conv.messages = [ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages]
+            self._conversation_store.save_conversation(conv)
+        else:
+            conv = self._conversation_store.load_conversation(self._ai_conversation_id)
+            if conv:
+                conv.messages = [ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages]
+                conv.model_config_snapshot = model_snapshot
+                conv.updated_at = int(time.time() * 1000)
+            else:
+                conv = Conversation(
+                    id=self._ai_conversation_id,
+                    title="untitled",
+                    system_prompt="",
+                    messages=[ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages],
+                    model_config_snapshot=model_snapshot,
+                    created_at=self._ai_conversation_created_at,
+                    updated_at=int(time.time() * 1000),
+                )
+            self._conversation_store.save_conversation(conv)
+
     def _switch_to_conversation(self, conv_id: str):
         """Switch AI panel to display a different conversation by ID."""
         if self._ai_streaming:
@@ -2020,22 +2024,7 @@ class ClipboardPanel(Gtk.Box):
                     "base_url": base_url,
                     "model_name": model_name
                 }
-                conv = self._conversation_store.load_conversation(self._ai_conversation_id)
-                if conv:
-                    conv.messages = [ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages]
-                    conv.model_config_snapshot = model_snapshot
-                    conv.updated_at = int(time.time() * 1000)
-                else:
-                    conv = Conversation(
-                        id=self._ai_conversation_id,
-                        title="untitled",
-                        system_prompt="",
-                        messages=[ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages],
-                        model_config_snapshot=model_snapshot,
-                        created_at=self._ai_conversation_created_at,
-                        updated_at=int(time.time() * 1000),
-                    )
-                self._conversation_store.save_conversation(conv)
+                self._save_current_conversation(model_snapshot)
             except Exception as e:
                 print(f"Error saving before switch: {e}", flush=True)
 
