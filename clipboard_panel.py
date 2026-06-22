@@ -1938,6 +1938,7 @@ class ClipboardPanel(Gtk.Box):
                 self._ai_lbl.set_markup("<b>AI 助手看盘</b>")
                 self._ai_active_model_info = None
                 self._ai_last_prompt_obj = None
+                self._ai_title_generated = False
                 
                 self._ai_input_area.set_no_show_all(False)
                 self._ai_input_area.show_all()
