@@ -2170,7 +2170,7 @@ class ClipboardPanel(Gtk.Box):
         layout = self._ai_entry.create_pango_layout("Ag")
         _, logical = layout.get_pixel_extents()
         line_height = logical.height + 2
-        margin_px = 8
+        margin_px = self._ai_entry.get_top_margin() + self._ai_entry.get_bottom_margin()
         height = int(target_lines * line_height + margin_px)
 
         self._ai_entry_sw.set_size_request(-1, height)
