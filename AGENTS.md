@@ -7,18 +7,18 @@ Linux GTK3 desktop tray app switching between OpenCode (CLI) sessions via a sear
 ```
 ./                          # Flat project root (no __init__.py — not a package)
 ├── main.py                 # Entrypoint: flock lock, App(), Gtk.main()
-├── panel.py                # (1260L) Search panel UI, tab switcher, CSS providers
-├── clipboard_panel.py      # (3835L) Clipboard/LLM panel — largest file
-├── clipboard_store.py      # (878L) Clipboard store, heuristic classification, custom prompts
-├── session_store.py        # (212L) SQLite reader + live-session detection via pgrep/proc
-├── hotkey.py               # (89L) X11 pynput + Wayland Unix socket hotkey manager
-├── launcher.py             # (128L) Terminal discovery + session spawner
-├── utils.py                # (45L) is_wayland(), relative_time(), request_window_focus()
+├── panel.py                # Search panel UI, tab switcher, CSS providers
+├── clipboard_panel.py      # Clipboard/LLM panel — largest file
+├── clipboard_store.py      # Clipboard store, heuristic classification, custom prompts
+├── session_store.py        # SQLite reader + live-session detection via pgrep/proc
+├── hotkey.py               # X11 pynput + Wayland Unix socket hotkey manager
+├── launcher.py             # Terminal discovery + session spawner
+├── utils.py                # is_wayland(), relative_time(), request_window_focus()
 ├── migrate_history.py      # Migration utility (dual-use: standalone + imported by main.py)
 ├── inspect_db.py           # DB inspector (missing __name__ guard)
 ├── dnd_test.py             # Only test file: interactive GTK DnD test (manual)
 ├── gnome-extension/        # GNOME Shell extension (Wayland clipboard + focus)
-│   ├── extension.js        # (350L) Clipboard owner-changed listener + focus request
+│   ├── extension.js        # Clipboard owner-changed listener + focus request
 │   └── metadata.json       # Shell versions [48,49,50]
 ├── docs/usage.md           # Chinese-language usage guide
 ├── run.sh                  # Prod launcher: log rotation, nvm, exec to main.py
@@ -32,12 +32,12 @@ Linux GTK3 desktop tray app switching between OpenCode (CLI) sessions via a sear
 |------|------|-------|
 | Session list / SQLite | `session_store.py` | WAL pragma, exclude archived+subagent |
 | Clipboard capture+classify | `clipboard_store.py` | Heuristic classify, FIFO 150, image store |
-| Clipboard UI | `clipboard_panel.py` | 3835L — tabbed panel, prompts, backup/restore |
+| Clipboard UI | `clipboard_panel.py` | Tabbed panel, prompts, backup/restore |
 | Search panel | `panel.py` | Fuzzy scoring, tab switcher, CSS themes |
 | Hotkey / socket | `hotkey.py` | pynput (X11) vs Unix socket (Wayland) |
 | Terminal launch | `launcher.py` | Ptyxis→GNOME Terminal→Console→Black Box |
 | GNOME extension | `gnome-extension/extension.js` | Wayland clipboard monitor + focus |
-| Config + cache paths | `utils.py` + AGENTS.md | `~/.config/...` and `~/.cache/...` |
+| Config + cache paths | `utils.py` | `~/.config/...` and `~/.cache/...` |
 
 ## COMMANDS
 
@@ -87,18 +87,12 @@ systemd/.desktop → run.sh → main.py (flock lock)
 - **No package structure**: Zero `__init__.py` files. Can't `pip install -e .` or use `python -m`. All modules flat in root.
 - **No tests**: Zero automated tests. `dnd_test.py` is manual-only. No `pytest`, no assertions anywhere.
 - **No CI/CD**: No GitHub Actions, no Makefile, no Dockerfile. `install.sh` is Debian/Ubuntu-only (hardcoded `dpkg`).
-- **`add_provider_for_screen` used despite being forbidden** (panel.py:99, clipboard_panel.py:109 — leaks CSS globally per GTK docs).
+- **`add_provider_for_screen` used despite being forbidden** (panel.py and clipboard_panel.py — leaks CSS globally per GTK docs).
 - **`inspect_db.py` missing `__name__` guard**: Top-level SQL executes on import (currently safe, not imported).
 - **`opencode-switcher-toggle`**: Python code inside shell script via `exec python3 -c "..."` — fragile quoting, no linting.
 - **`run.sh` sources NVM**: Couples tray app runtime to user's shell Node.js env. NVM errors pollute app log.
 - **`--system-site-packages` venv**: Breaks isolation. Workaround for PyGObject being a system package.
 - **Hardcoded version** `VERSION="1.0.0"` in `install.sh` — no git tags, no version automation.
-
-## KNOWN DEFERRED WORK (.omo/plans/)
-
-- Fix `_on_category_button` menu popup timing (right-click crash)
-- Fix backup/restore dialog destroy order (capture filename before destroy)
-- Add "Restart" tray menu item
 
 ## CRITICAL GTK & PYGObject QUIRKS (Crash Guards)
 

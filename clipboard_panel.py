@@ -128,6 +128,8 @@ class ClipboardPanel(Gtk.Box):
         self.on_dialog_hidden: Optional[Callable[[], None]] = None
         self.on_menu_shown: Optional[Callable[[], None]] = None
         self.on_menu_hidden: Optional[Callable[[], None]] = None
+        self.on_combo_popup_shown: Optional[Callable[[], None]] = None
+        self.on_combo_popup_hidden: Optional[Callable[[], None]] = None
         self._editing_rename_row = None
         self._editing_rename_entry = None
         self._editing_rename_old_name = None
@@ -1920,8 +1922,9 @@ class ClipboardPanel(Gtk.Box):
                             args=(first_msg, self._ai_conversation_id, base_url, api_key, model_name),
                             daemon=True
                         ).start()
-                    # Refresh dropdown to show new entry immediately (title will update later)
-                    self._refresh_conversation_dropdown()
+
+                # Refresh dropdown to show new entry or updated message count immediately
+                self._refresh_conversation_dropdown()
 
                 if not self._ai_input_area.get_visible():
                     self._ai_input_area.set_no_show_all(False)
@@ -2096,6 +2099,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_entry.set_text("")
         self._ai_entry.grab_focus()
         self.queue_resize()
+        self._refresh_conversation_dropdown()
 
     def _refresh_conversation_dropdown(self):
         """Repopulate the history dropdown from the conversation store."""
@@ -2115,7 +2119,10 @@ class ClipboardPanel(Gtk.Box):
             sid = s.get("id", "")
             raw_title = s.get("title", "(untitled)")
             cleaned_title = _clean_history_title(raw_title)
-            title = cleaned_title[:20]
+            if len(cleaned_title) > 20:
+                title = cleaned_title[:17] + "..."
+            else:
+                title = cleaned_title
             count = s.get("message_count", 0)
             label = f"{title} ({count}条)"
             self._ai_history_combo.append(sid, label)
@@ -2128,6 +2135,8 @@ class ClipboardPanel(Gtk.Box):
                 self._ai_history_combo.set_active_id(self._ai_conversation_id)
         else:
             self._ai_history_combo.set_sensitive(False)
+            self._ai_history_combo.set_no_show_all(True)
+            self._ai_history_combo.hide()
 
         self._ai_history_switching = False
 
@@ -2148,29 +2157,56 @@ class ClipboardPanel(Gtk.Box):
 
     def _on_ai_history_combo_popup_shown(self, combo, pspec):
         if combo.get_property("popup-shown"):
-            for win in Gtk.Window.list_toplevels():
-                if win.get_name() == "gtk-combobox-popup-window":
-                    def find_scrolled_window(widget):
-                        if isinstance(widget, Gtk.ScrolledWindow):
-                            return widget
-                        if isinstance(widget, Gtk.Container):
-                            for child in widget.get_children():
-                                res = find_scrolled_window(child)
-                                if res:
-                                    return res
-                        return None
-                    scrolled = find_scrolled_window(win)
-                    if scrolled:
-                        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-                        scrolled.set_size_request(-1, 300)
-                        width, _ = win.get_size()
-                        win.resize(width, 300)
-                        win.queue_resize()
-            if self.on_dialog_shown:
-                self.on_dialog_shown()
+            def adjust_popup(retry_count=0):
+                found = False
+                for win in Gtk.Window.list_toplevels():
+                    if win.get_name() == "gtk-combobox-popup-window":
+                        def find_scrolled_window(widget):
+                            if isinstance(widget, Gtk.ScrolledWindow):
+                                return widget
+                            if isinstance(widget, Gtk.Container):
+                                for child in widget.get_children():
+                                    res = find_scrolled_window(child)
+                                    if res:
+                                        return res
+                            return None
+                        scrolled = find_scrolled_window(win)
+                        if scrolled:
+                            model = combo.get_model()
+                            num_items = len(model) if model else 0
+                            desired_height = min(num_items * 36 + 10, 300)
+                            
+                            # 禁用高度自动向上传播，并设置显式的高度限制值以兼容 Wayland
+                            scrolled.set_propagate_natural_height(False)
+                            scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+                            scrolled.set_min_content_height(desired_height)
+                            scrolled.set_max_content_height(desired_height)
+                            
+                            width, _ = win.get_size()
+                            if width < 50:
+                                width = max(combo.get_allocated_width(), 160)
+                            win.resize(width, desired_height)
+                            win.queue_resize()
+                            found = True
+                            break
+                if not found and retry_count < 10:
+                    GLib.timeout_add(50, lambda: adjust_popup(retry_count + 1))
+                return False
+
+            GLib.idle_add(adjust_popup)
+
+            if self.on_combo_popup_shown:
+                self.on_combo_popup_shown()
         else:
-            if self.on_dialog_hidden:
-                self.on_dialog_hidden()
+            if self.on_combo_popup_hidden:
+                self.on_combo_popup_hidden()
+
+    def is_history_popup_shown(self) -> bool:
+        """Check if the conversation history dropdown is currently active."""
+        return bool(
+            self._ai_history_combo and 
+            self._ai_history_combo.get_property("popup-shown")
+        )
 
     # ── Synchronous LLM call for background title generation ──────────────────────
 
