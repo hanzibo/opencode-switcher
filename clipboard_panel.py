@@ -1939,14 +1939,14 @@ class ClipboardPanel(Gtk.Box):
                 self._ai_active_model_info = None
                 self._ai_last_prompt_obj = None
                 
-                self._ai_input_area.set_no_show_all(True)
-                self._ai_input_area.hide()
+                self._ai_input_area.set_no_show_all(False)
+                self._ai_input_area.show_all()
                 
                 self._ai_entry.grab_focus()
                 self.queue_resize()
                 if conv_id:
                     self._conversation_store.delete_conversation(conv_id)
-                    self._refresh_conversation_dropdown()
+                self._refresh_conversation_dropdown()
             if self.on_dialog_hidden:
                 self.on_dialog_hidden()
         dialog.connect("response", on_resp)
@@ -2060,6 +2060,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_sep.show()
         self._ai_vbox.set_no_show_all(False)
         self._ai_vbox.show()
+        self._ai_input_area.set_no_show_all(False)
         self._ai_vbox.show_all()
         self._ai_entry.set_text("")
         self._ai_entry.grab_focus()
