@@ -14,6 +14,7 @@ from uuid import uuid4
 from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation
 import time
 import requests
+import json
 from utils import relative_time, is_wayland, request_window_focus
 
 # Regex to match placeholders: ${index[:prompt][=default]}
@@ -27,7 +28,7 @@ PROMPT_PLACEHOLDER_RE = re.compile(r'\\\\|\\(\${&})|(\${&})')
 _MARKDOWN_EXTENSIONS = ['fenced_code', 'codehilite', 'tables']
 
 AI_MESSAGES_SOFT_LIMIT = 200
-AI_MESSAGES_HARD_LIMIT = 100
+AI_MESSAGES_TRIM_TARGET = 100
 
 CATEGORY_WIDTH = 200
 ACTION_WIDTH = 140
@@ -111,8 +112,6 @@ class _LLMHttpError(Exception):
 
 class _LLMHttpClient:
     def __init__(self):
-        import json
-        self._json = json
         self._session = requests.Session()
         retry_strategy = requests.packages.urllib3.util.retry.Retry(
             total=3,
@@ -124,6 +123,15 @@ class _LLMHttpClient:
         self._session.mount("https://", adapter)
         self._session.mount("http://", adapter)
 
+    def _build_request(self, base_url: str, api_key: str, model_name: str, messages: list, stream: bool):
+        url = base_url.rstrip("/") + "/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        body = {"model": model_name, "messages": messages, "stream": stream}
+        return url, headers, body
+
     def stream_chat_completion(
         self,
         base_url: str,
@@ -134,16 +142,7 @@ class _LLMHttpClient:
         cancel_event: Optional["threading.Event"] = None,
     ):
         """SSE streaming. Yields delta dicts with optional 'content'/'reasoning_content'."""
-        url = base_url.rstrip("/") + "/chat/completions"
-        body = {
-            "model": model_name,
-            "messages": messages,
-            "stream": True,
-        }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
+        url, headers, body = self._build_request(base_url, api_key, model_name, messages, stream=True)
 
         try:
             response = self._session.post(
@@ -167,10 +166,10 @@ class _LLMHttpClient:
                     if not data_str:
                         continue
                     try:
-                        chunk = self._json.loads(data_str)
+                        chunk = json.loads(data_str)
                         delta = chunk.get("choices", [{}])[0].get("delta", {})
                         yield delta
-                    except (self._json.JSONDecodeError, IndexError, KeyError):
+                    except (json.JSONDecodeError, IndexError, KeyError):
                         continue
 
         except requests.exceptions.Timeout:
@@ -196,16 +195,7 @@ class _LLMHttpClient:
         messages: list,
         timeout: int = 15,
     ) -> Optional[str]:
-        url = base_url.rstrip("/") + "/chat/completions"
-        body = {
-            "model": model_name,
-            "messages": messages,
-            "stream": False,
-        }
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
+        url, headers, body = self._build_request(base_url, api_key, model_name, messages, stream=False)
 
         try:
             resp = self._session.post(url, json=body, headers=headers, timeout=timeout)
@@ -213,11 +203,9 @@ class _LLMHttpClient:
             data = resp.json()
             return data["choices"][0]["message"]["content"]
         except requests.exceptions.RequestException as e:
-            print(f"_LLMHttpClient sync error: {e}", flush=True)
-            return None
-        except (KeyError, IndexError, self._json.JSONDecodeError) as e:
-            print(f"_LLMHttpClient parse error: {e}", flush=True)
-            return None
+            raise _LLMHttpError(f"请求异常：{e}")
+        except (KeyError, IndexError, json.JSONDecodeError) as e:
+            raise _LLMHttpError(f"同步请求解析失败：{e}")
 
 
 
@@ -1688,8 +1676,6 @@ class ClipboardPanel(Gtk.Box):
         rendered_text = _close_unclosed_code_blocks(text)
         self._ai_markdown_text += f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n---\n\n'
 
-        self._prune_messages()
-
         self._ai_spinner.show()
         self._ai_spinner.start()
 
@@ -1765,7 +1751,6 @@ class ClipboardPanel(Gtk.Box):
         ).start()
 
     def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, messages: list, req_id: int):
-        self._ai_assistant_buffer = ""
         has_thinking = False
         thinking_header_added = False
         response_header_added = False
@@ -2102,13 +2087,10 @@ class ClipboardPanel(Gtk.Box):
     def _prune_messages(self):
         if len(self._ai_messages) <= AI_MESSAGES_SOFT_LIMIT:
             return
-        keep_count = AI_MESSAGES_HARD_LIMIT
-        if len(self._ai_messages) <= keep_count:
-            return
-        # Keep first message, drop oldest from the rest to stay within hard limit
+        # Keep first message, drop oldest from the rest to stay within trim target
         first = self._ai_messages[:1]
         rest = self._ai_messages[1:]
-        self._ai_messages = first + rest[-(keep_count - 1):]
+        self._ai_messages = first + rest[-(AI_MESSAGES_TRIM_TARGET - 1):]
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         self._render_markdown(self._ai_markdown_text)
 
