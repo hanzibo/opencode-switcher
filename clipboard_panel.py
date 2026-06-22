@@ -333,6 +333,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_history_combo.set_no_show_all(True)
         self._ai_history_combo.set_tooltip_text("切换对话历史")
         self._ai_history_combo.set_sensitive(False)
+        self._ai_history_combo.get_style_context().add_class("scrollable-combo")
         self._ai_history_combo.connect("changed", self._on_history_combo_changed)
         self._ai_history_combo.connect("notify::popup-shown", self._on_ai_history_combo_popup_shown)
         ai_hdr.pack_start(self._ai_history_combo, False, False, 0)
@@ -575,6 +576,11 @@ class ClipboardPanel(Gtk.Box):
             "combobox { font-size: 13px; }"
             "combobox button { padding: 2px 8px; min-height: 28px; border-radius: 6px; }"
             "combobox cellview { padding-left: 4px; }"
+            "combobox.scrollable-combo { -GtkComboBox-appears-as-list: true; }"
+            "#gtk-combobox-popup-window { background-color: %(dialog_bg)s; border: 1px solid %(input_border)s; border-radius: 6px; }"
+            "#gtk-combobox-popup-window scrolledwindow { background-color: transparent; }"
+            "#gtk-combobox-popup-window treeview { background-color: %(dialog_bg)s; color: %(text_fg)s; }"
+            "#gtk-combobox-popup-window treeview:hover, #gtk-combobox-popup-window treeview:selected { background-color: %(btn_hover)s; color: %(text_fg)s; }"
             "combobox menu { background-color: %(dialog_bg)s; border: 1px solid %(input_border)s; border-radius: 6px; padding: 4px 0; }"
             "combobox menuitem { padding: 6px 12px; color: %(text_fg)s; }"
             "combobox menuitem:hover, combobox menuitem:selected { background-color: %(btn_hover)s; }"
@@ -2142,6 +2148,24 @@ class ClipboardPanel(Gtk.Box):
 
     def _on_ai_history_combo_popup_shown(self, combo, pspec):
         if combo.get_property("popup-shown"):
+            for win in Gtk.Window.list_toplevels():
+                if win.get_name() == "gtk-combobox-popup-window":
+                    def find_scrolled_window(widget):
+                        if isinstance(widget, Gtk.ScrolledWindow):
+                            return widget
+                        if isinstance(widget, Gtk.Container):
+                            for child in widget.get_children():
+                                res = find_scrolled_window(child)
+                                if res:
+                                    return res
+                        return None
+                    scrolled = find_scrolled_window(win)
+                    if scrolled:
+                        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+                        scrolled.set_size_request(-1, 300)
+                        width, _ = win.get_size()
+                        win.resize(width, 300)
+                        win.queue_resize()
             if self.on_dialog_shown:
                 self.on_dialog_shown()
         else:
