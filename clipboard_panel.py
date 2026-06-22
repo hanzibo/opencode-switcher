@@ -26,6 +26,9 @@ PROMPT_PLACEHOLDER_RE = re.compile(r'\\\\|\\(\${&})|(\${&})')
 
 _MARKDOWN_EXTENSIONS = ['fenced_code', 'codehilite', 'tables']
 
+AI_MESSAGES_SOFT_LIMIT = 200
+AI_MESSAGES_HARD_LIMIT = 100
+
 CATEGORY_WIDTH = 200
 ACTION_WIDTH = 140
 # ponytail: removed fixed AI_PANEL_WIDTH — now uses equal expand with content area
@@ -1685,6 +1688,8 @@ class ClipboardPanel(Gtk.Box):
         rendered_text = _close_unclosed_code_blocks(text)
         self._ai_markdown_text += f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n---\n\n'
 
+        self._prune_messages()
+
         self._ai_spinner.show()
         self._ai_spinner.start()
 
@@ -1819,7 +1824,7 @@ class ClipboardPanel(Gtk.Box):
                 if getattr(self, "_ai_request_id", 0) == req_id:
                     self._render_markdown(self._ai_markdown_text)
                 self._ai_render_timeout_id = 0
-                return False  # 返回 False 确保 GLib 定时器只执行一次后自动销毁
+                return False
             self._ai_render_timeout_id = GLib.timeout_add(100, do_render)
 
     def get_html_template(self, theme_name, initial_html=""):
@@ -1975,6 +1980,7 @@ class ClipboardPanel(Gtk.Box):
 
                 if self._ai_messages and self._ai_messages[-1].get("role") == "user":
                     self._ai_messages.append({"role": "assistant", "content": self._ai_assistant_buffer})
+                self._ai_assistant_buffer = ""
 
                 # Auto-save conversation to disk
                 try:
@@ -1990,6 +1996,8 @@ class ClipboardPanel(Gtk.Box):
                     self._save_current_conversation(model_snapshot)
                 except Exception as e:
                     print(f"Error saving conversation: {e}", flush=True)
+
+                self._prune_messages()
 
                 # Trigger background title generation for new conversations
                 if (not self._ai_title_generated
@@ -2093,6 +2101,19 @@ class ClipboardPanel(Gtk.Box):
                 parts.append(content)
         return "".join(parts)
 
+    def _prune_messages(self):
+        if len(self._ai_messages) <= AI_MESSAGES_SOFT_LIMIT:
+            return
+        keep_count = AI_MESSAGES_HARD_LIMIT
+        if len(self._ai_messages) <= keep_count:
+            return
+        # Keep first message, drop oldest from the rest to stay within hard limit
+        first = self._ai_messages[:1]
+        rest = self._ai_messages[1:]
+        self._ai_messages = first + rest[-(keep_count - 1):]
+        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+        self._render_markdown(self._ai_markdown_text)
+
     def _save_current_conversation(self, model_snapshot: Dict[str, Any]):
         """Save or update the current active conversation to the store, preserving its title."""
         if not self._ai_conversation_id:
@@ -2163,8 +2184,8 @@ class ClipboardPanel(Gtk.Box):
         self._ai_last_prompt_obj = None
         self._ai_active_model_info = conv.model_config_snapshot
 
-        # Rebuild markdown and re-render
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+        self._prune_messages()
         self._render_markdown(self._ai_markdown_text)
 
         # Update model info display label
