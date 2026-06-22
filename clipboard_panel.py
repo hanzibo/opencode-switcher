@@ -69,6 +69,39 @@ def _close_unclosed_code_blocks(text: str) -> str:
     return text
 
 
+def _clean_history_title(title: str) -> str:
+    """Clean up markdown markers and special prefixes from fallback titles for dropdown display."""
+    if not title:
+        return "(untitled)"
+    
+    # Strip HTML/XML tags
+    title = re.sub(r"<[^>]+>", "", title)
+    
+    # Strip leading markdown structures (headers, list items, quotes, backticks)
+    cleaned = title.strip()
+    while True:
+        prev = cleaned
+        # Remove leading hashes, stars, dashes, plusses, angles, backticks, and whitespace
+        cleaned = re.sub(r"^[\s#*>\-\+`]+", "", cleaned)
+        # Strip surrounding quotes and standard markdown inline markers from the ends
+        cleaned = cleaned.strip(" \"'()[]{}*`_~")
+        if cleaned == prev:
+            break
+            
+    # If the first line became empty, try to get the next non-empty line of the title (if multi-line)
+    if not cleaned:
+        for line in title.splitlines():
+            line_cleaned = re.sub(r"^[\s#*>\-\+`]+", "", line.strip()).strip(" \"'()[]{}*`_~")
+            if line_cleaned:
+                cleaned = line_cleaned
+                break
+                
+    if not cleaned:
+        return "(untitled)"
+        
+    return cleaned
+
+
 
 
 
@@ -295,7 +328,7 @@ class ClipboardPanel(Gtk.Box):
 
         # Conversation history dropdown (inserted before copy button)
         self._ai_history_combo = Gtk.ComboBoxText.new()
-        self._ai_history_combo.set_size_request(140, -1)
+        self._ai_history_combo.set_size_request(160, -1)
         self._ai_history_combo.set_no_show_all(True)
         self._ai_history_combo.set_tooltip_text("切换对话历史")
         self._ai_history_combo.set_sensitive(False)
@@ -538,7 +571,11 @@ class ClipboardPanel(Gtk.Box):
             "button:hover { background: %(btn_hover)s; border-color: %(sel_border)s; }"
             "button:active { background: %(btn_active)s; }"
             "combobox { font-size: 13px; }"
-            "combobox button { padding: 0px 8px; min-height: 24px; }"
+            "combobox button { padding: 2px 8px; min-height: 28px; border-radius: 6px; }"
+            "combobox cellview { padding-left: 4px; }"
+            "combobox menu { background-color: %(dialog_bg)s; border: 1px solid %(input_border)s; border-radius: 6px; padding: 4px 0; }"
+            "combobox menuitem { padding: 6px 12px; color: %(text_fg)s; }"
+            "combobox menuitem:hover, combobox menuitem:selected { background-color: %(btn_hover)s; }"
             ".cat-tool-btn { font-size: 12px; padding: 4px 6px; border: none; border-radius: 4px; }"
             ".cat-tool-btn:hover { background: %(btn_hover)s; }"
             ".cat-tool-btn:active { background: %(btn_active)s; }"
@@ -582,7 +619,7 @@ class ClipboardPanel(Gtk.Box):
             "textview { padding: 4px; }"
             "menu, menuitem { background-color: %(dialog_bg)s; background-image: none; }"
             "menu { border: 1px solid %(input_border)s; border-radius: 6px; padding: 4px 0; }"
-            "menuitem { color: %(text_fg)s; padding: 4px 16px; }"
+            "menuitem { color: %(text_fg)s; padding: 6px 16px; }"
             "menuitem:hover, menuitem:selected { background-color: %(btn_hover)s; color: %(text_fg)s; }"
             "menuitem label { color: %(text_fg)s; }"
             "menuitem:hover label, menuitem:selected label { color: %(text_fg)s; }"
@@ -2043,7 +2080,9 @@ class ClipboardPanel(Gtk.Box):
 
         for s in summaries:
             sid = s.get("id", "")
-            title = s.get("title", "(untitled)")[:12]
+            raw_title = s.get("title", "(untitled)")
+            cleaned_title = _clean_history_title(raw_title)
+            title = cleaned_title[:20]
             count = s.get("message_count", 0)
             label = f"{title} ({count}条)"
             self._ai_history_combo.append(sid, label)
