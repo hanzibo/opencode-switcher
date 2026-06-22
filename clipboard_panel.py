@@ -597,6 +597,8 @@ class ClipboardPanel(Gtk.Box):
         self._ai_entry.placeholder_text = "输入后续问题..."
         self._ai_entry.connect_after("draw", _textview_draw_placeholder)
         self._ai_entry.connect("key-press-event", self._on_ai_entry_key_press)
+        self._ai_entry.connect("button-press-event", lambda w, e: e.button == 3)
+        self._ai_entry.connect("popup-menu", lambda *_: True)
 
         self._ai_entry_sw = Gtk.ScrolledWindow.new()
         self._ai_entry_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
