@@ -141,6 +141,7 @@ class ClipboardPanel(Gtk.Box):
         self._last_rendered_item_ids = None
         self._loading_data = False
         self._ai_render_timeout_id = 0
+        self._ai_request_id = 0
 
         # Multi-turn conversation state
         self._ai_messages: List[Dict] = []  # OpenAI-compatible message list
@@ -3375,7 +3376,7 @@ class ClipboardPanel(Gtk.Box):
                 capture_clipboard_once(self._clip_store)
                 GLib.idle_add(self._finish_load)
             else:
-                self._finish_load()
+                GLib.idle_add(self._finish_load)
 
     def _on_new_category_clicked(self, _btn):
         dialog = Gtk.Dialog(
