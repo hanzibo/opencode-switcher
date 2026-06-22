@@ -260,6 +260,7 @@ class ClipboardPanel(Gtk.Box):
         self._conversation_store = ConversationStore()
         self._ai_cancel_event = threading.Event()
         self._llm_client = _LLMHttpClient()
+        self._pygments_css_cache: Dict[str, str] = {}
 
         self._bg_color = Gdk.RGBA()
         self._title_color = Gdk.RGBA()
@@ -1841,6 +1842,19 @@ class ClipboardPanel(Gtk.Box):
                 return False
             self._ai_render_timeout_id = GLib.timeout_add(100, do_render)
 
+    def _get_pygments_css(self, theme: str) -> str:
+        cached = self._pygments_css_cache.get(theme)
+        if cached is not None:
+            return cached
+        try:
+            from pygments.formatters import HtmlFormatter
+            style = "monokai" if theme == "dark" else "friendly"
+            css = HtmlFormatter(style=style).get_style_defs(".codehilite")
+        except ImportError:
+            css = ""
+        self._pygments_css_cache[theme] = css
+        return css
+
     def get_html_template(self, theme_name, initial_html=""):
         if theme_name == "dark":
             bg_color = "#0a0b10"
@@ -1855,11 +1869,7 @@ class ClipboardPanel(Gtk.Box):
             assistant_color = "#2dd4bf"
             table_header_bg = "rgba(255,255,255,0.06)"
             table_alt_bg = "rgba(255,255,255,0.03)"
-            try:
-                from pygments.formatters import HtmlFormatter
-                pygments_css = HtmlFormatter(style='monokai').get_style_defs('.codehilite')
-            except ImportError:
-                pygments_css = ""
+            pygments_css = self._get_pygments_css("dark")
         else:
             bg_color = "#ffffff"
             text_color = "rgba(15,23,42,0.92)"
@@ -1873,11 +1883,7 @@ class ClipboardPanel(Gtk.Box):
             assistant_color = "#0d9488"
             table_header_bg = "rgba(0,0,0,0.04)"
             table_alt_bg = "rgba(0,0,0,0.02)"
-            try:
-                from pygments.formatters import HtmlFormatter
-                pygments_css = HtmlFormatter(style='friendly').get_style_defs('.codehilite')
-            except ImportError:
-                pygments_css = ""
+            pygments_css = self._get_pygments_css("light")
 
         return f"""
         <!DOCTYPE html>
