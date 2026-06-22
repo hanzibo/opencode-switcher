@@ -114,6 +114,7 @@ class ClipboardPanel(Gtk.Box):
         self._custom_prompts_store = CustomPromptsStore()
         self._llm_settings_store = LLMSettingsStore()
         self._active_category_id = "__clipboard__"
+        self._ai_panel_visible_saved = False
         self._clip_items: List[ClipboardItem] = []
         self._selected_index = 0
         self._filter_query = ""
@@ -358,6 +359,7 @@ class ClipboardPanel(Gtk.Box):
             self._ai_vbox.hide()
             self._ai_sep.set_no_show_all(True)
             self._ai_sep.hide()
+            self._ai_panel_visible_saved = False
             self.queue_resize()
             
         ai_close.connect("clicked", on_ai_close_clicked)
@@ -1241,6 +1243,17 @@ class ClipboardPanel(Gtk.Box):
     def _on_category_selected(self, _listbox, row):
         if row is None or not hasattr(row, 'cat_id'):
             return
+
+        # Before switching, if we were on clipboard, save visibility state and hide AI panel
+        if self._active_category_id == "__clipboard__":
+            self._ai_panel_visible_saved = self._ai_vbox.get_visible()
+            if self._ai_panel_visible_saved:
+                self._ai_vbox.set_no_show_all(True)
+                self._ai_vbox.hide()
+                self._ai_sep.set_no_show_all(True)
+                self._ai_sep.hide()
+                self.queue_resize()
+
         self._active_category_id = row.cat_id
         self._selected_index = 0
         
@@ -1255,6 +1268,16 @@ class ClipboardPanel(Gtk.Box):
                 
         if not self._in_category_button:
             self._rebuild()
+
+        # After switching, if we are back on clipboard, restore AI panel if it was visible before
+        if self._active_category_id == "__clipboard__":
+            if getattr(self, "_ai_panel_visible_saved", False):
+                self._ai_sep.set_no_show_all(False)
+                self._ai_sep.show()
+                self._ai_vbox.set_no_show_all(False)
+                self._ai_vbox.show()
+                self._ai_vbox.show_all()
+                self.queue_resize()
 
     def _on_category_button(self, _listbox, event):
         if event.button != 3:
