@@ -12,5 +12,8 @@ fi
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
+# Disable JIT for WebKit JavaScriptCore — reduces memory footprint
+export JSC_useJIT=false
+
 echo "=== $(date) ===" >> "$LOG"
 exec "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/main.py" >> "$LOG" 2>&1

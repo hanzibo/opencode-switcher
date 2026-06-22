@@ -490,13 +490,42 @@ class ClipboardPanel(Gtk.Box):
         self._ai_streaming = False
         self._ai_webview = WebKit2.WebView.new()
         self._ai_webview.set_name("aiWebView")
-        
-        # Optimize WebKit settings to reduce memory footprint
+
+        # Minimize WebKit resource footprint
         settings = self._ai_webview.get_settings()
+
+        # Media & audio
+        settings.set_enable_media(False)
+        settings.set_enable_media_stream(False)
+        settings.set_enable_webrtc(False)
+        settings.set_enable_webaudio(False)
+        settings.set_enable_encrypted_media(False)
+
+        # Graphics
         settings.set_enable_webgl(False)
+        settings.set_enable_accelerated_2d_canvas(False)
+        settings.set_hardware_acceleration_policy(
+            WebKit2.HardwareAccelerationPolicy.NEVER
+        )
+
+        # Storage & cache
         settings.set_enable_html5_database(False)
         settings.set_enable_html5_local_storage(False)
-        
+        settings.set_enable_offline_web_application_cache(False)
+        settings.set_enable_page_cache(False)
+
+        # Navigation & features
+        settings.set_enable_fullscreen(False)
+        settings.set_enable_plugins(False)
+        settings.set_enable_hyperlink_auditing(False)
+        settings.set_enable_back_forward_navigation_gestures(False)
+        settings.set_enable_dns_prefetching(False)
+        settings.set_enable_caret_browsing(False)
+        settings.set_enable_smooth_scrolling(False)
+
+        context = WebKit2.WebContext.get_default()
+        context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
+
         self._ai_webview.load_html(self.get_html_template("dark"), "file:///")
 
         # Open external links in default browser
