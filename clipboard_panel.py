@@ -557,10 +557,44 @@ class ClipboardPanel(Gtk.Box):
         self._ai_input_area.set_no_show_all(True)
         self._ai_input_area.set_margin_top(4)
 
-        self._ai_entry = Gtk.Entry.new()
+        def _ai_entry_placeholder_draw(widget, cr):
+            buf = widget.get_buffer()
+            if buf.get_char_count() == 0:
+                placeholder = getattr(widget, "placeholder_text", "")
+                if placeholder:
+                    text_window = widget.get_window(Gtk.TextWindowType.TEXT)
+                    if text_window and Gtk.cairo_should_draw_window(cr, text_window):
+                        cr.save()
+                        start_iter = buf.get_start_iter()
+                        rect = widget.get_iter_location(start_iter)
+                        left, top = widget.buffer_to_window_coords(Gtk.TextWindowType.TEXT, rect.x, rect.y)
+                        cr.translate(left, top)
+                        layout = widget.create_pango_layout(placeholder)
+                        context = widget.get_style_context()
+                        font_desc = context.get_property("font", Gtk.StateFlags.NORMAL)
+                        layout.set_font_description(font_desc)
+                        color = context.get_color(Gtk.StateFlags.NORMAL)
+                        cr.set_source_rgba(color.red, color.green, color.blue, 0.45)
+                        PangoCairo.show_layout(cr, layout)
+                        cr.restore()
+            return False
+
+        self._ai_entry = Gtk.TextView.new()
+        self._ai_entry.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         self._ai_entry.set_hexpand(True)
-        self._ai_entry.set_placeholder_text("输入后续问题...")
-        self._ai_entry.connect("activate", self._on_entry_activate)
+        self._ai_entry.set_left_margin(6)
+        self._ai_entry.set_right_margin(6)
+        self._ai_entry.set_top_margin(4)
+        self._ai_entry.set_bottom_margin(4)
+        self._ai_entry.set_accepts_tab(False)
+        self._ai_entry.placeholder_text = "输入后续问题..."
+        self._ai_entry.connect_after("draw", _ai_entry_placeholder_draw)
+        self._ai_entry.connect("key-press-event", self._on_ai_entry_key_press)
+
+        self._ai_entry_sw = Gtk.ScrolledWindow.new()
+        self._ai_entry_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self._ai_entry_sw.set_size_request(-1, 64)
+        self._ai_entry_sw.add(self._ai_entry)
 
         self._ai_send_btn = Gtk.Button.new_with_label("发送")
         self._ai_send_btn.connect("clicked", self._on_send_clicked)
@@ -569,7 +603,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_clear_btn.set_tooltip_text("清空当前对话")
         self._ai_clear_btn.connect("clicked", self._on_clear_conversation)
 
-        self._ai_input_area.pack_start(self._ai_entry, True, True, 0)
+        self._ai_input_area.pack_start(self._ai_entry_sw, True, True, 0)
         self._ai_input_area.pack_start(self._ai_send_btn, False, False, 0)
         self._ai_input_area.pack_start(self._ai_clear_btn, False, False, 0)
         self._ai_vbox.pack_start(self._ai_input_area, False, False, 0)
@@ -2117,14 +2151,24 @@ class ClipboardPanel(Gtk.Box):
         stop_streaming()
 
     def _on_send_clicked(self, _btn=None):
-        text = self._ai_entry.get_text().strip()
+        buf = self._ai_entry.get_buffer()
+        start = buf.get_start_iter()
+        end = buf.get_end_iter()
+        text = buf.get_text(start, end, True).strip()
         if not text:
             return
-        self._ai_entry.set_text("")
+        buf.set_text("")
         self._send_user_message(text)
 
-    def _on_entry_activate(self, _entry):
-        self._on_send_clicked()
+    def _on_ai_entry_key_press(self, widget, event):
+        is_shift = (event.state & Gdk.ModifierType.SHIFT_MASK) != 0
+        is_enter = event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter)
+
+        if is_enter and not is_shift:
+            self._on_send_clicked()
+            return True
+
+        return False
 
     def _on_clear_conversation(self, _btn=None):
         if not self._ai_messages:
@@ -2148,7 +2192,7 @@ class ClipboardPanel(Gtk.Box):
                 self._ai_current_assistant_text = ""
                 self._ai_response_div_added = False
                 self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
-                self._ai_entry.set_text("")
+                self._ai_entry.get_buffer().set_text("")
                 _, _, _, display_name = self._read_model_config(None, None)
                 self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
                 self._ai_active_model_info = None
@@ -2290,7 +2334,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_vbox.show()
         self._ai_input_area.set_no_show_all(False)
         self._ai_vbox.show_all()
-        self._ai_entry.set_text("")
+        self._ai_entry.get_buffer().set_text("")
         self._ai_entry.grab_focus()
         self.queue_resize()
         self._refresh_conversation_dropdown()
@@ -2468,7 +2512,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_assistant_buffer = ""
         self._ai_markdown_text = ""
         self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
-        self._ai_entry.set_text("")
+        self._ai_entry.get_buffer().set_text("")
         _, _, _, display_name = self._read_model_config(None, None)
         self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
         self._ai_active_model_info = None
