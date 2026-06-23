@@ -16,6 +16,7 @@ import time
 import requests
 import json
 from utils import relative_time, is_wayland, request_window_focus
+from urllib.parse import urlparse, parse_qs
 
 # Regex to match placeholders: ${index[:prompt][=default]}
 # - Group 1: index (\d+)
@@ -611,6 +612,25 @@ class ClipboardPanel(Gtk.Box):
             if decision_type == WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
                 nav_action = decision.get_navigation_action()
                 uri = nav_action.get_request().get_uri()
+                if uri and uri.startswith("opencode://copy-response"):
+                    qs = parse_qs(urlparse(uri).query)
+                    index_str = qs.get("index", [None])[0]
+                    if index_str is not None:
+                        try:
+                            index = int(index_str)
+                            msgs = getattr(self, "_ai_messages", [])
+                            if 0 <= index < len(msgs) and msgs[index].get("role") == "assistant":
+                                content = msgs[index].get("content", "")
+                                content = re.sub(
+                                    r'<div class=["\'](?:assistant|thinking|answer)-header["\'].*?</div>\n?',
+                                    "", content, flags=re.DOTALL
+                                ).strip()
+                                if content:
+                                    _copy_to_clipboard(content)
+                        except (ValueError, IndexError):
+                            pass
+                    decision.ignore()
+                    return True
                 if uri and not (uri.startswith("file://") or uri == "about:blank"):
                     try:
                         Gio.AppInfo.launch_default_for_uri(uri, None)
@@ -2097,6 +2117,24 @@ class ClipboardPanel(Gtk.Box):
                 .copy-btn.copied {{
                     opacity: 1;
                 }}
+                .msg-copy-btn {{
+                    display: block;
+                    background: rgba(128,128,128,0.06);
+                    border: 1px solid rgba(128,128,128,0.12);
+                    border-radius: 4px;
+                    color: inherit;
+                    cursor: pointer;
+                    font-size: 11px;
+                    padding: 2px 10px;
+                    margin-top: 8px;
+                    opacity: 0.4;
+                    transition: opacity 0.2s;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                }}
+                .msg-copy-btn:hover {{
+                    opacity: 1;
+                    background: rgba(128,128,128,0.15);
+                }}
                 .thinking-header {{ color: {thinking_color}; font-weight: bold; margin-top: 12px; }}
                 .answer-header {{ color: {answer_color}; font-weight: bold; margin-top: 12px; }}
                 .user-header {{ color: {user_color}; font-weight: bold; margin-top: 12px; }}
@@ -2174,6 +2212,21 @@ class ClipboardPanel(Gtk.Box):
                         document.body.removeChild(ta);
                         done();
                     }}
+                    addMessageCopyButtons();
+                }}
+                function addMessageCopyButtons() {{
+                    document.querySelectorAll('copy-marker').forEach(function(marker) {{
+                        if (marker.parentNode?.querySelector('.msg-copy-btn[data-idx="' + marker.dataset.msgIndex + '"]')) return;
+                        const btn = document.createElement('button');
+                        btn.className = 'msg-copy-btn';
+                        btn.setAttribute('data-idx', marker.dataset.msgIndex);
+                        btn.textContent = '📋 复制回答';
+                        btn.addEventListener('click', function(e) {{
+                            e.stopPropagation();
+                            window.location = 'opencode://copy-response?index=' + marker.dataset.msgIndex;
+                        }});
+                        marker.parentNode.insertBefore(btn, marker);
+                    }});
                 }}
             </script>
         </head>
@@ -2214,26 +2267,28 @@ class ClipboardPanel(Gtk.Box):
 
         self._flush_stream_queue()
 
+        # Append assistant response to messages BEFORE full rebuild
+        if self._ai_messages and self._ai_messages[-1].get("role") == "user":
+            self._ai_messages.append({"role": "assistant", "content": self._ai_assistant_buffer})
+        self._ai_assistant_buffer = ""
+        self._ai_current_assistant_text = ""
+        self._ai_response_div_added = False
+
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
             self._ai_render_timeout_id = 0
-        self._render_markdown(getattr(self, "_ai_markdown_text", ""))
+        # Full rebuild from messages list (includes .assistant-response wrapper)
+        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+        self._render_markdown(self._ai_markdown_text)
 
         self._ai_spinner.stop()
         self._ai_spinner.hide()
 
-        # Append assistant response to messages
         def stop_streaming():
             if getattr(self, "_ai_request_id", 0) == req_id:
                 if hasattr(self, "_ai_webview") and self._ai_webview:
                     self._ai_webview.run_javascript("_scrollToBottom();", None, None)
                 self._ai_streaming = False
-
-                if self._ai_messages and self._ai_messages[-1].get("role") == "user":
-                    self._ai_messages.append({"role": "assistant", "content": self._ai_assistant_buffer})
-                self._ai_assistant_buffer = ""
-                self._ai_current_assistant_text = ""
-                self._ai_response_div_added = False
 
                 # Auto-save conversation to disk
                 try:
@@ -2361,7 +2416,12 @@ class ClipboardPanel(Gtk.Box):
                 rendered_text = _close_unclosed_code_blocks(content)
                 parts.append(f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n---\n\n')
             elif role == "assistant":
-                parts.append(content)
+                if content.strip():
+                    parts.append(
+                        f'\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
+                        f'{content}\n\n'
+                        f'<copy-marker data-msg-index="{i}"></copy-marker>\n\n---\n\n'
+                    )
         return "".join(parts)
 
     def _prune_messages(self):
