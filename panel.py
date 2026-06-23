@@ -1132,6 +1132,17 @@ class SearchPanel:
                 return True
 
         if self._active_tab == 1 and self._clipboard_panel:
+            is_ctrl_shift = (
+                (event.state & Gdk.ModifierType.CONTROL_MASK) and
+                (event.state & Gdk.ModifierType.SHIFT_MASK)
+            )
+            if is_ctrl_shift and self._clipboard_panel.is_ai_panel_visible():
+                if keyname in ("Up", "KP_Up"):
+                    self._clipboard_panel.navigate_conversation(-1)
+                    return True
+                if keyname in ("Down", "KP_Down"):
+                    self._clipboard_panel.navigate_conversation(1)
+                    return True
             if keyname in ("Down", "KP_Down", "Up", "KP_Up"):
                 self._clipboard_panel.move_selection(1 if "Down" in keyname else -1)
                 return True
@@ -1277,6 +1288,17 @@ class SearchPanel:
                 if self._active_tab != 1:
                     self._switch_tab(1)
                 self._clipboard_panel.start_new_conversation()
+                return True
+        is_ctrl_shift = (
+            (event.state & Gdk.ModifierType.CONTROL_MASK) and
+            (event.state & Gdk.ModifierType.SHIFT_MASK)
+        )
+        if is_ctrl_shift and self._active_tab == 1 and self._clipboard_panel and self._clipboard_panel.is_ai_panel_visible():
+            if keyname in ("Up", "KP_Up"):
+                self._clipboard_panel.navigate_conversation(-1)
+                return True
+            if keyname in ("Down", "KP_Down"):
+                self._clipboard_panel.navigate_conversation(1)
                 return True
         return False
 

@@ -2468,6 +2468,42 @@ class ClipboardPanel(Gtk.Box):
                     self._ai_history_listbox.select_row(row)
                     break
 
+    def navigate_conversation(self, direction: int):
+        """Navigate conversation history via keyboard shortcut.
+
+        Args:
+            direction: +1 for next (Down arrow → older in DESC list),
+                       -1 for previous (Up arrow → newer in DESC list).
+        """
+        if self._ai_streaming:
+            return
+
+        summaries = self._conversation_store.list_conversations()
+        if not summaries:
+            return
+
+        summaries.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
+
+        if self._ai_conversation_id is None:
+            target_idx = len(summaries) - 1 if direction < 0 else 0
+        else:
+            current_idx = -1
+            for i, s in enumerate(summaries):
+                if s.get("id") == self._ai_conversation_id:
+                    current_idx = i
+                    break
+            if current_idx == -1:
+                return
+            target_idx = current_idx + direction
+            if target_idx < 0 or target_idx >= len(summaries):
+                return
+
+        target_id = summaries[target_idx].get("id")
+        if target_id and target_id != self._ai_conversation_id:
+            if getattr(self, "_ai_history_popover", None) and self._ai_history_popover.get_visible():
+                self._ai_history_popover.popdown()
+            self._switch_to_conversation(target_id)
+
     def _refresh_conversation_dropdown(self):
         """Repopulate the history dropdown from the conversation store."""
         if not hasattr(self, "_ai_history_listbox") or not self._ai_history_listbox:
