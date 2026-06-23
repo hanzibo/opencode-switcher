@@ -2104,10 +2104,10 @@ class ClipboardPanel(Gtk.Box):
                 tr:nth-child(even) {{ background-color: {table_alt_bg}; }}
             </style>
             <script>
+                const SCROLL_THRESHOLD = 20;
                 let _autoScroll = true;
                 window.addEventListener('scroll', function() {{
-                    const threshold = 20;
-                    _autoScroll = (window.innerHeight + window.scrollY >= document.body.scrollHeight - threshold);
+                    _autoScroll = (window.innerHeight + window.scrollY >= document.body.scrollHeight - SCROLL_THRESHOLD);
                 }});
                 function _scrollToBottom() {{
                     if (_autoScroll) {{
