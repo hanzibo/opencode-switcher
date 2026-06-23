@@ -2391,7 +2391,12 @@ class ClipboardPanel(Gtk.Box):
         self._ai_entry.get_buffer().set_text("")
         self._ai_entry.grab_focus()
         self.queue_resize()
-        self._refresh_conversation_dropdown()
+        self._update_history_btn_label(conv)
+        if self._ai_conversation_id:
+            for row in self._ai_history_listbox.get_children():
+                if getattr(row, "conversation_id", None) == self._ai_conversation_id:
+                    self._ai_history_listbox.select_row(row)
+                    break
 
     def _refresh_conversation_dropdown(self):
         """Repopulate the history dropdown from the conversation store."""
@@ -2452,10 +2457,22 @@ class ClipboardPanel(Gtk.Box):
 
         self._ai_history_switching = False
 
-    def _update_history_btn_label(self):
+    def _update_history_btn_label(self, conv=None):
         if not self._ai_conversation_id:
             self._ai_history_btn_label.set_text("历史对话")
             return
+        if conv:
+            raw_title = conv.title if conv.title else "untitled"
+            cleaned_title = _clean_history_title(raw_title)
+            if len(cleaned_title) > 25:
+                title = cleaned_title[:22] + "..."
+            else:
+                title = cleaned_title
+            count = len(conv.messages) if conv.messages else 0
+            label = f"{title} ({count}条)"
+            self._ai_history_btn_label.set_text(label)
+            return
+
         active_label = "历史对话"
         for row in self._ai_history_listbox.get_children():
             if getattr(row, "conversation_id", None) == self._ai_conversation_id:
@@ -2491,7 +2508,12 @@ class ClipboardPanel(Gtk.Box):
             return
         if self._ai_streaming:
             return
-        self._switch_to_conversation(conv_id)
+            
+        # 将耗时的切换操作推迟到主循环空闲时执行，使 Popover 能够立刻收起
+        def defer_switch():
+            self._switch_to_conversation(conv_id)
+            return False
+        GLib.idle_add(defer_switch)
 
     def is_history_popup_shown(self) -> bool:
         """Check if the conversation history dropdown is currently active."""
