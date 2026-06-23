@@ -620,7 +620,25 @@ class ClipboardPanel(Gtk.Box):
                             index = int(index_str)
                             msgs = getattr(self, "_ai_messages", [])
                             if 0 <= index < len(msgs) and msgs[index].get("role") == "assistant":
-                                content = msgs[index].get("content", "")
+                                raw = msgs[index].get("content", "")
+                                content = ""
+                                # Extract only the Answer part (skip Thinking/Reasoning)
+                                answer_marker = '<div class="answer-header">'
+                                assistant_marker = '<div class="assistant-header">'
+                                if answer_marker in raw:
+                                    content = raw.split(answer_marker, 1)[1]
+                                    # content starts with "💡 Answer:</div>\n..." — skip past closing </div>
+                                    end_open = content.find('</div>')
+                                    if end_open != -1:
+                                        content = content[end_open + 6:]
+                                elif assistant_marker in raw:
+                                    content = raw.split(assistant_marker, 1)[1]
+                                    end_open = content.find('</div>')
+                                    if end_open != -1:
+                                        content = content[end_open + 6:]
+                                else:
+                                    content = raw
+                                # Strip any remaining header div tags and whitespace
                                 content = re.sub(
                                     r'<div class=["\'](?:assistant|thinking|answer)-header["\'].*?</div>\n?',
                                     "", content, flags=re.DOTALL
