@@ -4020,24 +4020,42 @@ class ClipboardPanel(Gtk.Box):
                     self.on_dialog_hidden()
                 return
 
-            err, path_or_msg = _backup_config(selected_path)
-            if err is None:
-                self._show_message_dialog(
-                    Gtk.MessageType.INFO,
-                    "Backup Complete",
-                    "Backup saved to:\n" + path_or_msg,
-                )
-            else:
-                self._show_message_dialog(
-                    Gtk.MessageType.WARNING,
-                    "Backup Failed",
-                    "Could not create backup:\n" + err,
-                )
-            if self.on_dialog_hidden:
-                self.on_dialog_hidden()
+            # Run backup in background thread to avoid blocking the GTK main loop
+            self._btn_backup.set_sensitive(False)
+            self._btn_backup.set_label("Backing up...")
+
+            def worker():
+                err = "Unknown error"
+                path_or_msg = ""
+                try:
+                    err, path_or_msg = _backup_config(selected_path)
+                finally:
+                    GLib.idle_add(self._on_backup_finished, err, path_or_msg)
+
+            threading.Thread(target=worker, daemon=True).start()
 
         dialog.connect("response", on_response)
         dialog.show_all()
+
+    def _on_backup_finished(self, err, path_or_msg):
+        """Called on the main thread after background backup completes."""
+        self._btn_backup.set_sensitive(True)
+        self._btn_backup.set_label("Backup")
+
+        if err is None:
+            self._show_message_dialog(
+                Gtk.MessageType.INFO,
+                "Backup Complete",
+                "Backup saved to:\n" + path_or_msg,
+            )
+        else:
+            self._show_message_dialog(
+                Gtk.MessageType.WARNING,
+                "Backup Failed",
+                "Could not create backup:\n" + err,
+            )
+        if self.on_dialog_hidden:
+            self.on_dialog_hidden()
 
     def _on_restore_clicked(self, _btn):
         if self.on_dialog_shown:
@@ -4092,25 +4110,42 @@ class ClipboardPanel(Gtk.Box):
                     self.on_dialog_hidden()
                 return
 
-            err = _restore_config(archive_path)
-            if err is None:
-                self._show_message_dialog(
-                    Gtk.MessageType.INFO,
-                    "Restore Complete",
-                    "Restore completed. Refreshing data...",
-                )
-                self.load_cached()
-            else:
-                self._show_message_dialog(
-                    Gtk.MessageType.WARNING,
-                    "Restore Failed",
-                    "Could not restore backup:\n" + err,
-                )
-            if self.on_dialog_hidden:
-                self.on_dialog_hidden()
+            # Run restore in background thread to avoid blocking the GTK main loop
+            self._btn_restore.set_sensitive(False)
+            self._btn_restore.set_label("Restoring...")
+
+            def worker():
+                err = "Unknown error"
+                try:
+                    err = _restore_config(archive_path)
+                finally:
+                    GLib.idle_add(self._on_restore_finished, err)
+
+            threading.Thread(target=worker, daemon=True).start()
 
         dialog.connect("response", on_resp)
         dialog.show_all()
+
+    def _on_restore_finished(self, err):
+        """Called on the main thread after background restore completes."""
+        self._btn_restore.set_sensitive(True)
+        self._btn_restore.set_label("Restore")
+
+        if err is None:
+            self._show_message_dialog(
+                Gtk.MessageType.INFO,
+                "Restore Complete",
+                "Restore completed. Refreshing data...",
+            )
+            self.load_cached()
+        else:
+            self._show_message_dialog(
+                Gtk.MessageType.WARNING,
+                "Restore Failed",
+                "Could not restore backup:\n" + err,
+            )
+        if self.on_dialog_hidden:
+            self.on_dialog_hidden()
 
     def _on_recycle_bin_clicked(self, _btn):
         self._show_recycle_bin_dialog()
@@ -4879,13 +4914,48 @@ def _backup_config(target_dir: str) -> tuple[Optional[str], str]:
 def _restore_config(archive_path: str) -> Optional[str]:
     """Restore opencode-switcher config from a .tar.gz archive.
 
+    Automatically creates a pre-restore snapshot of the current config directory
+    so that if the restore fails, the previous state is rolled back.
+    The snapshot is deleted on success.
+
     Returns None on success, or an error message string on failure.
+    On rollback, the error message includes a note about automatic recovery.
     """
     import tarfile
-    config_parent = os.path.dirname(os.path.expanduser("~/.config/opencode-switcher"))
+    import shutil
+    import tempfile
+    config_dir = os.path.expanduser("~/.config/opencode-switcher")
+    config_parent = os.path.dirname(config_dir)
+    temp_backup = None
     try:
+        # 1. Pre-restore snapshot: copy current config to temp dir
+        temp_backup = tempfile.mkdtemp(prefix="opencode-switcher-pre-restore-")
+        snapshot_path = os.path.join(temp_backup, "opencode-switcher")
+        shutil.copytree(config_dir, snapshot_path)
+
+        # 2. Perform restore
         with tarfile.open(archive_path, "r:gz") as tar:
             tar.extractall(config_parent)
+
+        # 3. Verify the extracted directory exists
+        if not os.path.isdir(config_dir):
+            raise Exception("Archive did not produce an 'opencode-switcher' directory")
+
+        # 4. Success — clean up temp snapshot
+        shutil.rmtree(temp_backup, ignore_errors=True)
         return None
+
     except Exception as e:
+        # 5. Failure — rollback to pre-restore snapshot
+        if temp_backup is not None and os.path.isdir(temp_backup):
+            try:
+                if os.path.isdir(config_dir):
+                    shutil.rmtree(config_dir, ignore_errors=True)
+                if os.path.isdir(snapshot_path):
+                    shutil.copytree(snapshot_path, config_dir)
+                shutil.rmtree(temp_backup, ignore_errors=True)
+                return f"{e}. Your previous configuration has been restored from an automatic backup."
+            except Exception as rollback_err:
+                return (f"{e}. Additionally, automatic rollback failed: {rollback_err}. "
+                        f"A manual backup may exist at: {temp_backup}")
         return str(e)
