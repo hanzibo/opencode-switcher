@@ -68,6 +68,18 @@ def _copy_to_clipboard(text: str):
             pass
 
 
+_DIV_CLOSE_LEN = 6  # len('</div>')
+
+
+def _extract_after_header(raw: str, marker: str) -> Optional[str]:
+    """Split on marker, return content after the header div's closing tag, or None if marker absent."""
+    if marker not in raw:
+        return None
+    after = raw.split(marker, 1)[1]
+    end = after.find('</div>')
+    return after[end + _DIV_CLOSE_LEN:] if end != -1 else after
+
+
 def _close_unclosed_code_blocks(text: str) -> str:
     """Ensure that any unclosed markdown code blocks (triple backticks) are closed."""
     if text.count("```") % 2 != 0:
@@ -259,6 +271,8 @@ class ClipboardPanel(Gtk.Box):
         self.on_hide_request: Optional[Callable[[], None]] = None
         self.on_dialog_shown: Optional[Callable[[], None]] = None
         self.on_dialog_hidden: Optional[Callable[[], None]] = None
+        self.on_ai_copy_started: Optional[Callable[[], None]] = None
+        self.on_ai_copy_finished: Optional[Callable[[], None]] = None
         self.on_menu_shown: Optional[Callable[[], None]] = None
         self.on_menu_hidden: Optional[Callable[[], None]] = None
         self.on_combo_popup_shown: Optional[Callable[[], None]] = None
@@ -621,30 +635,23 @@ class ClipboardPanel(Gtk.Box):
                             msgs = getattr(self, "_ai_messages", [])
                             if 0 <= index < len(msgs) and msgs[index].get("role") == "assistant":
                                 raw = msgs[index].get("content", "")
-                                content = ""
                                 # Extract only the Answer part (skip Thinking/Reasoning)
-                                answer_marker = '<div class="answer-header">'
-                                assistant_marker = '<div class="assistant-header">'
-                                if answer_marker in raw:
-                                    content = raw.split(answer_marker, 1)[1]
-                                    # content starts with "💡 Answer:</div>\n..." — skip past closing </div>
-                                    end_open = content.find('</div>')
-                                    if end_open != -1:
-                                        content = content[end_open + 6:]
-                                elif assistant_marker in raw:
-                                    content = raw.split(assistant_marker, 1)[1]
-                                    end_open = content.find('</div>')
-                                    if end_open != -1:
-                                        content = content[end_open + 6:]
-                                else:
-                                    content = raw
+                                content = (
+                                    _extract_after_header(raw, '<div class="answer-header">')
+                                    or _extract_after_header(raw, '<div class="assistant-header">')
+                                    or raw
+                                )
                                 # Strip any remaining header div tags and whitespace
                                 content = re.sub(
                                     r'<div class=["\'](?:assistant|thinking|answer)-header["\'].*?</div>\n?',
                                     "", content, flags=re.DOTALL
                                 ).strip()
                                 if content:
+                                    if self.on_ai_copy_started:
+                                        self.on_ai_copy_started()
                                     _copy_to_clipboard(content)
+                                    if self.on_ai_copy_finished:
+                                        GLib.idle_add(self.on_ai_copy_finished)
                         except (ValueError, IndexError):
                             pass
                     decision.ignore()
@@ -2295,7 +2302,7 @@ class ClipboardPanel(Gtk.Box):
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
             self._ai_render_timeout_id = 0
-        # Full rebuild from messages list (includes .assistant-response wrapper)
+        # Full rebuild from messages list with headers and copy markers
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         self._render_markdown(self._ai_markdown_text)
 

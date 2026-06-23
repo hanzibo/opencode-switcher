@@ -71,6 +71,7 @@ class SearchPanel:
         self._delete_in_progress = False
         self._dialog_active = False
         self._combo_popup_active = False
+        self._ai_copy_in_progress = False
         self._show_time = 0.0
         self._active_tab = 0
         self._opened_by_ai_hotkey = False
@@ -349,6 +350,8 @@ class SearchPanel:
         panel.on_menu_hidden = self._on_clip_menu_hidden
         panel.on_combo_popup_shown = self._on_combo_popup_shown
         panel.on_combo_popup_hidden = self._on_combo_popup_hidden
+        panel.on_ai_copy_started = self._on_ai_copy_started
+        panel.on_ai_copy_finished = self._on_ai_copy_finished
 
     def _on_clip_dialog_shown(self):
         self._dialog_active = True
@@ -360,6 +363,16 @@ class SearchPanel:
 
     def _clear_dialog_active(self):
         self._dialog_active = False
+        return False
+
+    def _on_ai_copy_started(self):
+        self._ai_copy_in_progress = True
+
+    def _on_ai_copy_finished(self):
+        GLib.timeout_add(300, self._clear_ai_copy_flag)
+
+    def _clear_ai_copy_flag(self):
+        self._ai_copy_in_progress = False
         return False
 
     def _on_clip_menu_shown(self):
@@ -540,7 +553,8 @@ class SearchPanel:
         # 延迟 100 毫秒评估，以防 ComboBox popup 信号由于时序滞后于失焦事件执行
         def do_hide():
             if (self._menu_active or self._delete_in_progress or 
-                    self._dialog_active or getattr(self, "_combo_popup_active", False)):
+                    self._dialog_active or getattr(self, "_combo_popup_active", False) or
+                    self._ai_copy_in_progress):
                 return False
             # 同步兜底检查下拉框是否正处于弹出状态
             if self._clipboard_panel and self._clipboard_panel.is_history_popup_shown():
