@@ -2130,32 +2130,37 @@ class ClipboardPanel(Gtk.Box):
                 function addCopyButtons() {{
                     document.querySelectorAll('pre').forEach(function(pre) {{
                         if (pre.querySelector('.copy-btn')) return;
-                        var btn = document.createElement('button');
+                        const btn = document.createElement('button');
                         btn.className = 'copy-btn';
                         btn.textContent = '复制';
                         btn.addEventListener('click', function() {{
-                            var code = pre.querySelector('code');
-                            var text = code ? code.textContent : pre.textContent;
-                            if (navigator.clipboard && navigator.clipboard.writeText) {{
-                                navigator.clipboard.writeText(text).then(function() {{
-                                    btn.textContent = '✓';
-                                    btn.classList.add('copied');
-                                    setTimeout(function() {{ btn.textContent = '复制'; btn.classList.remove('copied'); }}, 2000);
-                                }}).catch(function() {{}});
-                            }} else {{
-                                var ta = document.createElement('textarea');
-                                ta.value = text;
-                                document.body.appendChild(ta);
-                                ta.select();
-                                document.execCommand('copy');
-                                document.body.removeChild(ta);
+                            const code = pre.querySelector('code');
+                            const text = code ? code.textContent : pre.textContent;
+                            function copyDone() {{
                                 btn.textContent = '✓';
                                 btn.classList.add('copied');
                                 setTimeout(function() {{ btn.textContent = '复制'; btn.classList.remove('copied'); }}, 2000);
                             }}
+                            if (navigator.clipboard && navigator.clipboard.writeText) {{
+                                navigator.clipboard.writeText(text).then(copyDone).catch(function(e) {{
+                                    console.warn('Copy failed, trying fallback:', e);
+                                    fallbackCopy(text, copyDone);
+                                }});
+                            }} else {{
+                                fallbackCopy(text, copyDone);
+                            }}
                         }});
                         pre.appendChild(btn);
                     }});
+                    function fallbackCopy(text, done) {{
+                        const ta = document.createElement('textarea');
+                        ta.value = text;
+                        document.body.appendChild(ta);
+                        ta.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(ta);
+                        done();
+                    }}
                 }}
             </script>
         </head>
