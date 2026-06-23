@@ -2552,6 +2552,67 @@ class ClipboardPanel(Gtk.Box):
         self.queue_resize()
         self._refresh_conversation_dropdown()
 
+    def start_new_conversation(self):
+        """保存当前对话（若有内容），确保 AI 看盘面板可见，并启动一个全新的空白对话。"""
+        # 1. 若当前正在流式输出，取消之并追加已接收的片段
+        if self._ai_streaming:
+            self._ai_cancel_event.set()
+            self._flush_stream_queue()
+            if self._ai_messages and self._ai_messages[-1].get("role") == "user" and self._ai_assistant_buffer:
+                self._ai_messages.append({"role": "assistant", "content": self._ai_assistant_buffer})
+            self._ai_streaming = False
+            self._ai_spinner.stop()
+            self._ai_spinner.hide()
+
+        # 2. 若当前已有对话内容，自动保存当前对话
+        if self._ai_messages:
+            try:
+                base_url, api_key, model_name, _ = self._read_model_config(
+                    self._ai_last_prompt_obj,
+                    getattr(self, "_ai_active_model_info", None)
+                )
+                model_snapshot = getattr(self, "_ai_active_model_info", None) or {
+                    "alias": "Default",
+                    "base_url": base_url,
+                    "model_name": model_name
+                }
+                self._save_current_conversation(model_snapshot)
+            except Exception as e:
+                print(f"Error saving before new conversation: {e}", flush=True)
+
+        # 3. 递增请求 ID，阻断被取消线程的后续延迟回调
+        self._ai_request_id += 1
+
+        # 4. 确保 AI 面板显示
+        self._ai_sep.set_no_show_all(False)
+        self._ai_sep.show()
+        self._ai_vbox.set_no_show_all(False)
+        self._ai_vbox.show()
+        self._ai_vbox.show_all()
+
+        # 5. 重置 AI 会话所有的底层状态变量
+        self._ai_messages = []
+        self._ai_conversation_id = None
+        self._ai_assistant_buffer = ""
+        self._ai_markdown_text = ""
+        self._ai_current_assistant_text = ""
+        self._ai_response_div_added = False
+        self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
+        self._ai_entry.get_buffer().set_text("")
+        _, _, _, display_name = self._read_model_config(None, None)
+        self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
+        self._ai_active_model_info = None
+        self._ai_last_prompt_obj = None
+        self._ai_title_generated = False
+        
+        self._ai_input_area.set_no_show_all(False)
+        self._ai_input_area.show_all()
+        
+        self._ai_entry.grab_focus()
+        self.queue_resize()
+        
+        self._refresh_conversation_dropdown()
+
     def open_ai_and_load_recent(self):
         self._ai_sep.set_no_show_all(False)
         self._ai_sep.show()

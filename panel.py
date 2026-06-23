@@ -1272,6 +1272,12 @@ class SearchPanel:
         if event.keyval == Gdk.KEY_2 and (event.state & Gdk.ModifierType.CONTROL_MASK):
             self._switch_tab(1)
             return True
+        if keyname in ("n", "N") and (event.state & Gdk.ModifierType.CONTROL_MASK) and (event.state & Gdk.ModifierType.SHIFT_MASK):
+            if self._clipboard_panel:
+                if self._active_tab != 1:
+                    self._switch_tab(1)
+                self._clipboard_panel.start_new_conversation()
+                return True
         return False
 
     def _scroll_to_row(self, row):
