@@ -288,8 +288,11 @@ class ClipboardPanel(Gtk.Box):
         self._ai_active_model_info: Optional[Dict[str, str]] = None
         self._ai_conversation_created_at: int = 0
         self._ai_title_generated: bool = False  # guard: title generation only once per conversation
-        self._ai_history_combo: Optional[Gtk.ComboBoxText] = None
-        self._ai_history_switching: bool = False  # guard against re-entrant combo changed signals
+        self._ai_history_btn: Optional[Gtk.Button] = None
+        self._ai_history_btn_label: Optional[Gtk.Label] = None
+        self._ai_history_popover: Optional[Gtk.Popover] = None
+        self._ai_history_listbox: Optional[Gtk.ListBox] = None
+        self._ai_history_switching: bool = False  # guard against re-entrant signals during update
         self._conversation_store = ConversationStore()
         self._ai_cancel_event = threading.Event()
         self._llm_client = _LLMHttpClient()
@@ -470,16 +473,43 @@ class ClipboardPanel(Gtk.Box):
         self._ai_spinner.set_no_show_all(True)
         ai_hdr.pack_start(self._ai_spinner, False, False, 0)
 
-        # Conversation history dropdown (inserted before copy button)
-        self._ai_history_combo = Gtk.ComboBoxText.new()
-        self._ai_history_combo.set_size_request(160, -1)
-        self._ai_history_combo.set_no_show_all(True)
-        self._ai_history_combo.set_tooltip_text("切换对话历史")
-        self._ai_history_combo.set_sensitive(False)
-        self._ai_history_combo.get_style_context().add_class("scrollable-combo")
-        self._ai_history_combo.connect("changed", self._on_history_combo_changed)
-        self._ai_history_combo.connect("notify::popup-shown", self._on_ai_history_combo_popup_shown)
-        ai_hdr.pack_start(self._ai_history_combo, False, False, 0)
+        # Conversation history dropdown button (inserted before copy button)
+        self._ai_history_btn = Gtk.Button.new()
+        self._ai_history_btn.set_size_request(160, -1)
+        self._ai_history_btn.set_no_show_all(True)
+        self._ai_history_btn.set_tooltip_text("切换对话历史")
+        self._ai_history_btn.set_sensitive(False)
+        self._ai_history_btn.get_style_context().add_class("history-dropdown-btn")
+        
+        btn_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+        self._ai_history_btn_label = Gtk.Label.new("历史对话")
+        self._ai_history_btn_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self._ai_history_btn_label.set_xalign(0)
+        arrow = Gtk.Label.new("▾")
+        
+        btn_box.pack_start(self._ai_history_btn_label, True, True, 0)
+        btn_box.pack_start(arrow, False, False, 0)
+        self._ai_history_btn.add(btn_box)
+        self._ai_history_btn.connect("clicked", self._on_history_btn_clicked)
+        
+        ai_hdr.pack_start(self._ai_history_btn, False, False, 0)
+        
+        # Create Popover for history selection
+        self._ai_history_popover = Gtk.Popover.new(self._ai_history_btn)
+        self._ai_history_popover.set_position(Gtk.PositionType.BOTTOM)
+        self._ai_history_popover.connect("closed", self._on_popover_closed)
+        
+        # Popover content: a ScrolledWindow with a fixed width, and inside it a ListBox
+        popover_scrolled = Gtk.ScrolledWindow.new(None, None)
+        popover_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        popover_scrolled.set_size_request(240, 300)
+        
+        self._ai_history_listbox = Gtk.ListBox.new()
+        self._ai_history_listbox.connect("row-activated", self._on_history_row_activated)
+        
+        popover_scrolled.add(self._ai_history_listbox)
+        self._ai_history_popover.add(popover_scrolled)
+        popover_scrolled.show_all()
 
         # Copy button
         self._btn_copy_ai = Gtk.Button.new_with_label("📋 复制")
@@ -759,17 +789,15 @@ class ClipboardPanel(Gtk.Box):
             " border: 1px solid %(btn_border)s; border-radius: 6px; padding: 8px 16px; font-size: 14px; font-weight: 500; }"
             "button:hover { background: %(btn_hover)s; border-color: %(sel_border)s; }"
             "button:active { background: %(btn_active)s; }"
-            "combobox { font-size: 13px; }"
-            "combobox button { padding: 2px 8px; min-height: 28px; border-radius: 6px; }"
-            "combobox cellview { padding-left: 4px; }"
-            "combobox.scrollable-combo { -GtkComboBox-appears-as-list: true; }"
-            "#gtk-combobox-popup-window { background-color: %(dialog_bg)s; border: 1px solid %(input_border)s; border-radius: 6px; }"
-            "#gtk-combobox-popup-window scrolledwindow { background-color: transparent; }"
-            "#gtk-combobox-popup-window treeview { background-color: %(dialog_bg)s; color: %(text_fg)s; }"
-            "#gtk-combobox-popup-window treeview:hover, #gtk-combobox-popup-window treeview:selected { background-color: %(btn_hover)s; color: %(text_fg)s; }"
-            "combobox menu { background-color: %(dialog_bg)s; border: 1px solid %(input_border)s; border-radius: 6px; padding: 4px 0; }"
-            "combobox menuitem { padding: 6px 12px; color: %(text_fg)s; }"
-            "combobox menuitem:hover, combobox menuitem:selected { background-color: %(btn_hover)s; }"
+            ".history-dropdown-btn { font-size: 13px; padding: 2px 8px; min-height: 28px; border-radius: 6px; }"
+            ".history-dropdown-btn label { font-size: 13px; }"
+            "popover { background-color: %(dialog_bg)s; border: 1px solid %(input_border)s; border-radius: 8px; padding: 4px; }"
+            "popover scrolledwindow { background-color: transparent; border: none; }"
+            "popover listbox { background-color: transparent; border: none; }"
+            "popover listboxrow { padding: 0; border: none; background: transparent; border-radius: 4px; }"
+            "popover listboxrow:hover { background-color: %(btn_hover)s; }"
+            "popover listboxrow:selected { background-color: %(sel_bg)s; }"
+            "popover listboxrow label { color: %(text_fg)s; font-size: 13px; }"
             ".cat-tool-btn { font-size: 12px; padding: 4px 6px; border: none; border-radius: 4px; }"
             ".cat-tool-btn:hover { background: %(btn_hover)s; }"
             ".cat-tool-btn:active { background: %(btn_active)s; }"
@@ -2367,109 +2395,109 @@ class ClipboardPanel(Gtk.Box):
 
     def _refresh_conversation_dropdown(self):
         """Repopulate the history dropdown from the conversation store."""
-        if not self._ai_history_combo:
+        if not hasattr(self, "_ai_history_listbox") or not self._ai_history_listbox:
             return
-        store = self._ai_history_combo.get_model()
-        if store:
-            store.clear()
-        # Block changed signal during programmatic update
+            
+        # Clear listbox
+        for child in self._ai_history_listbox.get_children():
+            child.destroy()
+            
         self._ai_history_switching = True
 
         summaries = self._conversation_store.list_conversations()
-        # Sort by updated_at descending (list_conversations sorts by filename only)
+        # Sort by updated_at descending
         summaries.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
 
         for s in summaries:
             sid = s.get("id", "")
             raw_title = s.get("title", "(untitled)")
             cleaned_title = _clean_history_title(raw_title)
-            if len(cleaned_title) > 20:
-                title = cleaned_title[:17] + "..."
+            if len(cleaned_title) > 25:
+                title = cleaned_title[:22] + "..."
             else:
                 title = cleaned_title
             count = s.get("message_count", 0)
             label = f"{title} ({count}条)"
-            self._ai_history_combo.append(sid, label)
+            
+            row = Gtk.ListBoxRow.new()
+            row.conversation_id = sid
+            
+            lbl = Gtk.Label.new(label)
+            lbl.set_xalign(0)
+            lbl.set_margin_start(8)
+            lbl.set_margin_end(8)
+            lbl.set_margin_top(6)
+            lbl.set_margin_bottom(6)
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            row.add(lbl)
+            
+            self._ai_history_listbox.add(row)
 
         if summaries:
-            self._ai_history_combo.set_sensitive(True)
-            self._ai_history_combo.set_no_show_all(False)
-            self._ai_history_combo.show()
+            self._ai_history_btn.set_sensitive(True)
+            self._ai_history_btn.set_no_show_all(False)
+            self._ai_history_btn.show()
+            self._update_history_btn_label()
+            
+            # Select the current active item in the listbox
             if self._ai_conversation_id:
-                self._ai_history_combo.set_active_id(self._ai_conversation_id)
+                for row in self._ai_history_listbox.get_children():
+                    if getattr(row, "conversation_id", None) == self._ai_conversation_id:
+                        self._ai_history_listbox.select_row(row)
+                        break
         else:
-            self._ai_history_combo.set_sensitive(False)
-            self._ai_history_combo.set_no_show_all(True)
-            self._ai_history_combo.hide()
+            self._ai_history_btn.set_sensitive(False)
+            self._ai_history_btn.set_no_show_all(True)
+            self._ai_history_btn.hide()
 
         self._ai_history_switching = False
 
-    def _on_history_combo_changed(self, combo):
-        """Handle user selecting a conversation from the history dropdown."""
-        conv_id = combo.get_active_id()
-        if not conv_id or self._ai_history_switching:
+    def _update_history_btn_label(self):
+        if not self._ai_conversation_id:
+            self._ai_history_btn_label.set_text("历史对话")
             return
-        if conv_id == self._ai_conversation_id:
-            return  # already viewing this conversation
-        if self._ai_streaming:
-            # Revert selection back to current — block switching while streaming
-            self._ai_history_switching = True
-            combo.set_active_id(self._ai_conversation_id)
-            self._ai_history_switching = False
-            return
-        self._switch_to_conversation(conv_id)
+        active_label = "历史对话"
+        for row in self._ai_history_listbox.get_children():
+            if getattr(row, "conversation_id", None) == self._ai_conversation_id:
+                lbl = row.get_child()
+                if isinstance(lbl, Gtk.Label):
+                    active_label = lbl.get_text()
+                break
+        self._ai_history_btn_label.set_text(active_label)
 
-    def _on_ai_history_combo_popup_shown(self, combo, pspec):
-        if combo.get_property("popup-shown"):
-            def adjust_popup(retry_count=0):
-                found = False
-                for win in Gtk.Window.list_toplevels():
-                    if win.get_name() == "gtk-combobox-popup-window":
-                        def find_scrolled_window(widget):
-                            if isinstance(widget, Gtk.ScrolledWindow):
-                                return widget
-                            if isinstance(widget, Gtk.Container):
-                                for child in widget.get_children():
-                                    res = find_scrolled_window(child)
-                                    if res:
-                                        return res
-                            return None
-                        scrolled = find_scrolled_window(win)
-                        if scrolled:
-                            model = combo.get_model()
-                            num_items = len(model) if model else 0
-                            desired_height = min(num_items * 36 + 10, 300)
-                            
-                            # 禁用高度自动向上传播，并设置显式的高度限制值以兼容 Wayland
-                            scrolled.set_propagate_natural_height(False)
-                            scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-                            scrolled.set_min_content_height(desired_height)
-                            scrolled.set_max_content_height(desired_height)
-                            
-                            width, _ = win.get_size()
-                            if width < 50:
-                                width = max(combo.get_allocated_width(), 160)
-                            win.resize(width, desired_height)
-                            win.queue_resize()
-                            found = True
-                            break
-                if not found and retry_count < 10:
-                    GLib.timeout_add(50, lambda: adjust_popup(retry_count + 1))
-                return False
-
-            GLib.idle_add(adjust_popup)
-
+    def _on_history_btn_clicked(self, btn):
+        if self._ai_history_popover.get_visible():
+            self._ai_history_popover.popdown()
+        else:
+            self._refresh_conversation_dropdown()
+            self._ai_history_popover.show_all()
+            self._ai_history_popover.popup()
             if self.on_combo_popup_shown:
                 self.on_combo_popup_shown()
-        else:
-            if self.on_combo_popup_hidden:
-                self.on_combo_popup_hidden()
+
+    def _on_popover_closed(self, popover):
+        if self.on_combo_popup_hidden:
+            self.on_combo_popup_hidden()
+
+    def _on_history_row_activated(self, listbox, row):
+        if not row:
+            return
+        conv_id = getattr(row, "conversation_id", None)
+        if not conv_id:
+            return
+        self._ai_history_popover.popdown()
+        
+        if conv_id == self._ai_conversation_id:
+            return
+        if self._ai_streaming:
+            return
+        self._switch_to_conversation(conv_id)
 
     def is_history_popup_shown(self) -> bool:
         """Check if the conversation history dropdown is currently active."""
         return bool(
-            self._ai_history_combo and 
-            self._ai_history_combo.get_property("popup-shown")
+            self._ai_history_popover and 
+            self._ai_history_popover.get_visible()
         )
 
     # ── Synchronous LLM call for background title generation ──────────────────────
