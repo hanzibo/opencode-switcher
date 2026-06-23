@@ -499,17 +499,30 @@ class ClipboardPanel(Gtk.Box):
         self._ai_history_popover.set_position(Gtk.PositionType.BOTTOM)
         self._ai_history_popover.connect("closed", self._on_popover_closed)
         
-        # Popover content: a ScrolledWindow with a fixed width, and inside it a ListBox
+        # Popover content: a vertical Box containing the ScrolledWindow, a Separator, and a Clear All button
+        popover_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
+        
         popover_scrolled = Gtk.ScrolledWindow.new(None, None)
         popover_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        popover_scrolled.set_size_request(240, 300)
+        popover_scrolled.set_size_request(240, 260)
         
         self._ai_history_listbox = Gtk.ListBox.new()
         self._ai_history_listbox.connect("row-activated", self._on_history_row_activated)
         
         popover_scrolled.add(self._ai_history_listbox)
-        self._ai_history_popover.add(popover_scrolled)
-        popover_scrolled.show_all()
+        popover_vbox.pack_start(popover_scrolled, True, True, 0)
+        
+        # Separator line
+        popover_vbox.pack_start(Gtk.Separator.new(Gtk.Orientation.HORIZONTAL), False, False, 2)
+        
+        # Clear All History button
+        self._ai_clear_all_history_btn = Gtk.Button.new_with_label("🗑️ 清除所有历史")
+        self._ai_clear_all_history_btn.get_style_context().add_class("clear-all-btn")
+        self._ai_clear_all_history_btn.connect("clicked", self._on_clear_all_history_clicked)
+        popover_vbox.pack_start(self._ai_clear_all_history_btn, False, False, 2)
+        
+        self._ai_history_popover.add(popover_vbox)
+        popover_vbox.show_all()
 
         # Copy button
         self._btn_copy_ai = Gtk.Button.new_with_label("📋 复制")
@@ -791,6 +804,8 @@ class ClipboardPanel(Gtk.Box):
             "button:active { background: %(btn_active)s; }"
             ".history-dropdown-btn { font-size: 13px; padding: 2px 8px; min-height: 28px; border-radius: 6px; }"
             ".history-dropdown-btn label { font-size: 13px; }"
+            ".clear-all-btn { color: %(text_secondary)s; padding: 6px 12px; margin-top: 2px; font-size: 13px; font-weight: bold; border: none; background: transparent; }"
+            ".clear-all-btn:hover { background-color: rgba(239, 68, 68, 0.1); color: #ef4444; border-radius: 4px; }"
             "popover { background-color: %(dialog_bg)s; border: 1px solid %(input_border)s; border-radius: 8px; padding: 4px; }"
             "popover scrolledwindow { background-color: transparent; border: none; }"
             "popover listbox { background-color: transparent; border: none; }"
@@ -2496,6 +2511,37 @@ class ClipboardPanel(Gtk.Box):
             self._switch_to_conversation(conv_id)
             return False
         GLib.idle_add(defer_switch)
+
+    def _on_clear_all_history_clicked(self, _btn):
+        summaries = self._conversation_store.list_conversations()
+        if not summaries:
+            return
+            
+        dialog = Gtk.MessageDialog(
+            transient_for=self.get_toplevel(),
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="确定要清除所有 AI 对话历史吗？",
+        )
+        dialog.format_secondary_text("此操作将永久删除所有历史会话记录（共 %d 条），且无法恢复。" % len(summaries))
+        
+        def on_resp(dlg, resp):
+            dlg.destroy()
+            if resp == Gtk.ResponseType.YES:
+                self._ai_history_popover.popdown()
+                for s in summaries:
+                    sid = s.get("id")
+                    if sid:
+                        self._conversation_store.delete_conversation(sid)
+                self._reset_ai_panel_silent()
+            if self.on_dialog_hidden:
+                self.on_dialog_hidden()
+                
+        dialog.connect("response", on_resp)
+        if self.on_dialog_shown:
+            self.on_dialog_shown()
+        dialog.show_all()
 
     def is_history_popup_shown(self) -> bool:
         """Check if the conversation history dropdown is currently active."""
