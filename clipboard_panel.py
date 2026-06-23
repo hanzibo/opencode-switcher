@@ -2104,11 +2104,21 @@ class ClipboardPanel(Gtk.Box):
                 tr:nth-child(even) {{ background-color: {table_alt_bg}; }}
             </style>
             <script>
+                let _autoScroll = true;
+                window.addEventListener('scroll', function() {{
+                    const threshold = 20;
+                    _autoScroll = (window.innerHeight + window.scrollY >= document.body.scrollHeight - threshold);
+                }});
+                function _scrollToBottom() {{
+                    if (_autoScroll) {{
+                        window.scrollTo(0, document.body.scrollHeight);
+                    }}
+                }}
                 function updateContent(html) {{
                     const content = document.getElementById('content');
                     content.innerHTML = html;
                     addCopyButtons();
-                    window.scrollTo(0, document.body.scrollHeight);
+                    _scrollToBottom();
                 }}
                 function appendMessageContainer(msgId) {{
                     const content = document.getElementById('content');
@@ -2117,7 +2127,7 @@ class ClipboardPanel(Gtk.Box):
                         div.id = msgId;
                         content.appendChild(div);
                     }}
-                    window.scrollTo(0, document.body.scrollHeight);
+                    _scrollToBottom();
                 }}
                 function updateMessageContainer(msgId, html) {{
                     const div = document.getElementById(msgId);
@@ -2125,7 +2135,7 @@ class ClipboardPanel(Gtk.Box):
                         div.innerHTML = html;
                         addCopyButtons();
                     }}
-                    window.scrollTo(0, document.body.scrollHeight);
+                    _scrollToBottom();
                 }}
                 function addCopyButtons() {{
                     document.querySelectorAll('pre').forEach(function(pre) {{
@@ -2167,7 +2177,7 @@ class ClipboardPanel(Gtk.Box):
         <body class="{theme_name}">
             <div id="content">{initial_html}</div>
             <script>
-                window.scrollTo(0, document.body.scrollHeight);
+                _scrollToBottom();
             </script>
         </body>
         </html>
@@ -2213,7 +2223,7 @@ class ClipboardPanel(Gtk.Box):
         def stop_streaming():
             if getattr(self, "_ai_request_id", 0) == req_id:
                 if hasattr(self, "_ai_webview") and self._ai_webview:
-                    self._ai_webview.run_javascript("window.scrollTo(0, document.body.scrollHeight);", None, None)
+                    self._ai_webview.run_javascript("_scrollToBottom();", None, None)
                 self._ai_streaming = False
 
                 if self._ai_messages and self._ai_messages[-1].get("role") == "user":
