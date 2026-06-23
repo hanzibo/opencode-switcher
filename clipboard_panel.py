@@ -2371,7 +2371,8 @@ class ClipboardPanel(Gtk.Box):
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         self._render_markdown(self._ai_markdown_text)
 
-    def _save_current_conversation(self, model_snapshot: Dict[str, Any]):
+    def _save_current_conversation(self, model_snapshot: Dict[str, Any],
+                                    preserve_updated_at: bool = False):
         """Save or update the current active conversation to the store, preserving its title."""
         if not self._ai_conversation_id:
             now = int(time.time() * 1000)
@@ -2382,13 +2383,12 @@ class ClipboardPanel(Gtk.Box):
             )
             self._ai_conversation_id = conv.id
             conv.messages = [ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages]
-            self._conversation_store.save_conversation(conv)
+            self._conversation_store.save_conversation(conv, bump_updated_at=not preserve_updated_at)
         else:
             conv = self._conversation_store.load_conversation(self._ai_conversation_id)
             if conv:
                 conv.messages = [ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages]
                 conv.model_config_snapshot = model_snapshot
-                conv.updated_at = int(time.time() * 1000)
             else:
                 conv = Conversation(
                     id=self._ai_conversation_id,
@@ -2399,7 +2399,7 @@ class ClipboardPanel(Gtk.Box):
                     created_at=self._ai_conversation_created_at,
                     updated_at=int(time.time() * 1000),
                 )
-            self._conversation_store.save_conversation(conv)
+            self._conversation_store.save_conversation(conv, bump_updated_at=not preserve_updated_at)
 
     def _switch_to_conversation(self, conv_id: str):
         """Switch AI panel to display a different conversation by ID."""
@@ -2418,7 +2418,7 @@ class ClipboardPanel(Gtk.Box):
                     "base_url": base_url,
                     "model_name": model_name
                 }
-                self._save_current_conversation(model_snapshot)
+                self._save_current_conversation(model_snapshot, preserve_updated_at=True)
             except Exception as e:
                 print(f"Error saving before switch: {e}", flush=True)
 
@@ -2703,7 +2703,7 @@ class ClipboardPanel(Gtk.Box):
         conv = self._conversation_store.load_conversation(conv_id)
         if conv:
             conv.title = title
-            self._conversation_store.save_conversation(conv)
+            self._conversation_store.save_conversation(conv, bump_updated_at=False)
         self._refresh_conversation_dropdown()
 
     def is_ai_panel_visible(self) -> bool:
@@ -2765,7 +2765,7 @@ class ClipboardPanel(Gtk.Box):
                     "base_url": base_url,
                     "model_name": model_name
                 }
-                self._save_current_conversation(model_snapshot)
+                self._save_current_conversation(model_snapshot, preserve_updated_at=True)
             except Exception as e:
                 print(f"Error saving before new conversation: {e}", flush=True)
 

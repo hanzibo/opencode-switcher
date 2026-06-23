@@ -677,8 +677,9 @@ class ConversationStore:
         self.save_conversation(conv)
         return conv
 
-    def save_conversation(self, conv: Conversation):
-        conv.updated_at = int(time.time() * 1000)
+    def save_conversation(self, conv: Conversation, bump_updated_at: bool = True):
+        if bump_updated_at:
+            conv.updated_at = int(time.time() * 1000)
         path = self._path(conv.id)
         with open(path, "w") as f:
             json.dump({
