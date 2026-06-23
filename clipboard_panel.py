@@ -496,6 +496,7 @@ class ClipboardPanel(Gtk.Box):
         
         # Create Popover for history selection
         self._ai_history_popover = Gtk.Popover.new(self._ai_history_btn)
+        self._ai_history_popover.get_style_context().add_class("ai-history-popover")
         self._ai_history_popover.set_position(Gtk.PositionType.BOTTOM)
         self._ai_history_popover.connect("closed", self._on_popover_closed)
         
@@ -802,17 +803,18 @@ class ClipboardPanel(Gtk.Box):
             " border: 1px solid %(btn_border)s; border-radius: 6px; padding: 8px 16px; font-size: 14px; font-weight: 500; }"
             "button:hover { background: %(btn_hover)s; border-color: %(sel_border)s; }"
             "button:active { background: %(btn_active)s; }"
-            ".history-dropdown-btn { font-size: 13px; padding: 2px 8px; min-height: 28px; border-radius: 6px; }"
+            ".history-dropdown-btn { font-size: 13px; padding: 2px 8px; min-height: 28px; border-radius: 6px; color: %(text_fg)s; background: %(btn_bg)s; background-image: none; }"
             ".history-dropdown-btn label { font-size: 13px; }"
             ".clear-all-btn { color: %(text_secondary)s; padding: 6px 12px; margin-top: 2px; font-size: 13px; font-weight: bold; border: none; background: transparent; }"
             ".clear-all-btn:hover { background-color: rgba(239, 68, 68, 0.1); color: #ef4444; border-radius: 4px; }"
-            "popover { background-color: %(dialog_bg)s; border: 1px solid %(input_border)s; border-radius: 8px; padding: 4px; }"
-            "popover scrolledwindow { background-color: transparent; border: none; }"
-            "popover listbox { background-color: transparent; border: none; }"
-            "popover listboxrow { padding: 0; border: none; background: transparent; border-radius: 4px; }"
-            "popover listboxrow:hover { background-color: %(btn_hover)s; }"
-            "popover listboxrow:selected { background-color: %(sel_bg)s; }"
-            "popover listboxrow label { color: %(text_fg)s; font-size: 13px; }"
+            ".ai-history-popover { background-color: %(dialog_bg)s; border: 1px solid %(input_border)s; border-radius: 8px; padding: 4px; background-image: none; box-shadow: none; }"
+            ".ai-history-popover scrolledwindow { background-color: transparent; border: none; }"
+            ".ai-history-popover listbox { background-color: transparent; border: none; }"
+            ".ai-history-popover listboxrow { padding: 0; border: none; background: transparent; border-radius: 4px; }"
+            ".ai-history-popover listboxrow:hover { background-color: %(btn_hover)s; }"
+            ".ai-history-popover listboxrow:selected { background-color: %(sel_bg)s; }"
+            ".ai-history-popover listboxrow label { color: %(text_fg)s; font-size: 13px; }"
+            ".ai-history-popover separator { background: %(input_border)s; min-height: 1px; margin: 2px 0; }"
             ".cat-tool-btn { font-size: 12px; padding: 4px 6px; border: none; border-radius: 4px; }"
             ".cat-tool-btn:hover { background: %(btn_hover)s; }"
             ".cat-tool-btn:active { background: %(btn_active)s; }"
