@@ -2039,10 +2039,11 @@ class ClipboardPanel(Gtk.Box):
                 }}
                 pre {{
                     background-color: {pre_bg};
-                    padding: 12px;
+                    padding: 32px 12px 12px 12px;
                     border-radius: 6px;
                     overflow: auto;
                     border: 1px solid {pre_border};
+                    position: relative;
                 }}
                 code {{
                     font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
@@ -2068,6 +2069,31 @@ class ClipboardPanel(Gtk.Box):
                     margin-bottom: 8px;
                 }}
                 {pygments_css}
+                .copy-btn {{
+                    position: absolute;
+                    top: 4px;
+                    right: 4px;
+                    background: rgba(128,128,128,0.12);
+                    border: 1px solid rgba(128,128,128,0.2);
+                    border-radius: 4px;
+                    color: inherit;
+                    cursor: pointer;
+                    font-size: 11px;
+                    padding: 1px 7px;
+                    opacity: 0;
+                    transition: opacity 0.2s;
+                    line-height: 1.6;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                }}
+                pre:hover .copy-btn {{
+                    opacity: 1;
+                }}
+                .copy-btn:hover {{
+                    background: rgba(128,128,128,0.25);
+                }}
+                .copy-btn.copied {{
+                    opacity: 1;
+                }}
                 .thinking-header {{ color: {thinking_color}; font-weight: bold; margin-top: 12px; }}
                 .answer-header {{ color: {answer_color}; font-weight: bold; margin-top: 12px; }}
                 .user-header {{ color: {user_color}; font-weight: bold; margin-top: 12px; }}
@@ -2081,6 +2107,7 @@ class ClipboardPanel(Gtk.Box):
                 function updateContent(html) {{
                     const content = document.getElementById('content');
                     content.innerHTML = html;
+                    addCopyButtons();
                     window.scrollTo(0, document.body.scrollHeight);
                 }}
                 function appendMessageContainer(msgId) {{
@@ -2096,8 +2123,39 @@ class ClipboardPanel(Gtk.Box):
                     const div = document.getElementById(msgId);
                     if (div) {{
                         div.innerHTML = html;
+                        addCopyButtons();
                     }}
                     window.scrollTo(0, document.body.scrollHeight);
+                }}
+                function addCopyButtons() {{
+                    document.querySelectorAll('pre').forEach(function(pre) {{
+                        if (pre.querySelector('.copy-btn')) return;
+                        var btn = document.createElement('button');
+                        btn.className = 'copy-btn';
+                        btn.textContent = '复制';
+                        btn.addEventListener('click', function() {{
+                            var code = pre.querySelector('code');
+                            var text = code ? code.textContent : pre.textContent;
+                            if (navigator.clipboard && navigator.clipboard.writeText) {{
+                                navigator.clipboard.writeText(text).then(function() {{
+                                    btn.textContent = '✓';
+                                    btn.classList.add('copied');
+                                    setTimeout(function() {{ btn.textContent = '复制'; btn.classList.remove('copied'); }}, 2000);
+                                }}).catch(function() {{}});
+                            }} else {{
+                                var ta = document.createElement('textarea');
+                                ta.value = text;
+                                document.body.appendChild(ta);
+                                ta.select();
+                                document.execCommand('copy');
+                                document.body.removeChild(ta);
+                                btn.textContent = '✓';
+                                btn.classList.add('copied');
+                                setTimeout(function() {{ btn.textContent = '复制'; btn.classList.remove('copied'); }}, 2000);
+                            }}
+                        }});
+                        pre.appendChild(btn);
+                    }});
                 }}
             </script>
         </head>
