@@ -2468,6 +2468,12 @@ class ClipboardPanel(Gtk.Box):
                     self._ai_history_listbox.select_row(row)
                     break
 
+    def _get_sorted_conversations(self) -> List[Dict[str, Any]]:
+        """Return all conversations sorted by updated_at descending (newest first)."""
+        summaries = self._conversation_store.list_conversations()
+        summaries.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
+        return summaries
+
     def navigate_conversation(self, direction: int):
         """Navigate conversation history via keyboard shortcut.
 
@@ -2478,11 +2484,9 @@ class ClipboardPanel(Gtk.Box):
         if self._ai_streaming:
             return
 
-        summaries = self._conversation_store.list_conversations()
+        summaries = self._get_sorted_conversations()
         if not summaries:
             return
-
-        summaries.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
 
         if self._ai_conversation_id is None:
             target_idx = len(summaries) - 1 if direction < 0 else 0
@@ -2515,9 +2519,7 @@ class ClipboardPanel(Gtk.Box):
             
         self._ai_history_switching = True
 
-        summaries = self._conversation_store.list_conversations()
-        # Sort by updated_at descending
-        summaries.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
+        summaries = self._get_sorted_conversations()
 
         for s in summaries:
             sid = s.get("id", "")
@@ -2790,9 +2792,8 @@ class ClipboardPanel(Gtk.Box):
         self._ai_vbox.show_all()
         self.queue_resize()
 
-        summaries = self._conversation_store.list_conversations()
+        summaries = self._get_sorted_conversations()
         if summaries:
-            summaries.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
             latest_id = summaries[0].get("id")
             if latest_id:
                 if latest_id == self._ai_conversation_id and self._ai_messages:
