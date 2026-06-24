@@ -9,7 +9,7 @@ gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("WebKit2", "4.1")
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, WebKit2
-from typing import Optional, Callable, List, Dict, Any, Tuple
+from typing import Optional, Callable, List, Dict, Any, Tuple, Set
 from copy import deepcopy
 from uuid import uuid4
 from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P
@@ -441,6 +441,13 @@ class ClipboardPanel(Gtk.Box):
         self._ai_history_popover: Optional[Gtk.Popover] = None
         self._ai_history_listbox: Optional[Gtk.ListBox] = None
         self._ai_history_switching: bool = False  # guard against re-entrant signals during update
+        # Edit mode for batch delete in history dropdown
+        self._ai_history_edit_mode: bool = False
+        self._ai_history_selected_ids: Set[str] = set()
+        self._ai_history_edit_btn: Optional[Gtk.Button] = None
+        self._ai_history_delete_sel_btn: Optional[Gtk.Button] = None
+        self._ai_history_select_all_btn: Optional[Gtk.Button] = None
+        self._ai_history_done_btn: Optional[Gtk.Button] = None
         self._conversation_store = ConversationStore()
         self._ai_cancel_event = threading.Event()
         self._llm_client = _LLMHttpClient()
@@ -664,14 +671,50 @@ class ClipboardPanel(Gtk.Box):
         # Separator line
         popover_vbox.pack_start(Gtk.Separator.new(Gtk.Orientation.HORIZONTAL), False, False, 2)
         
-        # Clear All History button
-        self._ai_clear_all_history_btn = Gtk.Button.new_with_label("🗑️ 清除所有历史")
-        self._ai_clear_all_history_btn.get_style_context().add_class("clear-all-btn")
-        self._ai_clear_all_history_btn.connect("clicked", self._on_clear_all_history_clicked)
-        popover_vbox.pack_start(self._ai_clear_all_history_btn, False, False, 2)
+        # Bottom toolbar container — two mode toolbars stacked, only one visible at a time
+        self._ai_history_toolbar = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
+        
+        # ── Normal mode toolbar ──
+        self._ai_history_normal_toolbar = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
+        self._ai_history_edit_btn = Gtk.Button.new_with_label("编辑")
+        self._ai_history_edit_btn.get_style_context().add_class("edit-mode-btn")
+        self._ai_history_edit_btn.set_size_request(60, -1)
+        self._ai_history_clear_all_btn = Gtk.Button.new_with_label("🗑️ 清除所有历史")
+        self._ai_history_clear_all_btn.get_style_context().add_class("clear-all-btn")
+        self._ai_history_clear_all_btn.connect("clicked", self._on_clear_all_history_clicked)
+        self._ai_history_normal_toolbar.pack_start(self._ai_history_edit_btn, False, False, 0)
+        self._ai_history_normal_toolbar.pack_start(self._ai_history_clear_all_btn, True, True, 0)
+        
+        # ── Edit mode toolbar ──
+        self._ai_history_edit_toolbar = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+        self._ai_history_select_all_btn = Gtk.Button.new_with_label("☐ 全选")
+        self._ai_history_select_all_btn.get_style_context().add_class("edit-mode-btn")
+        self._ai_history_select_all_btn.set_size_request(68, -1)
+        self._ai_history_delete_sel_btn = Gtk.Button.new_with_label("删除选中 (0)")
+        self._ai_history_delete_sel_btn.get_style_context().add_class("delete-sel-btn")
+        self._ai_history_delete_sel_btn.set_sensitive(False)
+        self._ai_history_done_btn = Gtk.Button.new_with_label("完成")
+        self._ai_history_done_btn.get_style_context().add_class("edit-mode-btn")
+        self._ai_history_done_btn.set_size_request(56, -1)
+        self._ai_history_edit_toolbar.pack_start(self._ai_history_select_all_btn, False, False, 0)
+        self._ai_history_edit_toolbar.pack_start(self._ai_history_delete_sel_btn, True, True, 0)
+        self._ai_history_edit_toolbar.pack_start(self._ai_history_done_btn, False, False, 0)
+        
+        # Wire button signals
+        self._ai_history_edit_btn.connect("clicked", lambda *_: self._enter_edit_mode())
+        self._ai_history_select_all_btn.connect("clicked", self._on_select_all_clicked)
+        self._ai_history_delete_sel_btn.connect("clicked", self._on_delete_selected_clicked)
+        self._ai_history_done_btn.connect("clicked", lambda *_: self._exit_edit_mode())
+        
+        # Start with normal mode visible
+        self._ai_history_toolbar.pack_start(self._ai_history_normal_toolbar, False, False, 0)
+        self._ai_history_toolbar.pack_start(self._ai_history_edit_toolbar, False, False, 0)
+        
+        popover_vbox.pack_start(self._ai_history_toolbar, False, False, 2)
         
         self._ai_history_popover.add(popover_vbox)
         popover_vbox.show_all()
+        self._ai_history_edit_toolbar.hide()  # start in normal mode
 
         # Copy button
         self._btn_copy_ai = Gtk.Button.new_with_label("📋 复制")
@@ -987,8 +1030,13 @@ class ClipboardPanel(Gtk.Box):
             ".history-dropdown-btn { font-size: 13px; padding: 2px 8px; min-height: 28px; border-radius: 6px; color: %(text_fg)s; background: %(btn_bg)s; background-image: none; }"
             ".history-dropdown-btn label { font-size: 13px; }"
             ".history-dropdown-btn:hover { background: %(btn_hover)s; border-color: %(sel_border)s; }"
-            ".clear-all-btn { color: %(text_secondary)s; padding: 6px 12px; margin-top: 2px; font-size: 13px; font-weight: bold; border: none; background: transparent; }"
-            ".clear-all-btn:hover { background-color: rgba(239, 68, 68, 0.1); color: #ef4444; border-radius: 4px; }"
+".clear-all-btn { color: %(text_secondary)s; padding: 6px 12px; margin-top: 2px; font-size: 13px; font-weight: bold; border: none; background: transparent; }"
+".clear-all-btn:hover { background-color: rgba(239, 68, 68, 0.1); color: #ef4444; border-radius: 4px; }"
+".edit-mode-btn { font-size: 12px; padding: 4px 8px; margin: 2px; border-radius: 4px; background: %(btn_bg)s; background-image: none; border: 1px solid %(btn_border)s; color: %(text_fg)s; }"
+".edit-mode-btn:hover { background: %(btn_hover)s; border-color: %(sel_border)s; }"
+".delete-sel-btn { font-size: 12px; padding: 4px 8px; margin: 2px; border-radius: 4px; background: rgba(239, 68, 68, 0.08); background-image: none; border: 1px solid rgba(239, 68, 68, 0.2); color: #ef4444; font-weight: bold; }"
+".delete-sel-btn:hover { background: rgba(239, 68, 68, 0.15); border-color: #ef4444; }"
+".delete-sel-btn:disabled { color: %(text_secondary)s; background: transparent; border-color: %(btn_border)s; }"
             ".ai-history-popover { background-color: %(dialog_bg)s; border: 1px solid %(input_border)s; border-radius: 8px; padding: 4px; background-image: none; box-shadow: none; }"
             ".ai-history-popover scrolledwindow { background-color: transparent; border: none; box-shadow: none; outline: none; }"
             ".ai-history-popover listbox { background-color: transparent; border: none; }"
@@ -2781,7 +2829,7 @@ class ClipboardPanel(Gtk.Box):
                 self._ai_history_popover.popdown()
             self._switch_to_conversation(target_id)
 
-    def _refresh_conversation_dropdown(self):
+    def _refresh_conversation_dropdown(self, edit_mode: bool = False):
         """Repopulate the history dropdown from the conversation store."""
         if not hasattr(self, "_ai_history_listbox") or not self._ai_history_listbox:
             return
@@ -2808,14 +2856,30 @@ class ClipboardPanel(Gtk.Box):
             row = Gtk.ListBoxRow.new()
             row.conversation_id = sid
             
+            # Common label construction
             lbl = Gtk.Label.new(label)
             lbl.set_xalign(0)
-            lbl.set_margin_start(8)
             lbl.set_margin_end(8)
             lbl.set_margin_top(6)
             lbl.set_margin_bottom(6)
             lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            row.add(lbl)
+            
+            if edit_mode:
+                hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+                check = Gtk.CheckButton.new()
+                check.set_margin_start(6)
+                check.set_margin_top(6)
+                check.set_margin_bottom(6)
+                is_selected = sid in self._ai_history_selected_ids
+                check.set_active(is_selected)
+                check.connect("toggled", lambda c, cid=sid: self._on_edit_check_toggled(c, cid))
+                hbox.pack_start(check, False, False, 0)
+                hbox.pack_start(lbl, True, True, 0)
+                row.add(hbox)
+                row.check_button = check
+            else:
+                lbl.set_margin_start(8)
+                row.add(lbl)
             
             self._ai_history_listbox.add(row)
 
@@ -2869,11 +2933,14 @@ class ClipboardPanel(Gtk.Box):
         else:
             self._refresh_conversation_dropdown()
             self._ai_history_popover.show_all()
+            self._ai_history_edit_toolbar.hide()  # only show edit toolbar after clicking "编辑"
             self._ai_history_popover.popup()
             if self.on_combo_popup_shown:
                 self.on_combo_popup_shown()
 
     def _on_popover_closed(self, popover):
+        if self._ai_history_edit_mode:
+            self._exit_edit_mode()
         if self.on_combo_popup_hidden:
             self.on_combo_popup_hidden()
 
@@ -2883,6 +2950,14 @@ class ClipboardPanel(Gtk.Box):
         conv_id = getattr(row, "conversation_id", None)
         if not conv_id:
             return
+        
+        # In edit mode, toggle checkbox instead of switching conversation
+        if self._ai_history_edit_mode:
+            check = getattr(row, "check_button", None)
+            if check:
+                check.set_active(not check.get_active())
+            return
+        
         self._ai_history_popover.popdown()
         
         if conv_id == self._ai_conversation_id:
@@ -2922,6 +2997,106 @@ class ClipboardPanel(Gtk.Box):
             if self.on_dialog_hidden:
                 self.on_dialog_hidden()
                 
+        dialog.connect("response", on_resp)
+        if self.on_dialog_shown:
+            self.on_dialog_shown()
+        dialog.show_all()
+
+    # ── Edit mode for batch delete ──────────────────────────────────────────────
+
+    def _enter_edit_mode(self):
+        """Switch the history dropdown to edit mode with checkboxes on each row."""
+        self._ai_history_edit_mode = True
+        self._refresh_conversation_dropdown(edit_mode=True)
+        self._ai_history_popover.show_all()  # make new rows visible
+        self._ai_history_normal_toolbar.hide()
+        self._ai_history_edit_toolbar.show_all()
+        self._update_delete_sel_btn_label()
+
+    def _exit_edit_mode(self):
+        """Exit edit mode, clear selection, restore normal dropdown."""
+        self._ai_history_edit_mode = False
+        self._ai_history_selected_ids.clear()
+        self._refresh_conversation_dropdown()
+        self._ai_history_popover.show_all()  # make new rows visible
+        self._ai_history_edit_toolbar.hide()
+        self._ai_history_normal_toolbar.show_all()
+
+    def _on_edit_check_toggled(self, check, conv_id):
+        """Update selection state when a checkbox is toggled in edit mode."""
+        if not conv_id:
+            return
+        if check.get_active():
+            self._ai_history_selected_ids.add(conv_id)
+        else:
+            self._ai_history_selected_ids.discard(conv_id)
+        self._update_delete_sel_btn_label()
+
+    def _update_delete_sel_btn_label(self):
+        """Update the delete-selected button label and sensitivity."""
+        n = len(self._ai_history_selected_ids)
+        self._ai_history_delete_sel_btn.set_label(f"删除选中 ({n})")
+        self._ai_history_delete_sel_btn.set_sensitive(n > 0)
+        # Update select-all button label from listbox rows (no I/O)
+        rows = self._ai_history_listbox.get_children()
+        all_selected = all(
+            getattr(row, "conversation_id", None) in self._ai_history_selected_ids
+            for row in rows if getattr(row, "conversation_id", None)
+        ) if rows else False
+        self._ai_history_select_all_btn.set_label("☑ 全选" if all_selected else "☐ 全选")
+
+    def _on_select_all_clicked(self, _btn=None):
+        """Toggle select all / deselect all conversations."""
+        summaries = self._get_sorted_conversations()
+        ids = [s.get("id") for s in summaries if s.get("id")]
+        if not ids:
+            return
+        # Check if all are already selected
+        all_selected = all(cid in self._ai_history_selected_ids for cid in ids)
+        if all_selected:
+            self._ai_history_selected_ids.clear()
+        else:
+            self._ai_history_selected_ids = set(ids)
+        # Refresh checkbox states in all rows
+        for row in self._ai_history_listbox.get_children():
+            conv_id = getattr(row, "conversation_id", None)
+            check = getattr(row, "check_button", None)
+            if check and conv_id:
+                check.set_active(conv_id in self._ai_history_selected_ids)
+        self._update_delete_sel_btn_label()
+
+    def _on_delete_selected_clicked(self, _btn=None):
+        """Delete all selected conversations after confirmation."""
+        selected = list(self._ai_history_selected_ids)
+        if not selected:
+            return
+        dialog = Gtk.MessageDialog(
+            transient_for=self.get_toplevel(),
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.YES_NO,
+            text="确定要删除选中的 %d 条对话历史吗？" % len(selected),
+        )
+        dialog.format_secondary_text("此操作将永久删除所选历史会话记录，且无法恢复。")
+
+        def on_resp(dlg, resp):
+            dlg.destroy()
+            if resp == Gtk.ResponseType.YES:
+                self._ai_history_popover.popdown()
+                current_conv = self._ai_conversation_id
+                for conv_id in selected:
+                    self._conversation_store.delete_conversation(conv_id)
+                    if conv_id == current_conv:
+                        current_conv = None
+                self._exit_edit_mode()
+                # If the current conversation was deleted, reset the panel
+                if current_conv is None:
+                    self._reset_ai_panel_silent()
+                else:
+                    self._refresh_conversation_dropdown()
+            if self.on_dialog_hidden:
+                self.on_dialog_hidden()
+
         dialog.connect("response", on_resp)
         if self.on_dialog_shown:
             self.on_dialog_shown()
