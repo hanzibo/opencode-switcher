@@ -2856,6 +2856,14 @@ class ClipboardPanel(Gtk.Box):
             row = Gtk.ListBoxRow.new()
             row.conversation_id = sid
             
+            # Common label construction
+            lbl = Gtk.Label.new(label)
+            lbl.set_xalign(0)
+            lbl.set_margin_end(8)
+            lbl.set_margin_top(6)
+            lbl.set_margin_bottom(6)
+            lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            
             if edit_mode:
                 hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
                 check = Gtk.CheckButton.new()
@@ -2865,24 +2873,12 @@ class ClipboardPanel(Gtk.Box):
                 is_selected = sid in self._ai_history_selected_ids
                 check.set_active(is_selected)
                 check.connect("toggled", lambda c, cid=sid: self._on_edit_check_toggled(c, cid))
-                lbl = Gtk.Label.new(label)
-                lbl.set_xalign(0)
-                lbl.set_margin_end(8)
-                lbl.set_margin_top(6)
-                lbl.set_margin_bottom(6)
-                lbl.set_ellipsize(Pango.EllipsizeMode.END)
                 hbox.pack_start(check, False, False, 0)
                 hbox.pack_start(lbl, True, True, 0)
                 row.add(hbox)
                 row.check_button = check
             else:
-                lbl = Gtk.Label.new(label)
-                lbl.set_xalign(0)
                 lbl.set_margin_start(8)
-                lbl.set_margin_end(8)
-                lbl.set_margin_top(6)
-                lbl.set_margin_bottom(6)
-                lbl.set_ellipsize(Pango.EllipsizeMode.END)
                 row.add(lbl)
             
             self._ai_history_listbox.add(row)
@@ -3028,6 +3024,8 @@ class ClipboardPanel(Gtk.Box):
 
     def _on_edit_check_toggled(self, check, conv_id):
         """Update selection state when a checkbox is toggled in edit mode."""
+        if not conv_id:
+            return
         if check.get_active():
             self._ai_history_selected_ids.add(conv_id)
         else:
@@ -3039,13 +3037,13 @@ class ClipboardPanel(Gtk.Box):
         n = len(self._ai_history_selected_ids)
         self._ai_history_delete_sel_btn.set_label(f"删除选中 ({n})")
         self._ai_history_delete_sel_btn.set_sensitive(n > 0)
-        # Update select-all button label
-        summaries = self._get_sorted_conversations()
+        # Update select-all button label from listbox rows (no I/O)
+        rows = self._ai_history_listbox.get_children()
         all_selected = all(
-            s.get("id") in self._ai_history_selected_ids
-            for s in summaries if s.get("id")
-        )
-        self._ai_history_select_all_btn.set_label("☑ 全选" if all_selected and summaries else "☐ 全选")
+            getattr(row, "conversation_id", None) in self._ai_history_selected_ids
+            for row in rows if getattr(row, "conversation_id", None)
+        ) if rows else False
+        self._ai_history_select_all_btn.set_label("☑ 全选" if all_selected else "☐ 全选")
 
     def _on_select_all_clicked(self, _btn=None):
         """Toggle select all / deselect all conversations."""
