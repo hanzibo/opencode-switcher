@@ -649,7 +649,7 @@ class Conversation:
     title: str
     system_prompt: str
     messages: List[ChatMessage]
-    model_config_snapshot: Dict[str, str]  # alias, base_url, model_name
+    model_config_snapshot: Dict[str, Any]  # alias, base_url, model_name, temperature, max_tokens, top_p
     created_at: int
     updated_at: int
 
@@ -815,6 +815,12 @@ class CustomPrompt:
     bound_model_alias: Optional[str] = None
 
 
+# LLM inference parameter defaults
+DEFAULT_TEMPERATURE = 1.0
+DEFAULT_MAX_TOKENS = 4096
+DEFAULT_TOP_P = 1.0
+
+
 @dataclass
 class LLMModelConfig:
     alias: str
@@ -822,9 +828,9 @@ class LLMModelConfig:
     api_key: str
     model_name: str
     is_default: bool = False
-    temperature: float = 1.0
-    max_tokens: int = 4096
-    top_p: float = 1.0
+    temperature: float = DEFAULT_TEMPERATURE
+    max_tokens: int = DEFAULT_MAX_TOKENS
+    top_p: float = DEFAULT_TOP_P
 
 
 LLM_SETTINGS_PATH = os.path.join(CONFIG_DIR, "llm_settings.json")
@@ -859,7 +865,10 @@ class LLMSettingsStore:
                         base_url=m.get("base_url", ""),
                         api_key=m.get("api_key", ""),
                         model_name=m.get("model_name", ""),
-                        is_default=m.get("is_default", False)
+                        is_default=m.get("is_default", False),
+                        temperature=m.get("temperature", DEFAULT_TEMPERATURE),
+                        max_tokens=m.get("max_tokens", DEFAULT_MAX_TOKENS),
+                        top_p=m.get("top_p", DEFAULT_TOP_P),
                     ))
             else:
                 # Migrate old format

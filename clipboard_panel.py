@@ -12,7 +12,7 @@ from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, Web
 from typing import Optional, Callable, List, Dict, Any, Tuple
 from copy import deepcopy
 from uuid import uuid4
-from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation
+from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P
 import time
 import requests
 import json
@@ -277,8 +277,8 @@ class _LLMHttpClient:
         self._session.mount("http://", adapter)
 
     def _build_request(self, base_url: str, api_key: str, model_name: str, messages: list,
-                       stream: bool, temperature: float = 1.0, max_tokens: int = 4096,
-                       top_p: float = 1.0):
+                       stream: bool, temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
+                       top_p: float = DEFAULT_TOP_P):
         url = base_url.rstrip("/") + "/chat/completions"
         headers = {
             "Content-Type": "application/json",
@@ -302,9 +302,9 @@ class _LLMHttpClient:
         messages: list,
         timeout: int = 30,
         cancel_event: Optional["threading.Event"] = None,
-        temperature: float = 1.0,
-        max_tokens: int = 4096,
-        top_p: float = 1.0,
+        temperature: float = DEFAULT_TEMPERATURE,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        top_p: float = DEFAULT_TOP_P,
     ):
         """SSE streaming. Yields delta dicts with optional 'content'/'reasoning_content'."""
         url, headers, body = self._build_request(
@@ -362,9 +362,9 @@ class _LLMHttpClient:
         model_name: str,
         messages: list,
         timeout: int = 15,
-        temperature: float = 1.0,
-        max_tokens: int = 4096,
-        top_p: float = 1.0,
+        temperature: float = DEFAULT_TEMPERATURE,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        top_p: float = DEFAULT_TOP_P,
     ) -> Optional[str]:
         url, headers, body = self._build_request(
             base_url, api_key, model_name, messages, stream=False,
@@ -1934,9 +1934,9 @@ class ClipboardPanel(Gtk.Box):
             base_url = ""
             api_key = ""
             model_name = ""
-            temperature = 1.0
-            max_tokens = 4096
-            top_p = 1.0
+            temperature = DEFAULT_TEMPERATURE
+            max_tokens = DEFAULT_MAX_TOKENS
+            top_p = DEFAULT_TOP_P
 
         if not api_key:
             api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
@@ -1956,6 +1956,15 @@ class ClipboardPanel(Gtk.Box):
             model_name = os.environ.get("OPENAI_MODEL_NAME", "").strip()
         if not model_name:
             model_name = "deepseek-chat"
+
+        # Override inference params from model_info (conversation snapshot) if present
+        if model_info:
+            if "temperature" in model_info:
+                temperature = model_info["temperature"]
+            if "max_tokens" in model_info:
+                max_tokens = model_info["max_tokens"]
+            if "top_p" in model_info:
+                top_p = model_info["top_p"]
 
         display_name = f"{model_config.alias} ({model_name})" if model_config else model_name
         return base_url, api_key, model_name, display_name, temperature, max_tokens, top_p
@@ -2042,7 +2051,10 @@ class ClipboardPanel(Gtk.Box):
         self._ai_active_model_info = {
             "alias": display_name.split(" (")[0] if " (" in display_name else display_name,
             "base_url": base_url,
-            "model_name": model_name
+            "model_name": model_name,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
         }
         self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
 
@@ -2075,8 +2087,8 @@ class ClipboardPanel(Gtk.Box):
         ).start()
 
     def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, messages: list,
-                              req_id: int, temperature: float = 1.0, max_tokens: int = 4096,
-                              top_p: float = 1.0):
+                              req_id: int, temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
+                              top_p: float = DEFAULT_TOP_P):
         has_thinking = False
         thinking_header_added = False
         response_header_added = False
@@ -2487,7 +2499,10 @@ class ClipboardPanel(Gtk.Box):
                     model_snapshot = getattr(self, "_ai_active_model_info", None) or {
                         "alias": "Default",
                         "base_url": base_url,
-                        "model_name": model_name
+                        "model_name": model_name,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        "top_p": top_p,
                     }
                     self._save_current_conversation(model_snapshot)
                 except Exception as e:
@@ -2664,14 +2679,17 @@ class ClipboardPanel(Gtk.Box):
         # Save current conversation if it has content
         if self._ai_messages and self._ai_conversation_id:
             try:
-                base_url, api_key, model_name, _, _, _, _ = self._read_model_config(
+                base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
                     self._ai_last_prompt_obj,
                     getattr(self, "_ai_active_model_info", None)
                 )
                 model_snapshot = getattr(self, "_ai_active_model_info", None) or {
                     "alias": "Default",
                     "base_url": base_url,
-                    "model_name": model_name
+                    "model_name": model_name,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "top_p": top_p,
                 }
                 self._save_current_conversation(model_snapshot, preserve_updated_at=True)
             except Exception as e:
@@ -2920,8 +2938,8 @@ class ClipboardPanel(Gtk.Box):
 
     def _call_llm_sync(self, messages: list, base_url: str, api_key: str,
                         model_name: str, timeout: int = 15,
-                        temperature: float = 1.0, max_tokens: int = 4096,
-                        top_p: float = 1.0) -> Optional[str]:
+                        temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
+                        top_p: float = DEFAULT_TOP_P) -> Optional[str]:
         return self._llm_client.sync_chat_completion(
             base_url, api_key, model_name, messages, timeout=timeout,
             temperature=temperature, max_tokens=max_tokens, top_p=top_p,
@@ -2929,8 +2947,8 @@ class ClipboardPanel(Gtk.Box):
 
     def _generate_conversation_title(self, first_message: str, conv_id: str,
                                       base_url: str, api_key: str, model_name: str,
-                                      temperature: float = 1.0, max_tokens: int = 4096,
-                                      top_p: float = 1.0):
+                                      temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
+                                      top_p: float = DEFAULT_TOP_P):
         """Background thread: silently generate a short title for a new conversation."""
         try:
             title_prompt = (
@@ -3019,14 +3037,17 @@ class ClipboardPanel(Gtk.Box):
         # 2. 若当前已有对话内容，自动保存当前对话
         if self._ai_messages:
             try:
-                base_url, api_key, model_name, _, _, _, _ = self._read_model_config(
+                base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
                     self._ai_last_prompt_obj,
                     getattr(self, "_ai_active_model_info", None)
                 )
                 model_snapshot = getattr(self, "_ai_active_model_info", None) or {
                     "alias": "Default",
                     "base_url": base_url,
-                    "model_name": model_name
+                    "model_name": model_name,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "top_p": top_p,
                 }
                 self._save_current_conversation(model_snapshot, preserve_updated_at=True)
             except Exception as e:
@@ -3338,10 +3359,10 @@ class ClipboardPanel(Gtk.Box):
         temp_lbl = Gtk.Label.new("Temperature:")
         temp_lbl.set_size_request(120, -1)
         temp_lbl.set_xalign(0)
-        temperature_spin = Gtk.SpinButton.new_with_range(0.0, 2.0, 0.05)
+        temperature_spin = Gtk.SpinButton.new_with_range(0.0, 1.0, 0.05)
         temperature_spin.set_digits(2)
         temperature_spin.set_hexpand(True)
-        temp_hint = Gtk.Label.new("(0~2)")
+        temp_hint = Gtk.Label.new("(0~1)")
         temp_hint.get_style_context().add_class("dim-label")
         temp_hbox.pack_start(temp_lbl, False, False, 0)
         temp_hbox.pack_start(temperature_spin, True, True, 0)
@@ -3536,9 +3557,9 @@ class ClipboardPanel(Gtk.Box):
                 api_key_entry.set_text("")
                 model_name_entry.set_text("")
                 default_check.set_active(False)
-                temperature_spin.set_value(1.0)
-                max_tokens_spin.set_value(4096)
-                top_p_spin.set_value(1.0)
+                temperature_spin.set_value(DEFAULT_TEMPERATURE)
+                max_tokens_spin.set_value(DEFAULT_MAX_TOKENS)
+                top_p_spin.set_value(DEFAULT_TOP_P)
                 self._updating_model_ui = False
 
                 alias_entry.set_sensitive(False)
@@ -3569,7 +3590,10 @@ class ClipboardPanel(Gtk.Box):
                 base_url="https://api.deepseek.com/v1",
                 api_key="",
                 model_name="deepseek-chat",
-                is_default=False
+                is_default=False,
+                temperature=DEFAULT_TEMPERATURE,
+                max_tokens=DEFAULT_MAX_TOKENS,
+                top_p=DEFAULT_TOP_P,
             )
             local_models.append(new_m)
             self._active_model_idx = len(local_models) - 1
