@@ -692,6 +692,9 @@ class ClipboardPanel(Gtk.Box):
         settings.set_enable_caret_browsing(False)
         settings.set_enable_smooth_scrolling(False)
 
+        # Allow file:// page to load file:// subresources (KaTeX CSS/JS/fonts)
+        settings.set_allow_file_access_from_file_urls(True)
+
         context = WebKit2.WebContext.get_default()
         context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
 
