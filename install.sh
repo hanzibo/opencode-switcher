@@ -155,6 +155,11 @@ install_files() {
     cp "$SCRIPT_DIR/run.sh"                      "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/opencode-switcher-toggle"    "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/opencode-switcher.png"       "$INSTALL_DIR/"
+    # Copy KaTeX resources (math rendering in AI panel)
+    if [ -d "$SCRIPT_DIR/katex" ]; then
+        cp -r "$SCRIPT_DIR/katex"                 "$INSTALL_DIR/"
+        info "KaTeX 资源已复制 ($(find "$SCRIPT_DIR/katex" -type f | wc -l) 文件)"
+    fi
     chmod +x "$INSTALL_DIR/run.sh"
     chmod +x "$INSTALL_DIR/opencode-switcher-toggle"
 

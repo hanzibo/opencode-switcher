@@ -31,6 +31,27 @@ _MARKDOWN_EXTENSIONS = ['fenced_code', 'codehilite', 'tables']
 # Absolute path to KaTeX resources (katex.min.css, katex.min.js, auto-render.min.js, fonts/)
 _KATEX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "katex")
 
+# Pre-load and cache KaTeX CSS/JS contents for inline embedding in HTML template.
+# This avoids file:// subresource loading issues in WebKit2GTK.
+_KATEX_INLINE_CSS: str = ""
+_KATEX_INLINE_JS: str = ""
+_KATEX_AUTO_RENDER_JS: str = ""
+if os.path.isdir(_KATEX_DIR):
+    for _path, _attr, _var, _fix_fonts in [
+        (os.path.join(_KATEX_DIR, "katex.min.css"), "css", "_KATEX_INLINE_CSS", True),
+        (os.path.join(_KATEX_DIR, "katex.min.js"), "js", "_KATEX_INLINE_JS", False),
+        (os.path.join(_KATEX_DIR, "auto-render.min.js"), "js", "_KATEX_AUTO_RENDER_JS", False),
+    ]:
+        if os.path.isfile(_path):
+            with open(_path, "r", encoding="utf-8") as _f:
+                _content = _f.read()
+            if _fix_fonts:
+                # Rewrite relative font URLs to absolute file:// paths
+                # CSS uses unquoted format: url(fonts/KaTeX_*.woff2)
+                _fonts_url = f"file://{_KATEX_DIR}/fonts/"
+                _content = _content.replace("url(fonts/", f"url({_fonts_url}")
+            globals()[_var] = _content
+
 AI_MESSAGES_SOFT_LIMIT = 200
 AI_MESSAGES_TRIM_TARGET = 100
 
@@ -2144,9 +2165,9 @@ class ClipboardPanel(Gtk.Box):
         <html>
         <head>
             <meta charset="utf-8">
-            <link rel="stylesheet" href="file://{_KATEX_DIR}/katex.min.css">
-            <script defer src="file://{_KATEX_DIR}/katex.min.js"></script>
-            <script defer src="file://{_KATEX_DIR}/auto-render.min.js"></script>
+            <style>{_KATEX_INLINE_CSS}</style>
+            <script>{_KATEX_INLINE_JS}</script>
+            <script>{_KATEX_AUTO_RENDER_JS}</script>
             <script>
                 document.addEventListener('DOMContentLoaded', function() {{
                     if (typeof renderMathInElement === 'function') {{
