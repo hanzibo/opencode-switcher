@@ -37,21 +37,34 @@ _KATEX_INLINE_CSS: str = ""
 _KATEX_INLINE_JS: str = ""
 _KATEX_AUTO_RENDER_JS: str = ""
 if os.path.isdir(_KATEX_DIR):
-    for _path, _var, _fix_fonts in [
-        (os.path.join(_KATEX_DIR, "katex.min.css"), "_KATEX_INLINE_CSS", True),
-        (os.path.join(_KATEX_DIR, "katex.min.js"), "_KATEX_INLINE_JS", False),
-        (os.path.join(_KATEX_DIR, "auto-render.min.js"), "_KATEX_AUTO_RENDER_JS", False),
-    ]:
-        if os.path.isfile(_path):
-            try:
-                with open(_path, "r", encoding="utf-8") as _f:
-                    _content = _f.read()
-                if _fix_fonts:
-                    _fonts_url = f"file://{_KATEX_DIR}/fonts/"
-                    _content = _content.replace("url(fonts/", f"url({_fonts_url}")
-                globals()[_var] = _content
-            except (OSError, UnicodeDecodeError) as _e:
-                print(f"Warning: failed to read {_path}: {_e}", flush=True)
+    # katex.min.css — font URLs rewritten to absolute file:// paths
+    _css_path = os.path.join(_KATEX_DIR, "katex.min.css")
+    if os.path.isfile(_css_path):
+        try:
+            with open(_css_path, "r", encoding="utf-8") as _f:
+                _content = _f.read()
+            _fonts_url = f"file://{_KATEX_DIR}/fonts/"
+            _KATEX_INLINE_CSS = _content.replace("url(fonts/", f"url({_fonts_url}")
+        except (OSError, UnicodeDecodeError) as _e:
+            print(f"Warning: failed to read {_css_path}: {_e}", flush=True)
+
+    # katex.min.js — inline, no font rewriting needed
+    _js_path = os.path.join(_KATEX_DIR, "katex.min.js")
+    if os.path.isfile(_js_path):
+        try:
+            with open(_js_path, "r", encoding="utf-8") as _f:
+                _KATEX_INLINE_JS = _f.read()
+        except (OSError, UnicodeDecodeError) as _e:
+            print(f"Warning: failed to read {_js_path}: {_e}", flush=True)
+
+    # auto-render.min.js — inline, no font rewriting needed
+    _ar_path = os.path.join(_KATEX_DIR, "auto-render.min.js")
+    if os.path.isfile(_ar_path):
+        try:
+            with open(_ar_path, "r", encoding="utf-8") as _f:
+                _KATEX_AUTO_RENDER_JS = _f.read()
+        except (OSError, UnicodeDecodeError) as _e:
+            print(f"Warning: failed to read {_ar_path}: {_e}", flush=True)
 
 AI_MESSAGES_SOFT_LIMIT = 200
 AI_MESSAGES_TRIM_TARGET = 100
@@ -2171,15 +2184,17 @@ class ClipboardPanel(Gtk.Box):
             <script>{_KATEX_INLINE_JS}</script>
             <script>{_KATEX_AUTO_RENDER_JS}</script>
             <script>
+                const KATEX_DELIMITERS = [
+                    {{left: '$$', right: '$$', display: true}},
+                    {{left: '$', right: '$', display: false}},
+                    {{left: '\\\\(', right: '\\\\)', display: false}},
+                    {{left: '\\\\[', right: '\\\\]', display: true}}
+                ];
+
                 document.addEventListener('DOMContentLoaded', function() {{
                     if (typeof renderMathInElement === 'function') {{
                         renderMathInElement(document.body, {{
-                            delimiters: [
-                                {{left: '$$', right: '$$', display: true}},
-                                {{left: '$', right: '$', display: false}},
-                                {{left: '\\\\(', right: '\\\\)', display: false}},
-                                {{left: '\\\\[', right: '\\\\]', display: true}}
-                            ],
+                            delimiters: KATEX_DELIMITERS,
                             throwOnError: false
                         }});
                     }}
@@ -2283,12 +2298,7 @@ class ClipboardPanel(Gtk.Box):
                 function _renderMath(element) {{
                     if (typeof renderMathInElement === 'function') {{
                         renderMathInElement(element || document.body, {{
-                            delimiters: [
-                                {{left: '$$', right: '$$', display: true}},
-                                {{left: '$', right: '$', display: false}},
-                                {{left: '\\\\(', right: '\\\\)', display: false}},
-                                {{left: '\\\\[', right: '\\\\]', display: true}}
-                            ],
+                            delimiters: KATEX_DELIMITERS,
                             throwOnError: false
                         }});
                     }}
@@ -2324,6 +2334,7 @@ class ClipboardPanel(Gtk.Box):
                     if (div) {{
                         div.innerHTML = html;
                         addCopyButtons();
+                        _renderMath(div);
                     }}
                     _scrollToBottom();
                 }}
