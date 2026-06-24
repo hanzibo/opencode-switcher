@@ -80,6 +80,46 @@ def _extract_after_header(raw: str, marker: str) -> Optional[str]:
     return after[end + _DIV_CLOSE_LEN:] if end != -1 else after
 
 
+def _escape_math(text: str):
+    placeholders = []
+    
+    # 1. Block math: $$ ... $$ (multiline, not escaped)
+    def replace_block(match):
+        placeholder = f"<!--MATH_BLOCK_{len(placeholders)}-->"
+        placeholders.append(match.group(0))
+        return placeholder
+    text = re.sub(r"(?<!\\)\$\$(.*?)(?<!\\)\$\$", replace_block, text, flags=re.DOTALL)
+    
+    # 2. Inline math: $ ... $ (single line, not escaped, no space inside delimiters)
+    def replace_inline(match):
+        placeholder = f"<!--MATH_INLINE_{len(placeholders)}-->"
+        placeholders.append(match.group(0))
+        return placeholder
+    text = re.sub(r"(?<!\\)\$(?!\s)([^$\n]+?)(?<!\s)(?<!\\)\$", replace_inline, text)
+    
+    return text, placeholders
+
+
+def _unescape_math(html: str, placeholders: list) -> str:
+    for i, original in enumerate(placeholders):
+        html = html.replace(f"<!--MATH_BLOCK_{i}-->", original)
+        html = html.replace(f"<!--MATH_INLINE_{i}-->", original)
+    return html
+
+
+def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) -> str:
+    escaped_text, placeholders = _escape_math(text)
+    try:
+        import markdown
+        html = markdown.markdown(escaped_text, extensions=_MARKDOWN_EXTENSIONS)
+    except ImportError:
+        if fallback_content is not None:
+            html = fallback_content
+        else:
+            html = f"<pre><code>{escaped_text}</code></pre>"
+    return _unescape_math(html, placeholders)
+
+
 def _close_unclosed_code_blocks(text: str) -> str:
     """Ensure that any unclosed markdown code blocks (triple backticks) are closed."""
     if text.count("```") % 2 != 0:
@@ -928,11 +968,7 @@ class ClipboardPanel(Gtk.Box):
             md_text = getattr(self, "_ai_markdown_text", "")
             html_content = ""
             if md_text:
-                try:
-                    import markdown
-                    html_content = markdown.markdown(md_text, extensions=_MARKDOWN_EXTENSIONS)
-                except ImportError:
-                    html_content = f"<pre><code>{md_text}</code></pre>"
+                html_content = _markdown_to_html_safe(md_text)
             html = self.get_html_template(name, html_content)
             self._ai_webview.load_html(html, "file:///")
 
@@ -1831,11 +1867,10 @@ class ClipboardPanel(Gtk.Box):
         rendered_prompt = _close_unclosed_code_blocks(prompt_text)
         self._ai_markdown_text = f'<div class="user-header">You:</div>\n\n{rendered_prompt}\n\n---\n\n'
         self._ai_title_generated = False
-        try:
-            import markdown
-            user_html = markdown.markdown(self._ai_markdown_text, extensions=_MARKDOWN_EXTENSIONS)
-        except ImportError:
-            user_html = f'<div class="user-header">You:</div>\n\n<p>{prompt_text}</p>\n\n<hr>'
+        user_html = _markdown_to_html_safe(
+            self._ai_markdown_text,
+            fallback_content=f'<div class="user-header">You:</div>\n\n<p>{prompt_text}</p>\n\n<hr>'
+        )
         self._ai_webview.load_html(self.get_html_template(self._theme, user_html), "file:///")
 
     def _send_user_message(self, text: str):
@@ -1921,11 +1956,10 @@ class ClipboardPanel(Gtk.Box):
                 "或在您的环境变量中设置 DEEPSEEK_API_KEY / OPENAI_API_KEY 并从终端重启服务。"
             )
             self._ai_markdown_text = error_msg
-            try:
-                import markdown
-                html = markdown.markdown(error_msg, extensions=_MARKDOWN_EXTENSIONS)
-            except ImportError:
-                html = f"<p style='color: #f43f5e; font-weight: bold;'>{error_msg}</p>"
+            html = _markdown_to_html_safe(
+                error_msg,
+                fallback_content=f"<p style='color: #f43f5e; font-weight: bold;'>{error_msg}</p>"
+            )
             self._ai_webview.load_html(self.get_html_template(self._theme, html), "file:///")
             return
 
@@ -2018,11 +2052,7 @@ class ClipboardPanel(Gtk.Box):
             self._ai_response_div_added = True
             
         text = _close_unclosed_code_blocks(self._ai_current_assistant_text)
-        try:
-            import markdown
-            html = markdown.markdown(text, extensions=_MARKDOWN_EXTENSIONS)
-        except ImportError:
-            html = f"<pre><code>{text}</code></pre>"
+        html = _markdown_to_html_safe(text)
             
         js_update = f"updateMessageContainer('{msg_id}', {json.dumps(html)});"
         self._ai_webview.run_javascript(js_update, None, None)
@@ -2075,6 +2105,9 @@ class ClipboardPanel(Gtk.Box):
         <html>
         <head>
             <meta charset="utf-8">
+            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+            <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+            <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js" onload="_renderMath(document.body)"></script>
             <style>
                 body {{
                     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -2170,6 +2203,19 @@ class ClipboardPanel(Gtk.Box):
                 tr:nth-child(even) {{ background-color: {table_alt_bg}; }}
             </style>
             <script>
+                function _renderMath(element) {{
+                    if (typeof renderMathInElement === 'function') {{
+                        renderMathInElement(element || document.body, {{
+                            delimiters: [
+                                {{left: '$$', right: '$$', display: true}},
+                                {{left: '$', right: '$', display: false}},
+                                {{left: '\\\\(', right: '\\\\)', display: false}},
+                                {{left: '\\\\[', right: '\\\\]', display: true}}
+                            ],
+                            throwOnError: false
+                        }});
+                    }}
+                }}
                 const SCROLL_THRESHOLD = 20;
                 let _autoScroll = true;
                 window.addEventListener('scroll', function() {{
@@ -2184,6 +2230,7 @@ class ClipboardPanel(Gtk.Box):
                     const content = document.getElementById('content');
                     content.innerHTML = html;
                     addCopyButtons();
+                    _renderMath(content);
                     _scrollToBottom();
                 }}
                 function appendMessageContainer(msgId) {{
@@ -2200,6 +2247,7 @@ class ClipboardPanel(Gtk.Box):
                     if (div) {{
                         div.innerHTML = html;
                         addCopyButtons();
+                        _renderMath(div);
                     }}
                     _scrollToBottom();
                 }}
@@ -2270,17 +2318,13 @@ class ClipboardPanel(Gtk.Box):
             self._ai_webview.run_javascript(js_code, None, None)
             return
 
-        try:
-            import markdown
-            # Convert Markdown to HTML with fenced code blocks, tables and pygments syntax highlighting
-            html = markdown.markdown(text, extensions=_MARKDOWN_EXTENSIONS)
-        except ImportError:
-            html = (
-                "<p style='color: #f43f5e; font-weight: bold;'>❌ [错误] 缺少运行时依赖库。</p>"
-                "<p>请在终端中运行以下命令安装所需依赖，并重启服务：</p>"
-                "<pre><code>~/.local/share/opencode-switcher/venv/bin/pip install markdown pygments</code></pre>"
-                f"<hr><pre><code>{text}</code></pre>"
-            )
+        fallback_msg = (
+            "<p style='color: #f43f5e; font-weight: bold;'>❌ [错误] 缺少运行时依赖库。</p>"
+            "<p>请在终端中运行以下命令安装所需依赖，并重启服务：</p>"
+            "<pre><code>~/.local/share/opencode-switcher/venv/bin/pip install markdown pygments</code></pre>"
+            f"<hr><pre><code>{text}</code></pre>"
+        )
+        html = _markdown_to_html_safe(text, fallback_content=fallback_msg)
         
         import json
         js_code = f"updateContent({json.dumps(html)});"
