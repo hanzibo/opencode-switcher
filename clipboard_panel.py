@@ -2445,17 +2445,11 @@ class ClipboardPanel(Gtk.Box):
                     # Content already has role headers embedded from streaming phase;
                     # avoid adding another .assistant-header wrapper to prevent duplication.
                     has_header = '<div class="assistant-header">' in content or '<div class="answer-header">' in content
-                    if has_header:
-                        parts.append(
-                            f'{content}\n\n'
-                            f'<copy-marker data-msg-index="{i}"></copy-marker>\n\n---\n\n'
-                        )
-                    else:
-                        parts.append(
-                            f'\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
-                            f'{content}\n\n'
-                            f'<copy-marker data-msg-index="{i}"></copy-marker>\n\n---\n\n'
-                        )
+                    prefix = '' if has_header else '\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
+                    parts.append(
+                        f'{prefix}{content}\n\n'
+                        f'<copy-marker data-msg-index="{i}"></copy-marker>\n\n---\n\n'
+                    )
         return "".join(parts)
 
     def _prune_messages(self):
