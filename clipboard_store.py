@@ -822,6 +822,9 @@ class LLMModelConfig:
     api_key: str
     model_name: str
     is_default: bool = False
+    temperature: float = 1.0
+    max_tokens: int = 4096
+    top_p: float = 1.0
 
 
 LLM_SETTINGS_PATH = os.path.join(CONFIG_DIR, "llm_settings.json")
