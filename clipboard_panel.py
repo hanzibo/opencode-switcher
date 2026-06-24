@@ -3,12 +3,13 @@ import subprocess
 import threading
 import os
 import re
+import html
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("WebKit2", "4.1")
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, WebKit2
-from typing import Optional, Callable, List, Dict, Any
+from typing import Optional, Callable, List, Dict, Any, Tuple
 from copy import deepcopy
 from uuid import uuid4
 from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation
@@ -27,6 +28,8 @@ PROMPT_PLACEHOLDER_RE = re.compile(r'\\\\|\\(\${&})|(\${&})')
 
 
 _MARKDOWN_EXTENSIONS = ['fenced_code', 'codehilite', 'tables']
+# Absolute path to KaTeX resources (katex.min.css, katex.min.js, auto-render.min.js, fonts/)
+_KATEX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "katex")
 
 AI_MESSAGES_SOFT_LIMIT = 200
 AI_MESSAGES_TRIM_TARGET = 100
@@ -80,17 +83,38 @@ def _extract_after_header(raw: str, marker: str) -> Optional[str]:
     return after[end + _DIV_CLOSE_LEN:] if end != -1 else after
 
 
-def _escape_math(text: str):
+def _escape_math(text: str) -> Tuple[str, List[str]]:
     placeholders = []
     
-    # 1. Block math: $$ ... $$ (multiline, not escaped)
+    # 1. Protect block math: $$ ... $$ (multiline, not escaped)
     def replace_block(match):
         placeholder = f"<!--MATH_BLOCK_{len(placeholders)}-->"
         placeholders.append(match.group(0))
         return placeholder
     text = re.sub(r"(?<!\\)\$\$(.*?)(?<!\\)\$\$", replace_block, text, flags=re.DOTALL)
     
-    # 2. Inline math: $ ... $ (single line, not escaped, no space inside delimiters)
+    # 2. Protect block math: \[ ... \] (multiline, not escaped)
+    def replace_bracket(match):
+        placeholder = f"<!--MATH_BLOCK_{len(placeholders)}-->"
+        placeholders.append(match.group(0))
+        return placeholder
+    text = re.sub(r"(?<!\\)\\\[(.*?)(?<!\\)\\\]", replace_bracket, text, flags=re.DOTALL)
+    
+    # 3. Protect LaTeX environments: \begin{env} ... \end{env} (multiline, not escaped)
+    def replace_env(match):
+        placeholder = f"<!--MATH_BLOCK_{len(placeholders)}-->"
+        placeholders.append(match.group(0))
+        return placeholder
+    text = re.sub(r"(?<!\\)\\begin\{([a-zA-Z*]+)\}(.*?)\\end\{\1\}", replace_env, text, flags=re.DOTALL)
+
+    # 4. Protect inline math: \( ... \)
+    def replace_paren(match):
+        placeholder = f"<!--MATH_INLINE_{len(placeholders)}-->"
+        placeholders.append(match.group(0))
+        return placeholder
+    text = re.sub(r"(?<!\\)\\\((.*?)(?<!\\)\\\)", replace_paren, text)
+    
+    # 5. Protect inline math: $ ... $ (single line, not escaped, no space inside delimiters)
     def replace_inline(match):
         placeholder = f"<!--MATH_INLINE_{len(placeholders)}-->"
         placeholders.append(match.group(0))
@@ -100,11 +124,23 @@ def _escape_math(text: str):
     return text, placeholders
 
 
-def _unescape_math(html: str, placeholders: list) -> str:
+def _unescape_math(html_text: str, placeholders: List[str]) -> str:
     for i, original in enumerate(placeholders):
-        html = html.replace(f"<!--MATH_BLOCK_{i}-->", original)
-        html = html.replace(f"<!--MATH_INLINE_{i}-->", original)
-    return html
+        # 1. Raw placeholders (outside code blocks)
+        if original.strip().startswith("\\begin"):
+            restored = f"$${original}$$"
+        else:
+            restored = original
+            
+        html_text = html_text.replace(f"<!--MATH_BLOCK_{i}-->", restored)
+        html_text = html_text.replace(f"<!--MATH_INLINE_{i}-->", restored)
+        
+        # 2. Escaped placeholders (inside code blocks/inline code)
+        escaped_original = html.escape(original)
+        html_text = html_text.replace(f"&lt;!--MATH_BLOCK_{i}--&gt;", escaped_original)
+        html_text = html_text.replace(f"&lt;!--MATH_INLINE_{i}--&gt;", escaped_original)
+        
+    return html_text
 
 
 def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) -> str:
@@ -2105,9 +2141,24 @@ class ClipboardPanel(Gtk.Box):
         <html>
         <head>
             <meta charset="utf-8">
-            <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
-            <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
-            <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js" onload="_renderMath(document.body)"></script>
+            <link rel="stylesheet" href="file://{_KATEX_DIR}/katex.min.css">
+            <script defer src="file://{_KATEX_DIR}/katex.min.js"></script>
+            <script defer src="file://{_KATEX_DIR}/auto-render.min.js"></script>
+            <script>
+                document.addEventListener('DOMContentLoaded', function() {{
+                    if (typeof renderMathInElement === 'function') {{
+                        renderMathInElement(document.body, {{
+                            delimiters: [
+                                {{left: '$$', right: '$$', display: true}},
+                                {{left: '$', right: '$', display: false}},
+                                {{left: '\\\\(', right: '\\\\)', display: false}},
+                                {{left: '\\\\[', right: '\\\\]', display: true}}
+                            ],
+                            throwOnError: false
+                        }});
+                    }}
+                }});
+            </script>
             <style>
                 body {{
                     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -2247,7 +2298,6 @@ class ClipboardPanel(Gtk.Box):
                     if (div) {{
                         div.innerHTML = html;
                         addCopyButtons();
-                        _renderMath(div);
                     }}
                     _scrollToBottom();
                 }}
