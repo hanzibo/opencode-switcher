@@ -1173,6 +1173,7 @@ class ClipboardPanel(Gtk.Box):
             ".model-selector-list row:last-child { border-bottom: none; }"
             ".model-selector-list row:hover { background-color: %(hover_bg)s; }"
             ".model-selector-list row:selected { background-color: %(sel_bg)s; }"
+            ".model-default-tag { color: %(sel_border)s; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self, self._cat_list, self._content_scrolled, self._content_list):
@@ -2812,7 +2813,8 @@ class ClipboardPanel(Gtk.Box):
                 error_msg,
                 fallback_content=f"<p>Model '{alias}' not found</p>"
             )
-            self._ai_webview.load_html(self.get_html_template(self._theme, html), "file:///")
+            if hasattr(self, "_ai_webview") and self._ai_webview:
+                self._ai_webview.load_html(self.get_html_template(self._theme, html), "file:///")
             return
 
         self._ai_active_model_info = {
@@ -2845,7 +2847,12 @@ class ClipboardPanel(Gtk.Box):
 
             name_lbl = Gtk.Label.new(m.alias)
             name_lbl.set_xalign(0)
-            name_lbl.set_markup(f"<b>{m.alias}</b>" + ("  <span foreground='#818cf8'>(默认)</span>" if m.is_default else ""))
+            name_lbl.set_markup(f"<b>{m.alias}</b>")
+            if m.is_default:
+                default_lbl = Gtk.Label.new("(默认)")
+                default_lbl.get_style_context().add_class("model-default-tag")
+                default_lbl.set_opacity(0.9)
+                hbox.pack_start(default_lbl, False, False, 0)
 
             detail_lbl = Gtk.Label.new(m.model_name)
             detail_lbl.set_xalign(1)
@@ -2861,7 +2868,9 @@ class ClipboardPanel(Gtk.Box):
         if first:
             self._ai_model_listbox.select_row(first)
 
-        self._ai_model_popover.get_child().show_all()
+        child = self._ai_model_popover.get_child()
+        if child:
+            child.show_all()
         self._ai_model_popover.popup()
         self._ai_model_listbox.grab_focus()
 
@@ -2874,6 +2883,8 @@ class ClipboardPanel(Gtk.Box):
         self._ai_entry.grab_focus()
 
     def _on_model_selector_activated(self, listbox, row):
+        if not row:
+            return
         alias = row.model_alias
         self._hide_model_selector()
         self._switch_model_by_alias(alias)
@@ -2886,14 +2897,14 @@ class ClipboardPanel(Gtk.Box):
         is_shift = (event.state & Gdk.ModifierType.SHIFT_MASK) != 0
         is_ctrl = (event.state & Gdk.ModifierType.CONTROL_MASK) != 0
 
-        # Shift+Enter or Ctrl+Shift+Enter → newline
+        # Shift+Enter (without Ctrl) → newline
         if is_shift and not is_ctrl:
             return False
 
         try:
             self._on_send_clicked()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[key-press] send error: {e}", flush=True)
         return True
 
     def _on_ai_entry_button_press(self, widget, event):
