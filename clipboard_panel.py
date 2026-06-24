@@ -37,20 +37,21 @@ _KATEX_INLINE_CSS: str = ""
 _KATEX_INLINE_JS: str = ""
 _KATEX_AUTO_RENDER_JS: str = ""
 if os.path.isdir(_KATEX_DIR):
-    for _path, _attr, _var, _fix_fonts in [
-        (os.path.join(_KATEX_DIR, "katex.min.css"), "css", "_KATEX_INLINE_CSS", True),
-        (os.path.join(_KATEX_DIR, "katex.min.js"), "js", "_KATEX_INLINE_JS", False),
-        (os.path.join(_KATEX_DIR, "auto-render.min.js"), "js", "_KATEX_AUTO_RENDER_JS", False),
+    for _path, _var, _fix_fonts in [
+        (os.path.join(_KATEX_DIR, "katex.min.css"), "_KATEX_INLINE_CSS", True),
+        (os.path.join(_KATEX_DIR, "katex.min.js"), "_KATEX_INLINE_JS", False),
+        (os.path.join(_KATEX_DIR, "auto-render.min.js"), "_KATEX_AUTO_RENDER_JS", False),
     ]:
         if os.path.isfile(_path):
-            with open(_path, "r", encoding="utf-8") as _f:
-                _content = _f.read()
-            if _fix_fonts:
-                # Rewrite relative font URLs to absolute file:// paths
-                # CSS uses unquoted format: url(fonts/KaTeX_*.woff2)
-                _fonts_url = f"file://{_KATEX_DIR}/fonts/"
-                _content = _content.replace("url(fonts/", f"url({_fonts_url}")
-            globals()[_var] = _content
+            try:
+                with open(_path, "r", encoding="utf-8") as _f:
+                    _content = _f.read()
+                if _fix_fonts:
+                    _fonts_url = f"file://{_KATEX_DIR}/fonts/"
+                    _content = _content.replace("url(fonts/", f"url({_fonts_url}")
+                globals()[_var] = _content
+            except (OSError, UnicodeDecodeError) as _e:
+                print(f"Warning: failed to read {_path}: {_e}", flush=True)
 
 AI_MESSAGES_SOFT_LIMIT = 200
 AI_MESSAGES_TRIM_TARGET = 100
@@ -122,11 +123,15 @@ def _escape_math(text: str) -> Tuple[str, List[str]]:
     text = re.sub(r"(?<!\\)\\\[(.*?)(?<!\\)\\\]", replace_bracket, text, flags=re.DOTALL)
     
     # 3. Protect LaTeX environments: \begin{env} ... \end{env} (multiline, not escaped)
+    # NOTE: lazy (.*?) does not support nested same-name environments (e.g.
+    # \begin{align} \begin{align} ... \end{align} \end{align}). This is
+    # extremely rare and produces invalid LaTeX; the regex captures the inner
+    # pair and leaves the outer \end as orphaned text.
     def replace_env(match):
         placeholder = f"<!--MATH_BLOCK_{len(placeholders)}-->"
         placeholders.append(match.group(0))
         return placeholder
-    text = re.sub(r"(?<!\\)\\begin\{([a-zA-Z*]+)\}(.*?)\\end\{\1\}", replace_env, text, flags=re.DOTALL)
+    text = re.sub(r"(?<!\\)\\begin\{([a-zA-Z*0-9]+)\}(.*?)\\end\{\1\}", replace_env, text, flags=re.DOTALL)
 
     # 4. Protect inline math: \( ... \)
     def replace_paren(match):
@@ -147,16 +152,13 @@ def _escape_math(text: str) -> Tuple[str, List[str]]:
 
 def _unescape_math(html_text: str, placeholders: List[str]) -> str:
     for i, original in enumerate(placeholders):
-        # 1. Raw placeholders (outside code blocks)
+        restored = html.escape(original)
         if original.strip().startswith("\\begin"):
-            restored = f"$${original}$$"
-        else:
-            restored = original
+            restored = f"$${restored}$$"
             
         html_text = html_text.replace(f"<!--MATH_BLOCK_{i}-->", restored)
         html_text = html_text.replace(f"<!--MATH_INLINE_{i}-->", restored)
         
-        # 2. Escaped placeholders (inside code blocks/inline code)
         escaped_original = html.escape(original)
         html_text = html_text.replace(f"&lt;!--MATH_BLOCK_{i}--&gt;", escaped_original)
         html_text = html_text.replace(f"&lt;!--MATH_INLINE_{i}--&gt;", escaped_original)
