@@ -835,6 +835,16 @@ class ClipboardPanel(Gtk.Box):
                             pass
                     decision.ignore()
                     return True
+                if uri and uri.startswith("opencode://retry"):
+                    qs = parse_qs(urlparse(uri).query)
+                    index_str = qs.get("index", [None])[0]
+                    if index_str is not None:
+                        try:
+                            self._retry_response(int(index_str))
+                        except (ValueError, IndexError):
+                            pass
+                    decision.ignore()
+                    return True
                 if uri and not (uri.startswith("file://") or uri == "about:blank"):
                     try:
                         Gio.AppInfo.launch_default_for_uri(uri, None)
@@ -849,7 +859,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_vbox.pack_start(ai_scrolled, True, True, 0)
 
         # Multi-turn conversation input area (hidden until first response)
-        self._ai_input_area = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+        self._ai_input_area = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
         self._ai_input_area.set_no_show_all(True)
         self._ai_input_area.set_margin_top(4)
 
@@ -865,8 +875,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_entry.placeholder_text = "输入后续问题..."
         self._ai_entry.connect_after("draw", _textview_draw_placeholder)
         self._ai_entry.connect("key-press-event", self._on_ai_entry_key_press)
-        self._ai_entry.connect("button-press-event", lambda w, e: e.button == 3)
-        self._ai_entry.connect("popup-menu", lambda *_: True)
+        self._ai_entry.connect("button-press-event", self._on_ai_entry_button_press)
 
         self._ai_entry_sw = Gtk.ScrolledWindow.new()
         self._ai_entry_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -875,13 +884,45 @@ class ClipboardPanel(Gtk.Box):
         self._ai_send_btn = Gtk.Button.new_with_label("发送")
         self._ai_send_btn.connect("clicked", self._on_send_clicked)
 
-        self._ai_clear_btn = Gtk.Button.new_with_label("清空")
-        self._ai_clear_btn.set_tooltip_text("清空当前对话")
-        self._ai_clear_btn.connect("clicked", self._on_clear_conversation)
+        self._ai_new_btn = Gtk.Button.new_with_label("+")
+        self._ai_new_btn.set_tooltip_text("新对话 (Ctrl+Shift+N)")
+        self._ai_new_btn.set_size_request(32, -1)
+        self._ai_new_btn.get_style_context().add_class("flat")
+        self._ai_new_btn.connect("clicked", lambda *_: self.start_new_conversation())
 
-        self._ai_input_area.pack_start(self._ai_entry_sw, True, True, 0)
-        self._ai_input_area.pack_start(self._ai_send_btn, False, False, 0)
-        self._ai_input_area.pack_start(self._ai_clear_btn, False, False, 0)
+        self._ai_input_row = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+        self._ai_input_row.pack_start(self._ai_new_btn, False, False, 0)
+        self._ai_input_row.pack_start(self._ai_entry_sw, True, True, 0)
+        self._ai_input_row.pack_start(self._ai_send_btn, False, False, 0)
+        self._ai_input_area.pack_start(self._ai_input_row, False, False, 0)
+
+        self._ai_model_popover = Gtk.Popover.new(self._ai_entry)
+        self._ai_model_popover.set_position(Gtk.PositionType.TOP)
+        self._ai_model_popover.get_style_context().add_class("model-selector-popover")
+
+        model_sw = Gtk.ScrolledWindow.new()
+        model_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        model_sw.set_min_content_height(200)
+        model_sw.set_max_content_height(440)
+        model_sw.set_size_request(400, 200)
+
+        self._ai_model_listbox = Gtk.ListBox.new()
+        self._ai_model_listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self._ai_model_listbox.set_activate_on_single_click(True)
+        self._ai_model_listbox.get_style_context().add_class("model-selector-list")
+        self._ai_model_listbox.connect("row-activated", self._on_model_selector_activated)
+
+        model_sw.add(self._ai_model_listbox)
+        self._ai_model_popover.add(model_sw)
+        self._ai_model_popover.connect("closed", self._on_model_popover_closed)
+
+        self._ai_hint_label = Gtk.Label.new("Ctrl+Enter ↵ · Enter 发送  |  /new 新对话  /delete 删除并新建  /model 切换模型")
+        self._ai_hint_label.set_xalign(1)
+        self._ai_hint_label.get_style_context().add_class("dim-label")
+        self._ai_hint_label.set_margin_end(4)
+        self._ai_hint_label.set_opacity(0.6)
+        self._ai_input_area.pack_start(self._ai_hint_label, False, False, 0)
+
         self._ai_vbox.pack_start(self._ai_input_area, False, False, 0)
 
         self.pack_start(self._cat_vbox, False, True, 0)
@@ -1125,6 +1166,13 @@ class ClipboardPanel(Gtk.Box):
             ".custom-dialog frame > label { color: %(text_fg)s; font-weight: bold; padding-left: 8px; }"
             ".custom-dialog frame > border { border-color: %(input_border)s; }"
             "#aiScrolled, #aiWebView { background-color: transparent; border: none; box-shadow: none; padding: 0; }"
+            ".model-selector-popover { border-radius: 6px; background-color: %(dialog_bg)s; }"
+            ".model-selector-popover > decoration { border-radius: 6px; }"
+            ".model-selector-list { background-color: transparent; }"
+            ".model-selector-list row { border: none; border-bottom: 1px solid %(input_border)s; background-color: transparent; }"
+            ".model-selector-list row:last-child { border-bottom: none; }"
+            ".model-selector-list row:hover { background-color: %(hover_bg)s; }"
+            ".model-selector-list row:selected { background-color: %(sel_bg)s; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self, self._cat_list, self._content_scrolled, self._content_list):
@@ -2083,6 +2131,54 @@ class ClipboardPanel(Gtk.Box):
         )
 
         self._ai_cancel_event.clear()
+        self._ai_send_btn.set_sensitive(False)
+        self._ai_entry.placeholder_text = "等待回复中..."
+        threading.Thread(
+            target=self._run_llm_api_request,
+            args=(base_url, api_key, model_name, self._ai_messages, current_req_id,
+                  temperature, max_tokens, top_p),
+            daemon=True
+        ).start()
+
+    def _retry_response(self, assistant_index: int):
+        """删除指定的 assistant 回复并重新请求 LLM（丢弃该回复之后的所有消息）。"""
+        if self._ai_streaming:
+            self._ai_cancel_event.set()
+            self._flush_stream_queue()
+            self._ai_streaming = False
+            self._ai_spinner.stop()
+            self._ai_spinner.hide()
+
+        msgs = self._ai_messages
+        if not (0 <= assistant_index < len(msgs)) or msgs[assistant_index].get("role") != "assistant":
+            return
+        self._ai_messages = msgs[:assistant_index]
+
+        if not self._ai_messages or self._ai_messages[-1].get("role") != "user":
+            return
+
+        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+        self._render_markdown(self._ai_markdown_text)
+
+        self._ai_request_id += 1
+        current_req_id = self._ai_request_id
+        self._ai_streaming = True
+        self._ai_current_assistant_text = ""
+        self._ai_response_div_added = False
+        with self._ai_stream_lock:
+            self._ai_stream_queue = []
+        GLib.timeout_add(100, self._poll_stream_queue, current_req_id)
+
+        self._ai_spinner.show()
+        self._ai_spinner.start()
+        self._ai_send_btn.set_sensitive(False)
+        self._ai_entry.placeholder_text = "等待回复中..."
+
+        base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+            self._ai_last_prompt_obj,
+            getattr(self, "_ai_active_model_info", None)
+        )
+        self._ai_cancel_event.clear()
         threading.Thread(
             target=self._run_llm_api_request,
             args=(base_url, api_key, model_name, self._ai_messages, current_req_id,
@@ -2383,7 +2479,7 @@ class ClipboardPanel(Gtk.Box):
                     opacity: 1;
                 }}
                 .msg-copy-btn {{
-                    display: block;
+                    display: inline-block;
                     background: rgba(128,128,128,0.06);
                     border: 1px solid rgba(128,128,128,0.12);
                     border-radius: 4px;
@@ -2391,12 +2487,33 @@ class ClipboardPanel(Gtk.Box):
                     cursor: pointer;
                     font-size: 11px;
                     padding: 2px 10px;
-                    margin-top: 8px;
                     opacity: 0.4;
                     transition: opacity 0.2s;
                     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                 }}
                 .msg-copy-btn:hover {{
+                    opacity: 1;
+                    background: rgba(128,128,128,0.15);
+                }}
+                .msg-btn-row {{
+                    display: flex;
+                    gap: 6px;
+                    margin-top: 8px;
+                }}
+                .retry-btn {{
+                    display: inline-block;
+                    background: rgba(128,128,128,0.06);
+                    border: 1px solid rgba(128,128,128,0.12);
+                    border-radius: 4px;
+                    color: inherit;
+                    cursor: pointer;
+                    font-size: 11px;
+                    padding: 2px 10px;
+                    opacity: 0.4;
+                    transition: opacity 0.2s;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                }}
+                .retry-btn:hover {{
                     opacity: 1;
                     background: rgba(128,128,128,0.15);
                 }}
@@ -2488,20 +2605,43 @@ class ClipboardPanel(Gtk.Box):
                         done();
                     }}
                     addMessageCopyButtons();
+                    addRetryButtons();
                 }}
                 function addMessageCopyButtons() {{
                     document.querySelectorAll('copy-marker').forEach(function(marker) {{
-                        if (marker.parentNode?.querySelector('.msg-copy-btn[data-idx="' + marker.dataset.msgIndex + '"]')) return;
+                        if (marker.parentNode?.querySelector('.msg-btn-row[data-idx="' + marker.dataset.msgIndex + '"]')) return;
+                        var row = document.createElement('div');
+                        row.className = 'msg-btn-row';
+                        row.setAttribute('data-idx', marker.dataset.msgIndex);
                         const btn = document.createElement('button');
                         btn.className = 'msg-copy-btn';
-                        btn.setAttribute('data-idx', marker.dataset.msgIndex);
                         btn.textContent = '📋 复制回答';
                         btn.addEventListener('click', function(e) {{
                             e.stopPropagation();
                             window.location = 'opencode://copy-response?index=' + marker.dataset.msgIndex;
                         }});
-                        marker.parentNode.insertBefore(btn, marker);
+                        row.appendChild(btn);
+                        marker.parentNode.insertBefore(row, marker);
                     }});
+                }}
+                function addRetryButtons() {{
+                    var markers = document.querySelectorAll('copy-marker');
+                    var lastIdx = -1;
+                    markers.forEach(function(m) {{
+                        var idx = parseInt(m.dataset.msgIndex);
+                        if (!isNaN(idx) && idx > lastIdx) lastIdx = idx;
+                    }});
+                    if (lastIdx < 0) return;
+                    var row = document.querySelector('.msg-btn-row[data-idx="' + lastIdx + '"]');
+                    if (!row || row.querySelector('.retry-btn')) return;
+                    var btn = document.createElement('button');
+                    btn.className = 'retry-btn';
+                    btn.textContent = '🔄 重新生成';
+                    btn.addEventListener('click', function(e) {{
+                        e.stopPropagation();
+                        window.location = 'opencode://retry?index=' + lastIdx;
+                    }});
+                    row.appendChild(btn);
                 }}
             </script>
         </head>
@@ -2560,6 +2700,8 @@ class ClipboardPanel(Gtk.Box):
                 if hasattr(self, "_ai_webview") and self._ai_webview:
                     self._ai_webview.run_javascript("_scrollToBottom();", None, None)
                 self._ai_streaming = False
+                self._ai_send_btn.set_sensitive(True)
+                self._ai_entry.placeholder_text = "输入后续问题..."
 
                 # Auto-save conversation to disk
                 try:
@@ -2626,50 +2768,160 @@ class ClipboardPanel(Gtk.Box):
         self._ai_entry.queue_resize()
 
     def _on_send_clicked(self, _btn=None):
+        if self._ai_streaming:
+            return
         buf = self._ai_entry.get_buffer()
         start = buf.get_start_iter()
         end = buf.get_end_iter()
         text = buf.get_text(start, end, True).strip()
         if not text:
             return
+        if text == "/new":
+            buf.set_text("")
+            self.start_new_conversation()
+            return
+        if text == "/delete":
+            buf.set_text("")
+            conv_id = self._ai_conversation_id
+            if conv_id:
+                self._conversation_store.delete_conversation(conv_id)
+            self._reset_ai_panel_silent()
+            return
+        if text == "/model":
+            buf.set_text("")
+            self._show_model_selector()
+            return
+        if text.startswith("/model "):
+            buf.set_text("")
+            self._switch_model_by_alias(text[len("/model "):].strip())
+            return
         buf.set_text("")
         self._send_user_message(text)
 
-    def _on_ai_entry_key_press(self, widget, event):
-        is_shift = (event.state & Gdk.ModifierType.SHIFT_MASK) != 0
-        is_enter = event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter)
-
-        if is_enter and not is_shift:
-            self._on_send_clicked()
-            return True
-
-        return False
-
-    def _on_clear_conversation(self, _btn=None):
-        if not self._ai_messages:
+    def _switch_model_by_alias(self, alias: str):
+        """Switch AI model by alias. Updates active model info and header label."""
+        model = next((m for m in self._llm_settings_store.models if m.alias == alias), None)
+        if not model:
+            lines = [f"❌ 未找到模型别名 **\"{alias}\"**。\n", "可用模型:\n"]
+            for m in self._llm_settings_store.models:
+                lines.append(f"- **{m.alias}**" + (" (默认)" if m.is_default else "") + f" — `{m.model_name}`")
+            lines.append("\n前往 **Prompts Config → ⚙️ API Settings** 管理模型配置。")
+            error_msg = "\n".join(lines)
+            self._ai_markdown_text = error_msg
+            html = _markdown_to_html_safe(
+                error_msg,
+                fallback_content=f"<p>Model '{alias}' not found</p>"
+            )
+            self._ai_webview.load_html(self.get_html_template(self._theme, html), "file:///")
             return
-        dialog = Gtk.MessageDialog(
-            transient_for=self.get_toplevel(),
-            modal=True,
-            message_type=Gtk.MessageType.QUESTION,
-            buttons=Gtk.ButtonsType.YES_NO,
-            text="清空当前对话？",
+
+        self._ai_active_model_info = {
+            "alias": model.alias,
+            "base_url": model.base_url.strip(),
+            "model_name": model.model_name.strip(),
+            "temperature": model.temperature,
+            "max_tokens": model.max_tokens,
+            "top_p": model.top_p,
+        }
+        self._ai_last_prompt_obj = None  # manual switch overrides prompt binding
+
+        display_name = f"{model.alias} ({model.model_name})"
+        self._ai_lbl.set_markup(
+            f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>"
         )
-        dialog.format_secondary_text("所有对话历史将被清除。")
-        def on_resp(dlg, resp):
-            dlg.destroy()
-            if resp == Gtk.ResponseType.YES:
-                conv_id = self._ai_conversation_id
-                self._reset_ai_panel_silent()
-                if conv_id:
-                    self._conversation_store.delete_conversation(conv_id)
-                    self._refresh_conversation_dropdown()
-            if self.on_dialog_hidden:
-                self.on_dialog_hidden()
-        dialog.connect("response", on_resp)
-        if self.on_dialog_shown:
-            self.on_dialog_shown()
-        dialog.show_all()
+
+    def _show_model_selector(self):
+        for old in self._ai_model_listbox.get_children():
+            self._ai_model_listbox.remove(old)
+
+        for m in self._llm_settings_store.models:
+            row = Gtk.ListBoxRow()
+            row.model_alias = m.alias
+            hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+            hbox.set_margin_start(8)
+            hbox.set_margin_end(8)
+            hbox.set_margin_top(6)
+            hbox.set_margin_bottom(6)
+
+            name_lbl = Gtk.Label.new(m.alias)
+            name_lbl.set_xalign(0)
+            name_lbl.set_markup(f"<b>{m.alias}</b>" + ("  <span foreground='#818cf8'>(默认)</span>" if m.is_default else ""))
+
+            detail_lbl = Gtk.Label.new(m.model_name)
+            detail_lbl.set_xalign(1)
+            detail_lbl.set_opacity(0.6)
+
+            hbox.pack_start(name_lbl, True, True, 0)
+            hbox.pack_start(detail_lbl, False, False, 0)
+            row.add(hbox)
+            self._ai_model_listbox.add(row)
+
+        self._ai_model_listbox.show_all()
+        first = self._ai_model_listbox.get_row_at_index(0)
+        if first:
+            self._ai_model_listbox.select_row(first)
+
+        self._ai_model_popover.get_child().show_all()
+        self._ai_model_popover.popup()
+        self._ai_model_listbox.grab_focus()
+
+    def _hide_model_selector(self):
+        if not self._ai_model_popover.get_visible():
+            return
+        self._ai_model_popover.popdown()
+
+    def _on_model_popover_closed(self, popover):
+        self._ai_entry.grab_focus()
+
+    def _on_model_selector_activated(self, listbox, row):
+        alias = row.model_alias
+        self._hide_model_selector()
+        self._switch_model_by_alias(alias)
+
+    def _on_ai_entry_key_press(self, widget, event):
+        is_enter = event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter)
+        if not is_enter:
+            return False
+
+        is_shift = (event.state & Gdk.ModifierType.SHIFT_MASK) != 0
+        is_ctrl = (event.state & Gdk.ModifierType.CONTROL_MASK) != 0
+
+        # Shift+Enter or Ctrl+Shift+Enter → newline
+        if is_shift and not is_ctrl:
+            return False
+
+        try:
+            self._on_send_clicked()
+        except Exception:
+            pass
+        return True
+
+    def _on_ai_entry_button_press(self, widget, event):
+        if event.button != 3:
+            return False
+        menu = Gtk.Menu.new()
+        paste_item = Gtk.MenuItem.new_with_label("粘贴")
+        paste_item.connect("activate", lambda *_: Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).request_text(
+            lambda clip, text: widget.get_buffer().insert_at_cursor(text if text else "")
+        ))
+        menu.append(paste_item)
+        copy_item = Gtk.MenuItem.new_with_label("复制")
+        copy_item.connect("activate", lambda *_: widget.emit("copy-clipboard"))
+        menu.append(copy_item)
+        select_all = Gtk.MenuItem.new_with_label("全选")
+        select_all.connect("activate", lambda *_: widget.emit("select-all", True))
+        menu.append(select_all)
+        if self.on_menu_shown:
+            self.on_menu_shown()
+        menu.connect("deactivate", lambda *_: GLib.timeout_add(300, self._on_ai_menu_deactivated))
+        menu.show_all()
+        menu.popup(None, None, None, None, event.button, event.time)
+        return True
+
+    def _on_ai_menu_deactivated(self):
+        if self.on_menu_hidden:
+            self.on_menu_hidden()
+        return False
 
     # ── Conversation history dropdown methods ─────────────────────────────────────
 
