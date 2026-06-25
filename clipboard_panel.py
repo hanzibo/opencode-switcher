@@ -931,7 +931,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_model_popover.add(model_sw)
         self._ai_model_popover.connect("closed", self._on_model_popover_closed)
 
-        cmd_hints = "  |  ".join(f"/{cmd[1:] if cmd.startswith('/') else cmd} {desc}"
+        cmd_hints = "  |  ".join(f"/{cmd[1:]} {desc}"
                                  for cmd, desc in self._AI_COMMANDS)
         hint_text = f"Ctrl+Enter ↵ · Enter 发送  |  {cmd_hints}"
         self._ai_hint_label = Gtk.Label.new(hint_text)
@@ -1200,7 +1200,7 @@ class ClipboardPanel(Gtk.Box):
             ".command-autocomplete-list row { border: none; border-bottom: 1px solid %(input_border)s; padding: 2px 0; background-color: transparent; }"
             ".command-autocomplete-list row:last-child { border-bottom: none; }"
             ".command-autocomplete-list row:hover { background-color: %(hover_bg)s; }"
-             ".command-autocomplete-list row:selected { background-color: %(sel_bg)s; color: %(text_fg)s; }"
+            ".command-autocomplete-list row:selected { background-color: %(sel_bg)s; color: %(text_fg)s; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self, self._cat_list, self._content_scrolled, self._content_list):
@@ -3178,6 +3178,9 @@ class ClipboardPanel(Gtk.Box):
         # ── Editing keys ──────────────────────────────────────────────
         if keyname == "BackSpace":
             buf = self._ai_entry.get_buffer()
+            if buf.get_selection_bounds():
+                buf.delete_selection(True, True)
+                return True
             cursor = buf.get_iter_at_mark(buf.get_insert())
             if cursor.get_offset() > 0:
                 cursor.backward_chars(1)
@@ -3186,6 +3189,9 @@ class ClipboardPanel(Gtk.Box):
 
         if keyname == "Delete":
             buf = self._ai_entry.get_buffer()
+            if buf.get_selection_bounds():
+                buf.delete_selection(True, True)
+                return True
             cursor = buf.get_iter_at_mark(buf.get_insert()).copy()
             end = buf.get_end_iter()
             if cursor.get_offset() < end.get_offset():
