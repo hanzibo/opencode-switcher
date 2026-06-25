@@ -933,7 +933,7 @@ class ClipboardPanel(Gtk.Box):
 
         cmd_hints = "  |  ".join(f"/{cmd[1:]} {desc}"
                                  for cmd, desc in self._AI_COMMANDS)
-        hint_text = f"Ctrl+Enter ↵ · Enter 发送  |  {cmd_hints}"
+        hint_text = f"Shift+Enter ↵ · Enter 发送  |  {cmd_hints}"
         self._ai_hint_label = Gtk.Label.new(hint_text)
         self._ai_hint_label.set_xalign(1)
         self._ai_hint_label.get_style_context().add_class("dim-label")
