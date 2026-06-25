@@ -2067,15 +2067,11 @@ class ClipboardPanel(Gtk.Box):
             base_url = os.environ.get("DEEPSEEK_BASE_URL", "").strip()
         if not base_url:
             base_url = os.environ.get("OPENAI_BASE_URL", "").strip()
-        if not base_url:
-            base_url = "https://api.deepseek.com/v1"
 
         if not model_name:
             model_name = os.environ.get("DEEPSEEK_MODEL_NAME", "").strip()
         if not model_name:
             model_name = os.environ.get("OPENAI_MODEL_NAME", "").strip()
-        if not model_name:
-            model_name = "deepseek-chat"
 
         # Override inference params from model_info (conversation snapshot) if present
         if model_info:
@@ -2133,6 +2129,21 @@ class ClipboardPanel(Gtk.Box):
             self._ai_last_prompt_obj,
             getattr(self, "_ai_active_model_info", None)
         )
+
+        if not base_url or not model_name or not api_key:
+            self._ai_streaming = False
+            self._ai_spinner.stop()
+            self._ai_spinner.hide()
+            self._ai_send_btn.set_sensitive(True)
+            self._ai_entry.placeholder_text = ""
+            error_msg = (
+                "❌ [错误] 模型配置不完整。\n\n"
+                "请检查 **Prompts Config → ⚙️ API Settings** 中的模型配置，\n"
+                "或在环境变量中设置 DEEPSEEK/OPENAI 的 BASE_URL、API_KEY、MODEL_NAME。"
+            )
+            self._ai_markdown_text += f'\n\n{error_msg}\n\n'
+            self._render_markdown(self._ai_markdown_text)
+            return
 
         self._ai_cancel_event.clear()
         self._ai_send_btn.set_sensitive(False)
@@ -2235,14 +2246,21 @@ class ClipboardPanel(Gtk.Box):
         self._ai_spinner.show()
         self._ai_spinner.start()
 
-        if not api_key:
+        if not api_key or not base_url or not model_name:
             self._ai_streaming = False
             self._ai_spinner.stop()
             self._ai_spinner.hide()
+            missing = []
+            if not api_key:
+                missing.append("API Key")
+            if not base_url:
+                missing.append("Base URL")
+            if not model_name:
+                missing.append("Model Name")
             error_msg = (
-                "❌ [错误] API Key 未配置。\n\n"
-                "请点击右下角的「Prompts Config」按钮，并切换到「⚙️ API Settings」面板输入您的 API Key 后保存。\n"
-                "或在您的环境变量中设置 DEEPSEEK_API_KEY / OPENAI_API_KEY 并从终端重启服务。"
+                "❌ [错误] 模型配置不完整，缺少: " + "、".join(missing) + "。\n\n"
+                "请检查 **Prompts Config → ⚙️ API Settings** 中的模型配置，\n"
+                "或在环境变量中设置 DEEPSEEK/OPENAI 的 BASE_URL、API_KEY、MODEL_NAME。"
             )
             self._ai_markdown_text = error_msg
             html = _markdown_to_html_safe(
@@ -2712,18 +2730,7 @@ class ClipboardPanel(Gtk.Box):
 
                 # Auto-save conversation to disk
                 try:
-                    base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
-                        self._ai_last_prompt_obj,
-                        getattr(self, "_ai_active_model_info", None)
-                    )
-                    model_snapshot = getattr(self, "_ai_active_model_info", None) or {
-                        "alias": "Default",
-                        "base_url": base_url,
-                        "model_name": model_name,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                        "top_p": top_p,
-                    }
+                    model_snapshot = self._build_model_snapshot()
                     self._save_current_conversation(model_snapshot)
                 except Exception as e:
                     print(f"Error saving conversation: {e}", flush=True)
@@ -2731,6 +2738,14 @@ class ClipboardPanel(Gtk.Box):
                 self._prune_messages()
 
                 # Trigger background title generation for new conversations
+                try:
+                    _, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+                        self._ai_last_prompt_obj,
+                        getattr(self, "_ai_active_model_info", None)
+                    )
+                    base_url = (getattr(self, "_ai_active_model_info", None) or {}).get("base_url", "")
+                except Exception:
+                    api_key = ""
                 if (not self._ai_title_generated
                         and self._ai_conversation_id
                         and self._ai_messages
@@ -2796,6 +2811,25 @@ class ClipboardPanel(Gtk.Box):
             return
         if text == "/model":
             buf.set_text("")
+            # 在 WebView 中显示当前模型信息
+            model_info = getattr(self, "_ai_active_model_info", None)
+            if model_info:
+                alias = model_info.get("alias", "?")
+                mname = model_info.get("model_name", "?")
+                info_html = (
+                    f'<div style="color: #818cf8; padding: 8px 12px; margin: 4px 0; '
+                    f'border: 1px solid #818cf8; border-radius: 6px; font-size: 13px;">'
+                    f'📋 当前模型: <strong>{alias}</strong> ({mname})<br/>'
+                    f'<span style="font-size: 12px; opacity: 0.7;">'
+                    f'输入 /model &lt;别名&gt; 快速切换</span></div>'
+                )
+                escaped = json.dumps(info_html)
+                if hasattr(self, "_ai_webview") and self._ai_webview:
+                    self._ai_webview.run_javascript(
+                        f"document.getElementById('content').insertAdjacentHTML('beforeend', {escaped});"
+                        f"_scrollToBottom();",
+                        None, None
+                    )
             self._show_model_selector()
             return
         if text.startswith("/model "):
@@ -3009,6 +3043,23 @@ class ClipboardPanel(Gtk.Box):
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         self._render_markdown(self._ai_markdown_text)
 
+    def _build_model_snapshot(self) -> Dict[str, Any]:
+        """Build a model_config_snapshot from active model info or resolved config."""
+        active = getattr(self, "_ai_active_model_info", None)
+        if active:
+            return active
+        base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+            self._ai_last_prompt_obj, None
+        )
+        return {
+            "alias": "Default",
+            "base_url": base_url,
+            "model_name": model_name,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "top_p": top_p,
+        }
+
     def _save_current_conversation(self, model_snapshot: Dict[str, Any],
                                     preserve_updated_at: bool = False):
         """Save or update the current active conversation to the store, preserving its title."""
@@ -3047,18 +3098,7 @@ class ClipboardPanel(Gtk.Box):
         # Save current conversation if it has content
         if self._ai_messages and self._ai_conversation_id:
             try:
-                base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
-                    self._ai_last_prompt_obj,
-                    getattr(self, "_ai_active_model_info", None)
-                )
-                model_snapshot = getattr(self, "_ai_active_model_info", None) or {
-                    "alias": "Default",
-                    "base_url": base_url,
-                    "model_name": model_name,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "top_p": top_p,
-                }
+                model_snapshot = self._build_model_snapshot()
                 self._save_current_conversation(model_snapshot, preserve_updated_at=True)
             except Exception as e:
                 print(f"Error saving before switch: {e}", flush=True)
@@ -3532,18 +3572,7 @@ class ClipboardPanel(Gtk.Box):
         # 2. 若当前已有对话内容，自动保存当前对话
         if self._ai_messages:
             try:
-                base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
-                    self._ai_last_prompt_obj,
-                    getattr(self, "_ai_active_model_info", None)
-                )
-                model_snapshot = getattr(self, "_ai_active_model_info", None) or {
-                    "alias": "Default",
-                    "base_url": base_url,
-                    "model_name": model_name,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                    "top_p": top_p,
-                }
+                model_snapshot = self._build_model_snapshot()
                 self._save_current_conversation(model_snapshot, preserve_updated_at=True)
             except Exception as e:
                 print(f"Error saving before new conversation: {e}", flush=True)
