@@ -2162,6 +2162,9 @@ class ClipboardPanel(Gtk.Box):
             return
 
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+        # 重置 JS 自动滚动标志，确保重试后滚动到最底端
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript("_autoScroll = true;", None, None)
         self._render_markdown(self._ai_markdown_text)
 
         self._ai_request_id += 1
@@ -2811,13 +2814,17 @@ class ClipboardPanel(Gtk.Box):
                 lines.append(f"- **{m.alias}**" + (" (默认)" if m.is_default else "") + f" — `{m.model_name}`")
             lines.append("\n前往 **Prompts Config → ⚙️ API Settings** 管理模型配置。")
             error_msg = "\n".join(lines)
-            self._ai_markdown_text = error_msg
             html = _markdown_to_html_safe(
                 error_msg,
                 fallback_content=f"<p>Model '{alias}' not found</p>"
             )
+            escaped = json.dumps(html)
             if hasattr(self, "_ai_webview") and self._ai_webview:
-                self._ai_webview.load_html(self.get_html_template(self._theme, html), "file:///")
+                self._ai_webview.run_javascript(
+                    f"document.getElementById('content').insertAdjacentHTML('beforeend', {escaped});"
+                    f"_scrollToBottom();",
+                    None, None
+                )
             return
 
         self._ai_active_model_info = {
@@ -2834,6 +2841,19 @@ class ClipboardPanel(Gtk.Box):
         self._ai_lbl.set_markup(
             f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>"
         )
+        # 在 WebView 中追加成功切换通知
+        notice_html = (
+            f'<div style="color: #38bdf8; padding: 8px 12px; margin: 4px 0; '
+            f'border: 1px solid #38bdf8; border-radius: 6px; font-size: 13px;">'
+            f'🔄 已切换至 <strong>{model.alias}</strong> ({model.model_name})</div>'
+        )
+        escaped = json.dumps(notice_html)
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript(
+                f"document.getElementById('content').insertAdjacentHTML('beforeend', {escaped});"
+                f"_scrollToBottom();",
+                None, None
+            )
 
     def _show_model_selector(self):
         for old in self._ai_model_listbox.get_children():
@@ -2867,9 +2887,18 @@ class ClipboardPanel(Gtk.Box):
             self._ai_model_listbox.add(row)
 
         self._ai_model_listbox.show_all()
-        first = self._ai_model_listbox.get_row_at_index(0)
-        if first:
-            self._ai_model_listbox.select_row(first)
+        # 高亮当前正在使用的模型
+        current_alias = (getattr(self, "_ai_active_model_info", None) or {}).get("alias")
+        target_row = None
+        if current_alias:
+            for child in self._ai_model_listbox.get_children():
+                if getattr(child, "model_alias", None) == current_alias:
+                    target_row = child
+                    break
+        if not target_row:
+            target_row = self._ai_model_listbox.get_row_at_index(0)
+        if target_row:
+            self._ai_model_listbox.select_row(target_row)
 
         child = self._ai_model_popover.get_child()
         if child:
@@ -2960,7 +2989,9 @@ class ClipboardPanel(Gtk.Box):
                 if content.strip():
                     # Content already has role headers embedded from streaming phase;
                     # avoid adding another .assistant-header wrapper to prevent duplication.
-                    has_header = '<div class="assistant-header">' in content or '<div class="answer-header">' in content
+                    has_header = ('<div class="assistant-header">' in content
+                                 or '<div class="answer-header">' in content
+                                 or '<div class="thinking-header">' in content)
                     prefix = '' if has_header else '\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
                     parts.append(
                         f'{prefix}{content}\n\n'
