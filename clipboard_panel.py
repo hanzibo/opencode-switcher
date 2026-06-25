@@ -2109,7 +2109,6 @@ class ClipboardPanel(Gtk.Box):
         self._ai_response_div_added = False
         with self._ai_stream_lock:
             self._ai_stream_queue = []
-        GLib.timeout_add(100, self._poll_stream_queue, current_req_id)
 
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
@@ -2144,6 +2143,8 @@ class ClipboardPanel(Gtk.Box):
             self._ai_markdown_text += f'\n\n{error_msg}\n\n'
             self._render_markdown(self._ai_markdown_text)
             return
+
+        GLib.timeout_add(100, self._poll_stream_queue, current_req_id)
 
         self._ai_cancel_event.clear()
         self._ai_send_btn.set_sensitive(False)
@@ -2823,13 +2824,7 @@ class ClipboardPanel(Gtk.Box):
                     f'<span style="font-size: 12px; opacity: 0.7;">'
                     f'输入 /model &lt;别名&gt; 快速切换</span></div>'
                 )
-                escaped = json.dumps(info_html)
-                if hasattr(self, "_ai_webview") and self._ai_webview:
-                    self._ai_webview.run_javascript(
-                        f"document.getElementById('content').insertAdjacentHTML('beforeend', {escaped});"
-                        f"_scrollToBottom();",
-                        None, None
-                    )
+                self._append_html_to_webview(info_html)
             self._show_model_selector()
             return
         if text.startswith("/model "):
@@ -2852,13 +2847,7 @@ class ClipboardPanel(Gtk.Box):
                 error_msg,
                 fallback_content=f"<p>Model '{alias}' not found</p>"
             )
-            escaped = json.dumps(html)
-            if hasattr(self, "_ai_webview") and self._ai_webview:
-                self._ai_webview.run_javascript(
-                    f"document.getElementById('content').insertAdjacentHTML('beforeend', {escaped});"
-                    f"_scrollToBottom();",
-                    None, None
-                )
+            self._append_html_to_webview(html)
             return
 
         self._ai_active_model_info = {
@@ -2881,13 +2870,7 @@ class ClipboardPanel(Gtk.Box):
             f'border: 1px solid #38bdf8; border-radius: 6px; font-size: 13px;">'
             f'🔄 已切换至 <strong>{model.alias}</strong> ({model.model_name})</div>'
         )
-        escaped = json.dumps(notice_html)
-        if hasattr(self, "_ai_webview") and self._ai_webview:
-            self._ai_webview.run_javascript(
-                f"document.getElementById('content').insertAdjacentHTML('beforeend', {escaped});"
-                f"_scrollToBottom();",
-                None, None
-            )
+        self._append_html_to_webview(notice_html)
 
     def _show_model_selector(self):
         for old in self._ai_model_listbox.get_children():
@@ -3043,11 +3026,21 @@ class ClipboardPanel(Gtk.Box):
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         self._render_markdown(self._ai_markdown_text)
 
+    def _append_html_to_webview(self, html: str):
+        """Insert HTML snippet before end of content div and scroll to bottom."""
+        escaped = json.dumps(html)
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript(
+                f"document.getElementById('content').insertAdjacentHTML('beforeend', {escaped});"
+                f"_scrollToBottom();",
+                None, None
+            )
+
     def _build_model_snapshot(self) -> Dict[str, Any]:
         """Build a model_config_snapshot from active model info or resolved config."""
         active = getattr(self, "_ai_active_model_info", None)
         if active:
-            return active
+            return dict(active)  # shallow copy to prevent caller from mutating _ai_active_model_info
         base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
             self._ai_last_prompt_obj, None
         )
