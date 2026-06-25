@@ -2121,6 +2121,9 @@ class ClipboardPanel(Gtk.Box):
 
         rendered_text = _close_unclosed_code_blocks(text)
         self._ai_markdown_text += f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n---\n\n'
+        # 重置 JS 自动滚动标志，确保新消息提交后滚动到最底端并跟随流式输出
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript("_autoScroll = true;", None, None)
         self._render_markdown(self._ai_markdown_text)
 
         self._ai_spinner.show()
