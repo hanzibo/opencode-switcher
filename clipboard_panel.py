@@ -3071,7 +3071,7 @@ class ClipboardPanel(Gtk.Box):
         cmd_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         cmd_sw.set_min_content_height(100)
         cmd_sw.set_max_content_height(300)
-        cmd_sw.set_size_request(300, -1)
+        # Width set dynamically in _rebuild_command_popover to match _ai_entry
 
         self._ai_cmd_listbox = Gtk.ListBox.new()
         self._ai_cmd_listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
@@ -3126,6 +3126,10 @@ class ClipboardPanel(Gtk.Box):
             # Ensure the ScrolledWindow (popover's child) is visible so content renders
             child = self._ai_cmd_popover.get_child()
             if child:
+                # Set popover width to match input field width
+                entry_width = self._ai_entry.get_allocated_width()
+                min_width = 180
+                child.set_size_request(max(entry_width, min_width), -1)
                 child.show_all()
             self._ai_cmd_popover.popup()
             self._ai_cmd_popover_visible = True
