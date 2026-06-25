@@ -384,6 +384,13 @@ class _LLMHttpClient:
 
 
 class ClipboardPanel(Gtk.Box):
+    # Slash commands available in the AI chat input box (command, description)
+    _AI_COMMANDS = [
+        ("/new", "新对话"),
+        ("/delete", "删除并新建"),
+        ("/model", "切换模型"),
+    ]
+
     def __init__(self, clip_store, cat_store):
         # ponytail: removed unused prompt_store parameter
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
@@ -452,6 +459,13 @@ class ClipboardPanel(Gtk.Box):
         self._ai_cancel_event = threading.Event()
         self._llm_client = _LLMHttpClient()
         self._pygments_css_cache: Dict[str, str] = {}
+
+        # Slash command autocomplete popover state
+        self._ai_cmd_popover: Optional[Gtk.Popover] = None
+        self._ai_cmd_listbox: Optional[Gtk.ListBox] = None
+        self._ai_cmd_popover_visible: bool = False
+        # Guard: when True, buffer-changed callback skips popover rebuild (set during completion)
+        self._ai_cmd_suppress_rebuild: bool = False
 
         self._bg_color = Gdk.RGBA()
         self._title_color = Gdk.RGBA()
@@ -872,6 +886,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_entry.set_bottom_margin(4)
         self._ai_entry.set_accepts_tab(False)
         self._ai_entry.get_buffer().connect("changed", lambda *_: self._adjust_ai_entry_height())
+        self._ai_entry.get_buffer().connect("changed", lambda *_: self._on_ai_entry_changed())
         self._ai_entry.placeholder_text = "输入后续问题..."
         self._ai_entry.connect_after("draw", _textview_draw_placeholder)
         self._ai_entry.connect("key-press-event", self._on_ai_entry_key_press)
@@ -916,12 +931,17 @@ class ClipboardPanel(Gtk.Box):
         self._ai_model_popover.add(model_sw)
         self._ai_model_popover.connect("closed", self._on_model_popover_closed)
 
-        self._ai_hint_label = Gtk.Label.new("Ctrl+Enter ↵ · Enter 发送  |  /new 新对话  /delete 删除并新建  /model 切换模型")
+        cmd_hints = "  |  ".join(f"/{cmd[1:] if cmd.startswith('/') else cmd} {desc}"
+                                 for cmd, desc in self._AI_COMMANDS)
+        hint_text = f"Ctrl+Enter ↵ · Enter 发送  |  {cmd_hints}"
+        self._ai_hint_label = Gtk.Label.new(hint_text)
         self._ai_hint_label.set_xalign(1)
         self._ai_hint_label.get_style_context().add_class("dim-label")
         self._ai_hint_label.set_margin_end(4)
         self._ai_hint_label.set_opacity(0.6)
         self._ai_input_area.pack_start(self._ai_hint_label, False, False, 0)
+
+        self._init_ai_command_popover()
 
         self._ai_vbox.pack_start(self._ai_input_area, False, False, 0)
 
@@ -1174,6 +1194,13 @@ class ClipboardPanel(Gtk.Box):
             ".model-selector-list row:hover { background-color: %(hover_bg)s; }"
             ".model-selector-list row:selected { background-color: %(sel_bg)s; }"
             ".model-default-tag { color: %(sel_border)s; }"
+            ".command-autocomplete-popover { border-radius: 6px; background-color: %(dialog_bg)s; }"
+            ".command-autocomplete-popover > decoration { border-radius: 6px; }"
+            ".command-autocomplete-list { background-color: transparent; }"
+            ".command-autocomplete-list row { border: none; border-bottom: 1px solid %(input_border)s; padding: 2px 0; background-color: transparent; }"
+            ".command-autocomplete-list row:last-child { border-bottom: none; }"
+            ".command-autocomplete-list row:hover { background-color: %(hover_bg)s; }"
+             ".command-autocomplete-list row:selected { background-color: %(sel_bg)s; color: %(text_fg)s; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self, self._cat_list, self._content_scrolled, self._content_list):
@@ -2939,12 +2966,60 @@ class ClipboardPanel(Gtk.Box):
         self._switch_model_by_alias(alias)
 
     def _on_ai_entry_key_press(self, widget, event):
-        is_enter = event.keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter)
-        if not is_enter:
-            return False
-
+        keyname = Gdk.keyval_name(event.keyval)
         is_shift = (event.state & Gdk.ModifierType.SHIFT_MASK) != 0
         is_ctrl = (event.state & Gdk.ModifierType.CONTROL_MASK) != 0
+
+        if self._ai_cmd_popover is not None and self._ai_cmd_popover.get_visible():
+            if keyname in ("Up", "KP_Up"):
+                current = self._ai_cmd_listbox.get_selected_row()
+                if current:
+                    above = current.get_prev_sibling()
+                    if above:
+                        self._ai_cmd_listbox.select_row(above)
+                return True
+            if keyname in ("Down", "KP_Down"):
+                current = self._ai_cmd_listbox.get_selected_row()
+                if current:
+                    below = current.get_next_sibling()
+                    if below:
+                        self._ai_cmd_listbox.select_row(below)
+                else:
+                    first = self._ai_cmd_listbox.get_row_at_index(0)
+                    if first:
+                        self._ai_cmd_listbox.select_row(first)
+                return True
+            if keyname in ("Return", "KP_Enter"):
+                self._confirm_command_completion()
+                return True
+            if keyname == "Tab":
+                self._confirm_command_completion()
+                return True
+            if keyname == "Escape":
+                self._dismiss_command_popover()
+                return True
+            return False
+
+        if keyname == "Tab":
+            buf = self._ai_entry.get_buffer()
+            start = buf.get_start_iter()
+            end = buf.get_end_iter()
+            text = buf.get_text(start, end, True).strip()
+            if text.startswith("/") and " " not in text:
+                search = text.lstrip("/")
+                matches = [cmd for cmd, _ in self._AI_COMMANDS if cmd.startswith("/" + search)]
+                if len(matches) == 1:
+                    buf.set_text(matches[0] + " ")
+                    buf.place_cursor(buf.get_end_iter())
+                    return True
+                elif len(matches) > 1:
+                    self._rebuild_command_popover(text)
+                    return True
+            return False
+
+        is_enter = keyname in ("Return", "KP_Enter")
+        if not is_enter:
+            return False
 
         # Shift+Enter (without Ctrl) → newline
         if is_shift and not is_ctrl:
@@ -2982,6 +3057,194 @@ class ClipboardPanel(Gtk.Box):
         if self.on_menu_hidden:
             self.on_menu_hidden()
         return False
+
+    # ── Slash command autocomplete popover ────────────────────────────────────────
+
+    def _init_ai_command_popover(self):
+        self._ai_cmd_popover = Gtk.Popover.new(self._ai_entry)
+        self._ai_cmd_popover.set_position(Gtk.PositionType.TOP)
+        # modal=True (default) — popover performs GTK grab, all keyboard events
+        # go to the popover. We forward characters to the entry buffer manually.
+        self._ai_cmd_popover.get_style_context().add_class("command-autocomplete-popover")
+
+        cmd_sw = Gtk.ScrolledWindow.new()
+        cmd_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        cmd_sw.set_min_content_height(100)
+        cmd_sw.set_max_content_height(300)
+        cmd_sw.set_size_request(300, -1)
+
+        self._ai_cmd_listbox = Gtk.ListBox.new()
+        self._ai_cmd_listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self._ai_cmd_listbox.set_activate_on_single_click(False)
+        self._ai_cmd_listbox.get_style_context().add_class("command-autocomplete-list")
+        self._ai_cmd_listbox.connect("row-activated", self._on_cmd_row_activated)
+
+        cmd_sw.add(self._ai_cmd_listbox)
+        self._ai_cmd_popover.add(cmd_sw)
+        self._ai_cmd_popover.connect("closed", self._on_cmd_popover_closed)
+        self._ai_cmd_popover.connect("key-press-event", self._on_cmd_popover_key_press)
+
+    def _on_cmd_popover_closed(self, _popover):
+        self._ai_cmd_popover_visible = False
+
+    def _rebuild_command_popover(self, prefix: str):
+        if self._ai_cmd_suppress_rebuild:
+            return
+        search = prefix.lstrip("/")
+        matches = [
+            (cmd, desc) for cmd, desc in self._AI_COMMANDS
+            if cmd.startswith("/" + search)
+        ]
+        if not matches:
+            self._dismiss_command_popover()
+            return
+
+        # Block listbox signals during rebuild to prevent spurious activation
+        self._ai_cmd_listbox.handler_block_by_func(self._on_cmd_row_activated)
+        for row in self._ai_cmd_listbox.get_children():
+            self._ai_cmd_listbox.remove(row)
+
+        for cmd, desc in matches:
+            row = Gtk.ListBoxRow.new()
+            lbl = Gtk.Label.new(f"{cmd}  —  {desc}")
+            lbl.set_xalign(0)
+            lbl.set_margin_start(8)
+            lbl.set_margin_end(8)
+            lbl.set_margin_top(6)
+            lbl.set_margin_bottom(6)
+            row.add(lbl)
+            row._cmd_command = cmd
+            self._ai_cmd_listbox.add(row)
+
+        self._ai_cmd_listbox.show_all()
+        first = self._ai_cmd_listbox.get_row_at_index(0)
+        if first:
+            self._ai_cmd_listbox.select_row(first)
+        self._ai_cmd_listbox.handler_unblock_by_func(self._on_cmd_row_activated)
+
+        if not self._ai_cmd_popover_visible:
+            # Ensure the ScrolledWindow (popover's child) is visible so content renders
+            child = self._ai_cmd_popover.get_child()
+            if child:
+                child.show_all()
+            self._ai_cmd_popover.popup()
+            self._ai_cmd_popover_visible = True
+
+    def _on_cmd_popover_key_press(self, _popover, event):
+        """Popover grabs all keyboard (modal=True). We dispatch:
+        - navigation/action keys → listbox / dismiss
+        - editing keys → direct buffer manipulation
+        - printable chars → buf.insert_at_cursor()
+        - other → consume (noop)
+        """
+        keyname = Gdk.keyval_name(event.keyval)
+        state = event.state
+        is_ctrl = (state & Gdk.ModifierType.CONTROL_MASK) != 0
+        is_alt = (state & Gdk.ModifierType.MOD1_MASK) != 0
+
+        # ── Navigation / action keys ──────────────────────────────────
+        if keyname in ("Up", "KP_Up"):
+            current = self._ai_cmd_listbox.get_selected_row()
+            if current:
+                above = current.get_prev_sibling()
+                if above:
+                    self._ai_cmd_listbox.select_row(above)
+            return True
+
+        if keyname in ("Down", "KP_Down"):
+            current = self._ai_cmd_listbox.get_selected_row()
+            if current:
+                below = current.get_next_sibling()
+                if below:
+                    self._ai_cmd_listbox.select_row(below)
+            else:
+                first = self._ai_cmd_listbox.get_row_at_index(0)
+                if first:
+                    self._ai_cmd_listbox.select_row(first)
+            return True
+
+        if keyname in ("Return", "KP_Enter"):
+            self._confirm_command_completion()
+            return True
+
+        if keyname == "Tab":
+            self._confirm_command_completion()
+            return True
+
+        if keyname == "Escape":
+            self._dismiss_command_popover()
+            return True
+
+        # ── Editing keys ──────────────────────────────────────────────
+        if keyname == "BackSpace":
+            buf = self._ai_entry.get_buffer()
+            cursor = buf.get_iter_at_mark(buf.get_insert())
+            if cursor.get_offset() > 0:
+                cursor.backward_chars(1)
+                buf.delete(cursor, buf.get_iter_at_mark(buf.get_insert()))
+            return True
+
+        if keyname == "Delete":
+            buf = self._ai_entry.get_buffer()
+            cursor = buf.get_iter_at_mark(buf.get_insert()).copy()
+            end = buf.get_end_iter()
+            if cursor.get_offset() < end.get_offset():
+                cursor.forward_chars(1)
+                buf.delete(buf.get_iter_at_mark(buf.get_insert()), cursor)
+            return True
+
+        # ── Printable characters ──────────────────────────────────────
+        if not is_ctrl and not is_alt and len(keyname) == 1:
+            buf = self._ai_entry.get_buffer()
+            buf.insert_at_cursor(keyname)
+            return True
+
+        # ── Everything else: consume (Ctrl+C, Home, End, F-keys …) ───
+        return True
+
+    def _dismiss_command_popover(self):
+        if self._ai_cmd_popover_visible:
+            self._ai_cmd_popover.popdown()
+            self._ai_cmd_popover_visible = False
+        # Ensure keyboard focus returns to the entry after dismiss
+        self._ai_entry.grab_focus()
+
+    def _on_cmd_row_activated(self, _listbox, row):
+        if row is not None:
+            self._confirm_command_completion()
+
+    def _confirm_command_completion(self):
+        selected = self._ai_cmd_listbox.get_selected_row()
+        if selected is None:
+            return
+        command = getattr(selected, "_cmd_command", None)
+        if not command:
+            lbl = selected.get_child()
+            raw = lbl.get_text() if isinstance(lbl, Gtk.Label) else ""
+            command = raw.split("  ")[0].strip()
+        if not command:
+            return
+
+        # Suppress rebuild while replacing text to prevent recursive popover trigger
+        self._ai_cmd_suppress_rebuild = True
+        buf = self._ai_entry.get_buffer()
+        buf.set_text(command + " ")
+        end = buf.get_end_iter()
+        buf.place_cursor(end)
+        self._ai_cmd_suppress_rebuild = False
+
+        self._dismiss_command_popover()
+
+    def _on_ai_entry_changed(self):
+        buf = self._ai_entry.get_buffer()
+        start = buf.get_start_iter()
+        end = buf.get_end_iter()
+        text = buf.get_text(start, end, True).strip()
+
+        if text.startswith("/") and " " not in text:
+            self._rebuild_command_popover(text)
+        else:
+            self._dismiss_command_popover()
 
     # ── Conversation history dropdown methods ─────────────────────────────────────
 
