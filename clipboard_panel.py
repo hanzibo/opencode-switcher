@@ -2756,7 +2756,6 @@ class ClipboardPanel(Gtk.Box):
                 }}
                 .msg-copy-user-btn:hover {{
                     opacity: 1;
-                    background: rgba(128,128,128,0.15);
                 }}
                 .thinking-header {{ color: {thinking_color}; font-weight: bold; margin-top: 12px; }}
                 .answer-header {{ color: {answer_color}; font-weight: bold; margin-top: 12px; }}
@@ -2876,22 +2875,27 @@ class ClipboardPanel(Gtk.Box):
                     addRetryButtons();
                     addUserMessageCopyButtons();
                 }}
-                function addMessageCopyButtons() {{
-                    document.querySelectorAll('copy-marker:not(.user-copy-marker)').forEach(function(marker) {{
-                        if (marker.parentNode?.querySelector('.msg-btn-row[data-idx="' + marker.dataset.msgIndex + '"]')) return;
+                function _addCopyButtonsForMarkers(selector, btnText, uriPrefix, idxPrefix) {{
+                    document.querySelectorAll(selector).forEach(function(marker) {{
+                        var idx = marker.dataset.msgIndex;
+                        var dataIdx = idxPrefix + idx;
+                        if (marker.parentNode?.querySelector('.msg-btn-row[data-idx="' + dataIdx + '"]')) return;
                         var row = document.createElement('div');
                         row.className = 'msg-btn-row';
-                        row.setAttribute('data-idx', marker.dataset.msgIndex);
+                        row.setAttribute('data-idx', dataIdx);
                         const btn = document.createElement('button');
-                        btn.className = 'msg-copy-btn';
-                        btn.textContent = '📋 复制回答';
+                        btn.className = 'msg-copy-btn' + (idxPrefix ? ' msg-copy-user-btn' : '');
+                        btn.textContent = btnText;
                         btn.addEventListener('click', function(e) {{
                             e.stopPropagation();
-                            window.location = 'opencode://copy-response?index=' + marker.dataset.msgIndex;
+                            window.location = uriPrefix + '?index=' + idx;
                         }});
                         row.appendChild(btn);
                         marker.parentNode.insertBefore(row, marker);
                     }});
+                }}
+                function addMessageCopyButtons() {{
+                    _addCopyButtonsForMarkers('copy-marker:not(.user-copy-marker)', '📋 复制回答', 'opencode://copy-response', '');
                 }}
                 function addRetryButtons() {{
                     var markers = document.querySelectorAll('copy-marker:not(.user-copy-marker)');
@@ -2913,22 +2917,7 @@ class ClipboardPanel(Gtk.Box):
                     row.appendChild(btn);
                 }}
                 function addUserMessageCopyButtons() {{
-                    document.querySelectorAll('copy-marker.user-copy-marker').forEach(function(marker) {{
-                        var idx = marker.dataset.msgIndex;
-                        if (marker.parentNode?.querySelector('.msg-btn-row[data-idx="u-' + idx + '"]')) return;
-                        var row = document.createElement('div');
-                        row.className = 'msg-btn-row';
-                        row.setAttribute('data-idx', 'u-' + idx);
-                        const btn = document.createElement('button');
-                        btn.className = 'msg-copy-btn msg-copy-user-btn';
-                        btn.textContent = '📋 复制输入';
-                        btn.addEventListener('click', function(e) {{
-                            e.stopPropagation();
-                            window.location = 'opencode://copy-input?index=' + idx;
-                        }});
-                        row.appendChild(btn);
-                        marker.parentNode.insertBefore(row, marker);
-                    }});
+                    _addCopyButtonsForMarkers('copy-marker.user-copy-marker', '📋 复制输入', 'opencode://copy-input', 'u-');
                 }}
             </script>
         </head>
