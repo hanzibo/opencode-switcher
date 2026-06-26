@@ -208,19 +208,20 @@ def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) ->
 
 
 def _ensure_list_blankline(text: str) -> str:
-    """Ensure top-level lists are preceded by blank lines.
+    """Ensure top-level lists are preceded by blank lines and normalize indent.
 
     Python markdown requires a blank line before <ul>/<ol> items.
     LLM output often omits these, causing list items to be rendered
     as plain text inside <p> tags (no line break before list).
 
-    Also normalizes 2-space indentation to 4-space for nested lists,
-    since Python markdown requires 4 spaces for nesting while many
-    LLMs output only 2 spaces.
+    Also normalizes list item indentation to 4-space increments per
+    nesting level. LLMs typically use 2 or 3 spaces per level, but
+    Python markdown requires 4 spaces for proper nesting detection.
     """
     lines = text.split('\n')
     result = []
     in_code_block = False
+    list_stack = []
     for i, line in enumerate(lines):
         stripped = line.strip()
 
@@ -230,19 +231,37 @@ def _ensure_list_blankline(text: str) -> str:
         if not in_code_block:
             is_list_item = bool(re.match(r'^[-*+]\s|^\d+[.)]\s', stripped))
 
-            if is_list_item and i > 0:
-                prev_line = lines[i - 1]
-                prev_stripped = prev_line.strip()
-                prev_is_list_item = bool(re.match(r'^[-*+]\s|^\d+[.)]\s', prev_stripped))
+            if is_list_item:
+                orig_indent = len(line) - len(stripped)
 
-                if not prev_is_list_item and prev_stripped:
-                    result.append('')
-
-            if is_list_item and line.startswith('  ') and not line.startswith('    '):
-                if i > 0:
-                    prev_stripped = lines[i - 1].strip()
-                    if bool(re.match(r'^[-*+]\s|^\d+[.)]\s', prev_stripped)):
-                        line = '    ' + line[2:]
+                if i > 0 and not list_stack:
+                    prev_line = lines[i - 1]
+                    prev_stripped = prev_line.strip()
+                    if prev_stripped:
+                        result.append('')
+                if not list_stack:
+                    list_stack = [(orig_indent, 0)]
+                    line = stripped
+                elif orig_indent > list_stack[-1][0]:
+                    new_indent = list_stack[-1][1] + 4
+                    list_stack.append((orig_indent, new_indent))
+                    line = ' ' * new_indent + stripped
+                elif orig_indent == list_stack[-1][0]:
+                    line = ' ' * list_stack[-1][1] + stripped
+                else:
+                    while list_stack and orig_indent < list_stack[-1][0]:
+                        list_stack.pop()
+                    if not list_stack:
+                        list_stack = [(orig_indent, 0)]
+                        line = stripped
+                    elif orig_indent == list_stack[-1][0]:
+                        line = ' ' * list_stack[-1][1] + stripped
+                    else:
+                        new_indent = list_stack[-1][1] + 4
+                        list_stack.append((orig_indent, new_indent))
+                        line = ' ' * new_indent + stripped
+            elif not stripped:
+                list_stack = []
 
         result.append(line)
     return '\n'.join(result)
