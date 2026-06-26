@@ -213,6 +213,10 @@ def _ensure_list_blankline(text: str) -> str:
     Python markdown requires a blank line before <ul>/<ol> items.
     LLM output often omits these, causing list items to be rendered
     as plain text inside <p> tags (no line break before list).
+
+    Also normalizes 2-space indentation to 4-space for nested lists,
+    since Python markdown requires 4 spaces for nesting while many
+    LLMs output only 2 spaces.
     """
     lines = text.split('\n')
     result = []
@@ -223,15 +227,22 @@ def _ensure_list_blankline(text: str) -> str:
         if stripped.startswith('```'):
             in_code_block = not in_code_block
 
-        if not in_code_block and i > 0:
+        if not in_code_block:
             is_list_item = bool(re.match(r'^[-*+]\s|^\d+[.)]\s', stripped))
-            if is_list_item:
+
+            if is_list_item and i > 0:
                 prev_line = lines[i - 1]
                 prev_stripped = prev_line.strip()
                 prev_is_list_item = bool(re.match(r'^[-*+]\s|^\d+[.)]\s', prev_stripped))
 
                 if not prev_is_list_item and prev_stripped:
                     result.append('')
+
+            if is_list_item and line.startswith('  ') and not line.startswith('    '):
+                if i > 0:
+                    prev_stripped = lines[i - 1].strip()
+                    if bool(re.match(r'^[-*+]\s|^\d+[.)]\s', prev_stripped)):
+                        line = '    ' + line[2:]
 
         result.append(line)
     return '\n'.join(result)
