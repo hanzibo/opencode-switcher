@@ -431,6 +431,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_request_id = 0
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
+        self._ai_assistant_html_base: str = ""  # cumulative HTML sent to WebView for current msg (incremental append)
         self._ai_stream_lock = threading.Lock()
         self._ai_stream_queue = []
         self._ai_markdown_text = ""
@@ -2119,6 +2120,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_assistant_buffer = ""
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
+        self._ai_assistant_html_base = ""
         rendered_prompt = _close_unclosed_code_blocks(prompt_text)
         self._ai_markdown_text = f'<div class="user-header">You:</div>\n\n{rendered_prompt}\n\n---\n\n'
         self._ai_title_generated = False
@@ -2135,6 +2137,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_streaming = True
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
+        self._ai_assistant_html_base = ""
         with self._ai_stream_lock:
             self._ai_stream_queue = []
 
@@ -2212,6 +2215,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_streaming = True
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
+        self._ai_assistant_html_base = ""
         with self._ai_stream_lock:
             self._ai_stream_queue = []
         GLib.timeout_add(100, self._poll_stream_queue, current_req_id)
@@ -2250,6 +2254,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_streaming = True
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
+        self._ai_assistant_html_base = ""
         with self._ai_stream_lock:
             self._ai_stream_queue = []
         GLib.timeout_add(100, self._poll_stream_queue, current_req_id)
@@ -2390,12 +2395,23 @@ class ClipboardPanel(Gtk.Box):
             js_append = f"appendMessageContainer('{msg_id}');"
             self._ai_webview.run_javascript(js_append, None, None)
             self._ai_response_div_added = True
-            
+            self._ai_assistant_html_base = ""
+        
         text = _close_unclosed_code_blocks(self._ai_current_assistant_text)
         html = _markdown_to_html_safe(text)
-            
-        js_update = f"updateMessageContainer('{msg_id}', {json.dumps(html)});"
-        self._ai_webview.run_javascript(js_update, None, None)
+        
+        # Incremental append: if new HTML starts with previous base, send only the delta suffix
+        if html.startswith(self._ai_assistant_html_base):
+            new_suffix = html[len(self._ai_assistant_html_base):]
+            if new_suffix:
+                js_update = f"appendHtml('{msg_id}', {json.dumps(new_suffix)});"
+                self._ai_webview.run_javascript(js_update, None, None)
+        else:
+            # Prefix mismatch → full replace (e.g., math delimiter completed across chunks)
+            js_update = f"updateMessageContainer('{msg_id}', {json.dumps(html)});"
+            self._ai_webview.run_javascript(js_update, None, None)
+        
+        self._ai_assistant_html_base = html
 
     def _get_pygments_css(self, theme: str) -> str:
         cached = self._pygments_css_cache.get(theme)
@@ -2624,6 +2640,15 @@ class ClipboardPanel(Gtk.Box):
                     }}
                     _scrollToBottom();
                 }}
+                function appendHtml(msgId, html) {{
+                    const div = document.getElementById(msgId);
+                    if (div && html) {{
+                        div.insertAdjacentHTML('beforeend', html);
+                        _renderMath(div);
+                        addCopyButtons();
+                    }}
+                    _scrollToBottom();
+                }}
                 function addCopyButtons() {{
                     document.querySelectorAll('pre').forEach(function(pre) {{
                         if (pre.querySelector('.copy-btn')) return;
@@ -2738,6 +2763,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_assistant_buffer = ""
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
+        self._ai_assistant_html_base = ""
 
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
@@ -3387,6 +3413,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_assistant_buffer = ""
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
+        self._ai_assistant_html_base = ""
         self._ai_title_generated = True  # already generated (if ever), skip re-generation
         self._ai_last_prompt_obj = None
         self._ai_active_model_info = conv.model_config_snapshot
@@ -3809,6 +3836,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_markdown_text = ""
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
+        self._ai_assistant_html_base = ""
         self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
         self._ai_entry.get_buffer().set_text("")
         _, _, _, display_name, _, _, _ = self._read_model_config(None, None)
