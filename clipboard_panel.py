@@ -172,12 +172,7 @@ def _escape_math(text: str) -> Tuple[str, List[str]]:
         placeholders.append(match.group(0))
         return placeholder
     text = re.sub(r"(?<!\\)\\begin\{([a-zA-Z*0-9]+)\}(.*?)\\end\{\1\}", replace_env, text, flags=re.DOTALL)
-    def replace_inline(match):
-        placeholder = f"<!--MATH_INLINE_{len(placeholders)}-->"
-        placeholders.append(match.group(0))
-        return placeholder
-    text = re.sub(r"(?<!\\)\$(?!\s)([^$\n]+?)(?<!\s)(?<!\\)\$", replace_inline, text)
-    
+
     return text, placeholders
 
 
@@ -247,10 +242,13 @@ def _fix_latex(content: str) -> str:
     if len(dollars) % 2 != 0:
         content += "$$"
 
-    for line in content.split('\n'):
-        singles = re.findall(r'(?<!\\)\$(?!\$)', line)
-        if len(singles) % 2 != 0:
-            content += "$"
+    lines = content.split('\n')
+    any_unclosed_inline = any(
+        len(re.findall(r'(?<!\\)\$(?!\$)', line)) % 2 != 0
+        for line in lines
+    )
+    if any_unclosed_inline:
+        content += "$"
 
     return content
 
@@ -2536,13 +2534,6 @@ class ClipboardPanel(Gtk.Box):
                             errorColor: 'transparent'
                         }});
                     }}
-                    document.querySelectorAll('.katex-error').forEach(function(el) {{
-                        if (el.closest('.math-fallback')) return;
-                        var wrapper = document.createElement('code');
-                        wrapper.className = 'math-fallback';
-                        wrapper.textContent = el.textContent;
-                        el.replaceWith(wrapper);
-                    }});
                 }});
             </script>
             <style>
