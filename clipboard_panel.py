@@ -195,6 +195,7 @@ def _unescape_math(html_text: str, placeholders: List[str]) -> str:
 def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) -> str:
     escaped_text, placeholders = _escape_math(text)
     placeholders = [_fix_latex(p) for p in placeholders]
+    escaped_text = _ensure_list_blankline(escaped_text)
     try:
         import markdown
         html = markdown.markdown(escaped_text, extensions=_MARKDOWN_EXTENSIONS)
@@ -204,6 +205,36 @@ def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) ->
         else:
             html = f"<pre><code>{escaped_text}</code></pre>"
     return _unescape_math(html, placeholders)
+
+
+def _ensure_list_blankline(text: str) -> str:
+    """Ensure top-level lists are preceded by blank lines.
+
+    Python markdown requires a blank line before <ul>/<ol> items.
+    LLM output often omits these, causing list items to be rendered
+    as plain text inside <p> tags (no line break before list).
+    """
+    lines = text.split('\n')
+    result = []
+    in_code_block = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        if stripped.startswith('```'):
+            in_code_block = not in_code_block
+
+        if not in_code_block and i > 0:
+            is_list_item = bool(re.match(r'^[-*+]\s|^\d+[.)]\s', stripped))
+            if is_list_item:
+                prev_line = lines[i - 1]
+                prev_stripped = prev_line.strip()
+                prev_is_list_item = bool(re.match(r'^[-*+]\s|^\d+[.)]\s', prev_stripped))
+
+                if not prev_is_list_item and prev_stripped:
+                    result.append('')
+
+        result.append(line)
+    return '\n'.join(result)
 
 
 def _close_unclosed_code_blocks(text: str) -> str:
