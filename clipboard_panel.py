@@ -2341,7 +2341,8 @@ class ClipboardPanel(Gtk.Box):
         GLib.timeout_add(100, self._poll_stream_queue, current_req_id)
 
         self._ai_cancel_event.clear()
-        self._ai_send_btn.set_sensitive(False)
+        self._ai_send_btn.set_label("暂停")
+        self._ai_send_btn.set_sensitive(True)
         self._ai_entry.placeholder_text = "等待回复中..."
         threading.Thread(
             target=self._run_llm_api_request,
@@ -2355,6 +2356,7 @@ class ClipboardPanel(Gtk.Box):
         if self._ai_streaming:
             self._ai_cancel_event.set()
             self._flush_stream_queue()
+            self._ai_send_btn.set_label("发送")
             self._ai_streaming = False
             self._ai_spinner.stop()
             self._ai_spinner.hide()
@@ -2385,7 +2387,8 @@ class ClipboardPanel(Gtk.Box):
 
         self._ai_spinner.show()
         self._ai_spinner.start()
-        self._ai_send_btn.set_sensitive(False)
+        self._ai_send_btn.set_label("暂停")
+        self._ai_send_btn.set_sensitive(True)
         self._ai_entry.placeholder_text = "等待回复中..."
 
         base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
@@ -2468,6 +2471,8 @@ class ClipboardPanel(Gtk.Box):
             return
 
         self._ai_cancel_event.clear()
+        self._ai_send_btn.set_label("暂停")
+        self._ai_send_btn.set_sensitive(True)
         threading.Thread(
             target=self._run_llm_api_request,
             args=(base_url, api_key, model_name, self._ai_messages, current_req_id,
@@ -2977,6 +2982,7 @@ class ClipboardPanel(Gtk.Box):
                 if hasattr(self, "_ai_webview") and self._ai_webview:
                     self._ai_webview.run_javascript("_scrollToBottom();", None, None)
                 self._ai_streaming = False
+                self._ai_send_btn.set_label("发送")
                 self._ai_send_btn.set_sensitive(True)
                 self._ai_entry.placeholder_text = "输入后续问题..."
 
@@ -3043,6 +3049,11 @@ class ClipboardPanel(Gtk.Box):
 
     def _on_send_clicked(self, _btn=None):
         if self._ai_streaming:
+            self._ai_cancel_event.set()
+            self._flush_stream_queue()
+            self._ai_send_btn.set_label("发送")
+            self._ai_send_btn.set_sensitive(False)
+            self._ai_entry.placeholder_text = "正在中止..."
             return
         buf = self._ai_entry.get_buffer()
         start = buf.get_start_iter()
@@ -4018,6 +4029,7 @@ class ClipboardPanel(Gtk.Box):
 
     def hide_ai_panel(self):
         self._ai_cancel_event.set()
+        self._ai_send_btn.set_label("发送")
         self._ai_vbox.set_no_show_all(True)
         self._ai_vbox.hide()
         self._ai_sep.set_no_show_all(True)
@@ -4027,6 +4039,7 @@ class ClipboardPanel(Gtk.Box):
 
     def _reset_ai_panel_silent(self):
         self._ai_cancel_event.set()
+        self._ai_send_btn.set_label("发送")
         self._ai_messages = []
         self._ai_conversation_id = None
         self._ai_assistant_buffer = ""
@@ -4057,6 +4070,7 @@ class ClipboardPanel(Gtk.Box):
             self._flush_stream_queue()
             if self._ai_messages and self._ai_messages[-1].get("role") == "user" and self._ai_assistant_buffer:
                 self._ai_messages.append({"role": "assistant", "content": self._ai_assistant_buffer})
+            self._ai_send_btn.set_label("发送")
             self._ai_streaming = False
             self._ai_spinner.stop()
             self._ai_spinner.hide()
