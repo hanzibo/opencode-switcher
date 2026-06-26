@@ -993,6 +993,25 @@ class ClipboardPanel(Gtk.Box):
                             pass
                     decision.ignore()
                     return True
+                if uri and uri.startswith("opencode://copy-input"):
+                    qs = parse_qs(urlparse(uri).query)
+                    index_str = qs.get("index", [None])[0]
+                    if index_str is not None:
+                        try:
+                            index = int(index_str)
+                            msgs = getattr(self, "_ai_messages", [])
+                            if 0 <= index < len(msgs) and msgs[index].get("role") == "user":
+                                content = msgs[index].get("content", "")
+                                if content:
+                                    if self.on_ai_copy_started:
+                                        self.on_ai_copy_started()
+                                    _copy_to_clipboard(content)
+                                    if self.on_ai_copy_finished:
+                                        GLib.idle_add(self.on_ai_copy_finished)
+                        except (ValueError, IndexError):
+                            pass
+                    decision.ignore()
+                    return True
                 if uri and uri.startswith("opencode://retry"):
                     qs = parse_qs(urlparse(uri).query)
                     index_str = qs.get("index", [None])[0]
@@ -2265,7 +2284,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_response_div_added = False
         self._ai_assistant_html_base = ""
         rendered_prompt = _close_unclosed_code_blocks(prompt_text)
-        self._ai_markdown_text = f'<div class="user-header">You:</div>\n\n{rendered_prompt}\n\n---\n\n'
+        self._ai_markdown_text = f'<div class="user-header">You:</div>\n\n{rendered_prompt}\n\n<copy-marker data-msg-index="0" class="user-copy-marker"></copy-marker>\n\n---\n\n'
         self._ai_title_generated = False
         user_html = _markdown_to_html_safe(
             self._ai_markdown_text,
@@ -2289,7 +2308,8 @@ class ClipboardPanel(Gtk.Box):
             self._ai_render_timeout_id = 0
 
         rendered_text = _close_unclosed_code_blocks(text)
-        self._ai_markdown_text += f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n---\n\n'
+        user_msg_idx = len(self._ai_messages) - 1
+        self._ai_markdown_text += f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n<copy-marker data-msg-index="{user_msg_idx}" class="user-copy-marker"></copy-marker>\n\n---\n\n'
         # 重置 JS 自动滚动标志，确保新消息提交后滚动到最底端并跟随流式输出
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript("_autoScroll = true;", None, None)
@@ -2731,6 +2751,13 @@ class ClipboardPanel(Gtk.Box):
                     opacity: 1;
                     background: rgba(128,128,128,0.15);
                 }}
+                .msg-copy-user-btn {{
+                    opacity: 0.35;
+                }}
+                .msg-copy-user-btn:hover {{
+                    opacity: 1;
+                    background: rgba(128,128,128,0.15);
+                }}
                 .thinking-header {{ color: {thinking_color}; font-weight: bold; margin-top: 12px; }}
                 .answer-header {{ color: {answer_color}; font-weight: bold; margin-top: 12px; }}
                 .user-header {{ color: {user_color}; font-weight: bold; margin-top: 12px; }}
@@ -2847,9 +2874,10 @@ class ClipboardPanel(Gtk.Box):
                     }}
                     addMessageCopyButtons();
                     addRetryButtons();
+                    addUserMessageCopyButtons();
                 }}
                 function addMessageCopyButtons() {{
-                    document.querySelectorAll('copy-marker').forEach(function(marker) {{
+                    document.querySelectorAll('copy-marker:not(.user-copy-marker)').forEach(function(marker) {{
                         if (marker.parentNode?.querySelector('.msg-btn-row[data-idx="' + marker.dataset.msgIndex + '"]')) return;
                         var row = document.createElement('div');
                         row.className = 'msg-btn-row';
@@ -2866,7 +2894,7 @@ class ClipboardPanel(Gtk.Box):
                     }});
                 }}
                 function addRetryButtons() {{
-                    var markers = document.querySelectorAll('copy-marker');
+                    var markers = document.querySelectorAll('copy-marker:not(.user-copy-marker)');
                     var lastIdx = -1;
                     markers.forEach(function(m) {{
                         var idx = parseInt(m.dataset.msgIndex);
@@ -2883,6 +2911,24 @@ class ClipboardPanel(Gtk.Box):
                         window.location = 'opencode://retry?index=' + lastIdx;
                     }});
                     row.appendChild(btn);
+                }}
+                function addUserMessageCopyButtons() {{
+                    document.querySelectorAll('copy-marker.user-copy-marker').forEach(function(marker) {{
+                        var idx = marker.dataset.msgIndex;
+                        if (marker.parentNode?.querySelector('.msg-btn-row[data-idx="u-' + idx + '"]')) return;
+                        var row = document.createElement('div');
+                        row.className = 'msg-btn-row';
+                        row.setAttribute('data-idx', 'u-' + idx);
+                        const btn = document.createElement('button');
+                        btn.className = 'msg-copy-btn msg-copy-user-btn';
+                        btn.textContent = '📋 复制输入';
+                        btn.addEventListener('click', function(e) {{
+                            e.stopPropagation();
+                            window.location = 'opencode://copy-input?index=' + idx;
+                        }});
+                        row.appendChild(btn);
+                        marker.parentNode.insertBefore(row, marker);
+                    }});
                 }}
             </script>
         </head>
@@ -3460,10 +3506,10 @@ class ClipboardPanel(Gtk.Box):
                 continue
             if i == 0:
                 rendered_prompt = _close_unclosed_code_blocks(content)
-                parts.append(f'<div class="user-header">You:</div>\n\n{rendered_prompt}\n\n---\n\n')
+                parts.append(f'<div class="user-header">You:</div>\n\n{rendered_prompt}\n\n<copy-marker data-msg-index="{i}" class="user-copy-marker"></copy-marker>\n\n---\n\n')
             elif role == "user":
                 rendered_text = _close_unclosed_code_blocks(content)
-                parts.append(f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n---\n\n')
+                parts.append(f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n<copy-marker data-msg-index="{i}" class="user-copy-marker"></copy-marker>\n\n---\n\n')
             elif role == "assistant":
                 if content.strip():
                     # Content already has role headers embedded from streaming phase;
