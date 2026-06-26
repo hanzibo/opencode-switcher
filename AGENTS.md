@@ -1,32 +1,45 @@
 # OpenCode Switcher — Agent Instructions
 
 Linux GTK3 desktop tray app switching between OpenCode (CLI) sessions via a search panel.
-Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker.
+Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No automated tests. Manual testing only (`dnd_test.py`, 15s auto-exit).
 
 ## STRUCTURE
 
 ```
 ./                          # Flat project root (no __init__.py — not a package)
 ├── main.py                 # Entrypoint: flock lock, App(), Gtk.main()
-├── panel.py                # Search panel UI, tab switcher, slash commands, CSS providers
-├── clipboard_panel.py      # Clipboard/LLM panel — largest file (~2500 lines)
-├── clipboard_store.py      # Clipboard store, heuristic classification, categories, prompts, LLM config, conversations
+├── panel.py                # Search panel UI (~1350 lines), tab switcher, slash commands, CSS providers, evdev keyboard injection
+├── clipboard_panel.py      # Clipboard/LLM panel — largest file (~6200 lines)
+├── clipboard_store.py      # Clipboard store (~1000 lines), heuristic classification, categories, prompts, LLM config, conversations
 ├── session_store.py        # SQLite reader + live-session detection via pgrep/proc
 ├── hotkey.py               # X11 pynput + Wayland Unix socket hotkey manager
 ├── launcher.py             # Terminal discovery + session spawner
 ├── utils.py                # is_wayland(), relative_time(), request_window_focus(), cache dirs
 ├── migrate_history.py      # Migration utility (dual-use: standalone + imported by main.py)
-├── inspect_db.py           # DB inspector (missing __name__ guard)
-├── dnd_test.py             # Only test file: interactive GTK DnD test (manual)
+├── inspect_db.py           # DB inspector — missing `__name__` guard (top-level SQL on import)
+├── dnd_test.py             # Only test file: interactive GTK DnD test (manual, 15s auto-exit)
+├── codebase_analysis.md    # Stale architecture overview (file sizes predate large clipboard_panel growth)
+├── katex/                  # KaTeX rendering files (CSS/JS/fonts for math in AI WebView)
 ├── gnome-extension/        # GNOME Shell extension (Wayland clipboard + focus)
 │   ├── extension.js        # Clipboard owner-changed listener + focus request
 │   └── metadata.json       # Shell versions [48,49,50]
 ├── docs/usage.md           # Chinese-language usage guide
 ├── run.sh                  # Prod launcher: log rotation, nvm, exec to main.py
 ├── install.sh              # Install/uninstall/status: systemd, venv, GNOME ext
-├── requirements.txt        # PyGObject, pynput, python-xlib, markdown, pygments
-└── opencode-switcher-toggle # Shell→Python hybrid: sends "toggle"/"toggle_ai" to Unix socket
+├── requirements.txt        # PyGObject, pynput, python-xlib, markdown, pygments, requests
+├── opencode-switcher-toggle # Shell→Python hybrid: sends "toggle"/"toggle_ai" to Unix socket
+├── opencode-switcher.desktop # Desktop entry (placeholder __INSTALL_DIR__ replaced at install time)
+├── LICENSE                 # MIT
+└── opencode-switcher.png   # Tray icon
 ```
+
+### Tribal Knowledge Directories
+
+| Path | Contents |
+|------|----------|
+| `.hzb-agents/experience/` | 59 experience files — per-feature postmortems with pitfalls, solutions, and reasoning |
+| `.omo/plans/` | 25 structured work plans from past feature development |
+| `.omo/evidence/` | Verification artifacts from past sessions |
 
 ## COMMANDS
 
@@ -42,6 +55,8 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker.
 | DB inspect | `venv/bin/python3 inspect_db.py` | Lists session table schema + latest rows |
 
 **System deps** (beyond pip): `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard xclip xdotool gir1.2-webkit2-4.1` (webkit2gtk for AI panel WebView)
+
+**Commit convention** (observed from git log): `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `style(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`).
 
 ## KEY FEATURES NOT OBVIOUS FROM FILENAMES
 
@@ -154,7 +169,7 @@ systemd/.desktop → run.sh → main.py (flock lock)
 
 ## CONVENTIONS
 
-- **Strings**: double quotes (3243:194 ratio vs single). Docstrings: `"""`
+- **Strings**: double quotes (2250:187 ratio vs single). Docstrings: `"""`
 - **Imports**: stdlib → third-party → local, `gi.require_version()` before `from gi.repository import ...`
 - **Types**: `from typing import Tuple, Dict, List, Optional` — NOT Python 3.9+ lowercase generics (backward compat)
 - **Thread safety**: `GLib.idle_add(callback, *args)` for any background→UI update. No `asyncio`.
