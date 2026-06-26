@@ -196,6 +196,7 @@ def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) ->
     escaped_text, placeholders = _escape_math(text)
     placeholders = [_fix_latex(p) for p in placeholders]
     escaped_text = _ensure_list_blankline(escaped_text)
+    escaped_text = _ensure_table_blankline(escaped_text)
     try:
         import markdown
         html = markdown.markdown(escaped_text, extensions=_MARKDOWN_EXTENSIONS)
@@ -267,6 +268,28 @@ def _ensure_list_blankline(text: str) -> str:
                         line = ' ' * new_indent + stripped
             elif not stripped:
                 list_stack = []
+
+        result.append(line)
+    return '\n'.join(result)
+
+
+def _ensure_table_blankline(text: str) -> str:
+    """Ensure pipe tables are preceded by blank lines for Python-markdown's tables extension."""
+    lines = text.split('\n')
+    result = []
+    in_code_block = False
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+
+        if stripped.startswith('```'):
+            in_code_block = not in_code_block
+
+        if not in_code_block and stripped.startswith('|'):
+            if i > 0:
+                prev_stripped = lines[i - 1].strip()
+                if prev_stripped and not prev_stripped.startswith('|'):
+                    result.append('')
 
         result.append(line)
     return '\n'.join(result)
