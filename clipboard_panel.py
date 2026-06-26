@@ -69,6 +69,17 @@ if os.path.isdir(_KATEX_DIR):
 AI_MESSAGES_SOFT_LIMIT = 200
 AI_MESSAGES_TRIM_TARGET = 100
 
+# LaTeX commands that LLMs commonly double-escape (\\frac → \frac, etc.)
+_LATEX_COMMANDS = frozenset({
+    "frac", "sqrt", "sum", "int", "prod", "lim", "sin", "cos", "log", "ln",
+    "det", "begin", "end", "left", "right", "text", "mathrm", "mathbf",
+    "mathit", "mathtt", "mathcal", "mathbb", "mathfrak", "displaystyle",
+    "partial", "nabla", "infty", "alpha", "beta", "gamma", "delta", "epsilon",
+    "theta", "lambda", "pi", "sigma", "omega", "varphi", "rightarrow", "leftarrow",
+    "Rightarrow", "Leftarrow", "mapsto", "implies", "iff", "cdot", "times",
+    "approx", "equiv", "neq", "leq", "geq", "subset", "supset", "cup", "cap",
+})
+
 CATEGORY_WIDTH = 200
 ACTION_WIDTH = 140
 # ponytail: removed fixed AI_PANEL_WIDTH — now uses equal expand with content area
@@ -188,6 +199,7 @@ def _unescape_math(html_text: str, placeholders: List[str]) -> str:
 
 def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) -> str:
     escaped_text, placeholders = _escape_math(text)
+    placeholders = [_fix_latex(p) for p in placeholders]
     try:
         import markdown
         html = markdown.markdown(escaped_text, extensions=_MARKDOWN_EXTENSIONS)
@@ -204,6 +216,43 @@ def _close_unclosed_code_blocks(text: str) -> str:
     if text.count("```") % 2 != 0:
         return text + "\n```"
     return text
+
+
+def _fix_latex(content: str) -> str:
+    """Fix common LaTeX formatting errors produced by LLMs.
+
+    Applied to captured math expressions BEFORE unescape so that
+    restored content is already corrected. Covers:
+      - double backslash before known commands (\\frac → \frac)
+      - missing \\end{env} for unclosed \\begin{env}
+      - unclosed $$ (display math)
+      - unclosed $ (inline math, per-line odd count heuristic)
+    """
+    known = sorted(_LATEX_COMMANDS, key=len, reverse=True)
+    cmd_pattern = r'\\\\(?:' + '|'.join(known) + r')\b'
+    content = re.sub(cmd_pattern, lambda m: m.group(0)[1:], content)
+
+    envs = re.findall(r'(\\(?:begin|end))\{([a-zA-Z*0-9]+)\}', content)
+    open_count = {}
+    for cmd, name in envs:
+        if cmd == '\\begin':
+            open_count[name] = open_count.get(name, 0) + 1
+        elif cmd == '\\end':
+            open_count[name] = open_count.get(name, 0) - 1
+    for name, count in open_count.items():
+        if count > 0:
+            content += f"\\end{{{name}}}" * count
+
+    dollars = re.findall(r'(?<!\\)\$\$', content)
+    if len(dollars) % 2 != 0:
+        content += "$$"
+
+    for line in content.split('\n'):
+        singles = re.findall(r'(?<!\\)\$(?!\$)', line)
+        if len(singles) % 2 != 0:
+            content += "$"
+
+    return content
 
 
 def _clean_history_title(title: str) -> str:
@@ -2483,9 +2532,17 @@ class ClipboardPanel(Gtk.Box):
                     if (typeof renderMathInElement === 'function') {{
                         renderMathInElement(document.body, {{
                             delimiters: KATEX_DELIMITERS,
-                            throwOnError: false
+                            throwOnError: false,
+                            errorColor: 'transparent'
                         }});
                     }}
+                    document.querySelectorAll('.katex-error').forEach(function(el) {{
+                        if (el.closest('.math-fallback')) return;
+                        var wrapper = document.createElement('code');
+                        wrapper.className = 'math-fallback';
+                        wrapper.textContent = el.textContent;
+                        el.replaceWith(wrapper);
+                    }});
                 }});
             </script>
             <style>
@@ -2602,15 +2659,33 @@ class ClipboardPanel(Gtk.Box):
                 th, td {{ border: 1px solid {pre_border}; padding: 6px 10px; text-align: left; }}
                 th {{ background-color: {table_header_bg}; font-weight: 600; }}
                 tr:nth-child(even) {{ background-color: {table_alt_bg}; }}
+                .math-fallback {{
+                    display: inline-block;
+                    background: rgba(128,128,128,0.08);
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+                    font-size: 85%;
+                    white-space: pre-wrap;
+                    word-break: break-all;
+                }}
             </style>
             <script>
                 function _renderMath(element) {{
                     if (typeof renderMathInElement === 'function') {{
                         renderMathInElement(element || document.body, {{
                             delimiters: KATEX_DELIMITERS,
-                            throwOnError: false
+                            throwOnError: false,
+                            errorColor: 'transparent'
                         }});
                     }}
+                    (element || document.body).querySelectorAll('.katex-error').forEach(function(el) {{
+                        if (el.closest('.math-fallback')) return;
+                        var wrapper = document.createElement('code');
+                        wrapper.className = 'math-fallback';
+                        wrapper.textContent = el.textContent;
+                        el.replaceWith(wrapper);
+                    }});
                 }}
                 const SCROLL_THRESHOLD = 20;
                 let _autoScroll = true;
