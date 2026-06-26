@@ -217,6 +217,11 @@ def _ensure_list_blankline(text: str) -> str:
     Also normalizes list item indentation to 4-space increments per
     nesting level. LLMs typically use 2 or 3 spaces per level, but
     Python markdown requires 4 spaces for proper nesting detection.
+
+    Uses a stack of (orig_indent, norm_indent) tuples to track nesting
+    levels: orig_indent is the original whitespace count from the source
+    line, norm_indent is the normalized multiple-of-4 indent assigned
+    to that level. Blank lines reset the stack.
     """
     lines = text.split('\n')
     result = []
