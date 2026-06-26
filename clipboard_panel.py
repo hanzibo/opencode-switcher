@@ -135,25 +135,32 @@ def _escape_math(text: str) -> Tuple[str, List[str]]:
         return placeholder
     text = re.sub(r"(?<!\\)\\\[(.*?)(?<!\\)\\\]", replace_bracket, text, flags=re.DOTALL)
     
-    # 3. Protect LaTeX environments: \begin{env} ... \end{env} (multiline, not escaped)
-    # NOTE: lazy (.*?) does not support nested same-name environments (e.g.
-    # \begin{align} \begin{align} ... \end{align} \end{align}). This is
-    # extremely rare and produces invalid LaTeX; the regex captures the inner
-    # pair and leaves the outer \end as orphaned text.
-    def replace_env(match):
-        placeholder = f"<!--MATH_BLOCK_{len(placeholders)}-->"
-        placeholders.append(match.group(0))
-        return placeholder
-    text = re.sub(r"(?<!\\)\\begin\{([a-zA-Z*0-9]+)\}(.*?)\\end\{\1\}", replace_env, text, flags=re.DOTALL)
-
-    # 4. Protect inline math: \( ... \)
+    # 3. Protect inline math: \( ... \) (must be before \begin{env} to avoid placeholder nesting)
     def replace_paren(match):
         placeholder = f"<!--MATH_INLINE_{len(placeholders)}-->"
         placeholders.append(match.group(0))
         return placeholder
     text = re.sub(r"(?<!\\)\\\((.*?)(?<!\\)\\\)", replace_paren, text)
     
-    # 5. Protect inline math: $ ... $ (single line, not escaped, no space inside delimiters)
+    # 4. Protect inline math: $ ... $ (single line, not escaped, no space inside delimiters)
+    def replace_inline(match):
+        placeholder = f"<!--MATH_INLINE_{len(placeholders)}-->"
+        placeholders.append(match.group(0))
+        return placeholder
+    text = re.sub(r"(?<!\\)\$(?!\s)([^$\n]+?)(?<!\s)(?<!\\)\$", replace_inline, text)
+    
+    # 5. Protect LaTeX environments: \begin{env} ... \end{env} (multiline, not escaped)
+    # NOTE: lazy (.*?) does not support nested same-name environments (e.g.
+    # \begin{align} \begin{align} ... \end{align} \end{align}). This is
+    # extremely rare and produces invalid LaTeX; the regex captures the inner
+    # pair and leaves the outer \end as orphaned text.
+    # Kept after inline math so that \( ... \begin{bmatrix} ... \) is captured
+    # as a single inline expression, not split by an inner environment match.
+    def replace_env(match):
+        placeholder = f"<!--MATH_BLOCK_{len(placeholders)}-->"
+        placeholders.append(match.group(0))
+        return placeholder
+    text = re.sub(r"(?<!\\)\\begin\{([a-zA-Z*0-9]+)\}(.*?)\\end\{\1\}", replace_env, text, flags=re.DOTALL)
     def replace_inline(match):
         placeholder = f"<!--MATH_INLINE_{len(placeholders)}-->"
         placeholders.append(match.group(0))
