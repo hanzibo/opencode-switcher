@@ -534,6 +534,7 @@ class ClipboardPanel(Gtk.Box):
         ("/new", "新对话"),
         ("/delete", "删除并新建"),
         ("/retry", "回滚到上一轮"),
+        ("/rollback", "回滚到任意轮"),
         ("/model", "切换模型"),
     ]
 
@@ -1024,6 +1025,16 @@ class ClipboardPanel(Gtk.Box):
                         except (ValueError, IndexError):
                             pass
                     decision.ignore()
+                    return True
+                if uri and uri.startswith("opencode://rollback-round"):
+                    decision.ignore()
+                    qs = parse_qs(urlparse(uri).query)
+                    round_str = qs.get("round", [None])[0]
+                    if round_str is not None:
+                        try:
+                            self._rollback_to_round(int(round_str))
+                        except (ValueError, IndexError):
+                            pass
                     return True
                 if uri and not (uri.startswith("file://") or uri == "about:blank"):
                     try:
@@ -3084,6 +3095,10 @@ class ClipboardPanel(Gtk.Box):
             buf.set_text("")
             self._handle_retry_command()
             return
+        if text == "/rollback":
+            buf.set_text("")
+            self._handle_rollback_command()
+            return
         if text == "/model":
             buf.set_text("")
             # 在 WebView 中显示当前模型信息
@@ -3173,6 +3188,100 @@ class ClipboardPanel(Gtk.Box):
         buf.set_text(last_user_content)
         buf.place_cursor(buf.get_end_iter())
 
+        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript("_autoScroll = true;", None, None)
+        self._render_markdown(self._ai_markdown_text)
+        self._save_current_conversation()
+
+    def _handle_rollback_command(self):
+        if self._ai_streaming:
+            self._ai_cancel_event.set()
+            self._flush_stream_queue()
+            self._update_send_button(False)
+            self._ai_streaming = False
+            self._ai_spinner.stop()
+            self._ai_spinner.hide()
+
+        msgs = self._ai_messages
+        total_rounds = len(msgs) // 2
+        if total_rounds == 0:
+            return
+
+        is_dark = getattr(self, "_theme", "dark") == "dark"
+        if is_dark:
+            user_c = "#818cf8"
+            asst_c = "#2dd4bf"
+            border_c = "rgba(255,255,255,0.12)"
+            card_bg = "rgba(255,255,255,0.03)"
+            title_c = "#818cf8"
+            btn_bg = "#818cf8"
+            btn_fg = "#ffffff"
+        else:
+            user_c = "#6366f1"
+            asst_c = "#0d9488"
+            border_c = "rgba(0,0,0,0.1)"
+            card_bg = "rgba(0,0,0,0.02)"
+            title_c = "#6366f1"
+            btn_bg = "#6366f1"
+            btn_fg = "#ffffff"
+
+        def _strip_html(text):
+            return re.sub(r'<[^>]+>', '', text).strip()
+
+        cards_html = []
+        for i in range(total_rounds):
+            user_msg = msgs[i * 2].get("content", "")
+            asst_msg = msgs[i * 2 + 1].get("content", "")
+            user_preview = _strip_html(user_msg)[:80] + ("..." if len(_strip_html(user_msg)) > 80 else "")
+            asst_preview = _strip_html(asst_msg)[:80] + ("..." if len(_strip_html(asst_msg)) > 80 else "")
+            is_last = (i == total_rounds - 1)
+            round_label = f"第 {i + 1} 轮" + ("（当前）" if is_last else "")
+            if is_last:
+                action_html = '<span style="font-size:12px; opacity:0.4;">← 当前</span>'
+            else:
+                action_html = (
+                    f'<button onclick="window.location=\'opencode://rollback-round?round={i}\'" '
+                    f'style="background:{btn_bg}; color:{btn_fg}; border:none; '
+                    f'border-radius:4px; padding:3px 10px; font-size:12px; cursor:pointer;">'
+                    f'↩ 回滚到此</button>'
+                )
+            cards_html.append(
+                f'<div style="border:1px solid {border_c}; border-radius:6px; '
+                f'padding:8px 10px; margin:6px 0; background:{card_bg};">'
+                f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;">'
+                f'<span style="font-weight:bold; font-size:13px; color:{user_c};">{round_label}</span>'
+                f'{action_html}</div>'
+                f'<div style="font-size:12px; color:{user_c}; opacity:0.85; margin-bottom:2px;">'
+                f'You: {user_preview}</div>'
+                f'<div style="font-size:12px; color:{asst_c}; opacity:0.8;">'
+                f'AI: {asst_preview}</div></div>'
+            )
+
+        html = (
+            f'<div style="border:1px solid {border_c}; border-radius:8px; '
+            f'padding:12px 14px; margin:8px 0;">'
+            f'<div style="font-size:14px; font-weight:bold; margin-bottom:6px; color:{title_c};">'
+            f'══ 对话回滚 ══ '
+            f'<span style="font-size:12px; font-weight:normal; opacity:0.6;">共 {total_rounds} 轮</span>'
+            f'</div>{"".join(cards_html)}'
+            f'<div style="text-align:right; margin-top:4px;">'
+            f'<span style="font-size:12px; opacity:0.4; cursor:pointer;" '
+            f'onclick="this.closest(\'div[style*=\\\'border-radius:8px\\\']\').style.display=\'none\';">'
+            f'[× 关闭]</span></div></div>'
+        )
+        self._append_html_to_webview(html)
+
+    def _rollback_to_round(self, round_index: int):
+        msgs = self._ai_messages
+        end_idx = round_index * 2 + 2
+        if end_idx > len(msgs):
+            return
+        discarded = msgs[end_idx].get("content", "") if end_idx < len(msgs) and msgs[end_idx].get("role") == "user" else ""
+        self._ai_messages = msgs[:end_idx]
+        buf = self._ai_entry.get_buffer()
+        buf.set_text(discarded)
+        buf.place_cursor(buf.get_end_iter())
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript("_autoScroll = true;", None, None)
