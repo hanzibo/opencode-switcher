@@ -533,6 +533,7 @@ class ClipboardPanel(Gtk.Box):
     _AI_COMMANDS = [
         ("/new", "新对话"),
         ("/delete", "删除并新建"),
+        ("/retry", "回滚到上一轮"),
         ("/model", "切换模型"),
     ]
 
@@ -3079,6 +3080,10 @@ class ClipboardPanel(Gtk.Box):
                 self._conversation_store.delete_conversation(conv_id)
             self._reset_ai_panel_silent()
             return
+        if text == "/retry":
+            buf.set_text("")
+            self._handle_retry_command()
+            return
         if text == "/model":
             buf.set_text("")
             # 在 WebView 中显示当前模型信息
@@ -3140,6 +3145,39 @@ class ClipboardPanel(Gtk.Box):
             f'🔄 已切换至 <strong>{model.alias}</strong> ({model.model_name})</div>'
         )
         self._append_html_to_webview(notice_html)
+
+    def _handle_retry_command(self):
+        if self._ai_streaming:
+            self._ai_cancel_event.set()
+            self._flush_stream_queue()
+            self._update_send_button(False)
+            self._ai_streaming = False
+            self._ai_spinner.stop()
+            self._ai_spinner.hide()
+
+        msgs = self._ai_messages
+        if not msgs:
+            return
+
+        last_user_content = ""
+        if len(msgs) >= 2 and msgs[-1].get("role") == "assistant":
+            last_user_content = msgs[-2].get("content", "")
+            self._ai_messages = msgs[:-2]
+        elif msgs[-1].get("role") == "user":
+            last_user_content = msgs[-1].get("content", "")
+            self._ai_messages = msgs[:-1]
+        else:
+            return
+
+        buf = self._ai_entry.get_buffer()
+        buf.set_text(last_user_content)
+        buf.place_cursor(buf.get_end_iter())
+
+        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript("_autoScroll = true;", None, None)
+        self._render_markdown(self._ai_markdown_text)
+        self._save_current_conversation()
 
     def _show_model_selector(self):
         for old in self._ai_model_listbox.get_children():
