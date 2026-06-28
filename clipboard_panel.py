@@ -1116,6 +1116,9 @@ class ClipboardPanel(Gtk.Box):
         self._ai_hint_label.get_style_context().add_class("dim-label")
         self._ai_hint_label.set_margin_end(4)
         self._ai_hint_label.set_opacity(0.6)
+        self._ai_hint_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self._ai_hint_label.set_max_width_chars(55)
+        self._ai_hint_label.set_tooltip_text(hint_text)
         self._ai_input_area.pack_start(self._ai_hint_label, False, False, 0)
 
         self._init_ai_command_popover()
