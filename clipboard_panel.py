@@ -3307,6 +3307,7 @@ class ClipboardPanel(Gtk.Box):
 
             if base_url and api_key:
                 self._ai_title_generated = True
+                self._ai_pending_title_notification = True
                 self._append_html_to_webview(
                     '<div style="color:#818cf8; padding:8px;">正在根据对话内容重新生成标题...</div>'
                 )
@@ -4337,12 +4338,19 @@ class ClipboardPanel(Gtk.Box):
         )
 
     def _on_title_generated(self, conv_id: str, title: str):
-        """Idle callback: update conversation title in store and refresh dropdown."""
+        """Idle callback: update conversation title in store, refresh dropdown,
+        and notify webview if triggered by /title command."""
         conv = self._conversation_store.load_conversation(conv_id)
         if conv:
             conv.title = title
             self._conversation_store.save_conversation(conv, bump_updated_at=False)
         self._refresh_conversation_dropdown()
+        if getattr(self, "_ai_pending_title_notification", False):
+            self._ai_pending_title_notification = False
+            escaped = html.escape(title)
+            self._append_html_to_webview(
+                f'<div style="color:#818cf8; padding:8px;">标题已生成: {escaped}</div>'
+            )
 
     def is_ai_panel_visible(self) -> bool:
         return self._ai_vbox.get_visible()
