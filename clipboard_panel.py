@@ -555,6 +555,7 @@ class ClipboardPanel(Gtk.Box):
         ("/delete", "删除并新建"),
         ("/retry", "回滚到上一轮"),
         ("/rollback", "回滚到任意轮"),
+        ("/title", "设置/生成标题"),
         ("/model", "切换模型"),
     ]
 
@@ -3123,6 +3124,15 @@ class ClipboardPanel(Gtk.Box):
             buf.set_text("")
             self._handle_rollback_command()
             return
+        if text == "/title":
+            buf.set_text("")
+            self._handle_title_command("")
+            return
+        if text.startswith("/title "):
+            buf.set_text("")
+            title_text = text[len("/title "):].strip()
+            self._handle_title_command(title_text)
+            return
         if text == "/model":
             buf.set_text("")
             # 在 WebView 中显示当前模型信息
@@ -3230,6 +3240,65 @@ class ClipboardPanel(Gtk.Box):
         if total_rounds == 0:
             return
         self._append_html_to_webview(self._build_round_cards_html(msgs, total_rounds))
+
+    def _handle_title_command(self, title_text: str):
+        """Handle /title command: set custom title or regenerate via LLM."""
+        if not self._ai_conversation_id or not self._ai_messages:
+            self._append_html_to_webview(
+                '<div style="color:#f43f5e; padding:8px;">没有活跃的对话可供设置标题。</div>'
+            )
+            return
+
+        if title_text:
+            # Mode 2: manual title — set immediately
+            self._ai_title_generated = True
+            self._on_title_generated(self._ai_conversation_id, title_text)
+            escaped = html.escape(title_text)
+            self._append_html_to_webview(
+                f'<div style="color:#818cf8; padding:8px;">标题已设置为: {escaped}</div>'
+            )
+        else:
+            # Mode 1: generate via LLM using first 3 rounds
+            self._cancel_streaming_if_active()
+
+            context_msgs = self._ai_messages[:6]
+            context_lines = []
+            for m in context_msgs:
+                role = "User" if m.get("role") == "user" else "Assistant"
+                content = m.get("content", "")
+                context_lines.append(f"{role}: {content}")
+            context_text = "\n\n".join(context_lines)
+
+            if not context_text.strip():
+                self._append_html_to_webview(
+                    '<div style="color:#f43f5e; padding:8px;">对话内容为空，无法生成标题。</div>'
+                )
+                return
+
+            try:
+                base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+                    self._ai_last_prompt_obj,
+                    getattr(self, "_ai_active_model_info", None)
+                )
+            except Exception:
+                base_url = ""
+                api_key = ""
+
+            if base_url and api_key:
+                self._ai_title_generated = True
+                self._append_html_to_webview(
+                    '<div style="color:#818cf8; padding:8px;">正在根据对话内容重新生成标题...</div>'
+                )
+                threading.Thread(
+                    target=self._generate_title_from_context,
+                    args=(context_text, self._ai_conversation_id, base_url, api_key, model_name,
+                          temperature, max_tokens, top_p),
+                    daemon=True
+                ).start()
+            else:
+                self._append_html_to_webview(
+                    '<div style="color:#f43f5e; padding:8px;">LLM 配置不完整，无法生成标题。</div>'
+                )
 
     def _rollback_to_round(self, round_index: int):
         msgs = self._ai_messages
@@ -4204,6 +4273,41 @@ class ClipboardPanel(Gtk.Box):
                     GLib.idle_add(self._on_title_generated, conv_id, title)
         except Exception as e:
             print(f"Error generating conversation title: {e}", flush=True)
+
+    def _generate_title_from_context(self, context_text: str, conv_id: str,
+                                      base_url: str, api_key: str, model_name: str,
+                                      temperature: float = DEFAULT_TEMPERATURE,
+                                      max_tokens: int = DEFAULT_MAX_TOKENS,
+                                      top_p: float = DEFAULT_TOP_P):
+        """Background thread: generate a short title based on conversation context."""
+        try:
+            title_prompt = (
+                f"对话内容：\n{context_text}\n\n"
+                f"请为以上对话生成一个简明、专业的中文标题。\n"
+                f"规则：\n"
+                f"1. 概括整个对话的核心意图、主题或所涉及的关键技术。\n"
+                f"2. 标题长度严格控制在 12 个汉字以内。\n"
+                f"3. 必须且只能按照以下 XML 标签格式输出，不要附加任何解释、前缀、后缀、反引号或多余字符：\n"
+                f"   <title>具体标题</title>\n"
+                f"示例：\n"
+                f"对话内容：\n"
+                f"User: 如何用Python爬取动态网页数据？\n"
+                f"Assistant: 可以使用requests库配合BeautifulSoup解析HTML...\n"
+                f"User: 如果页面是异步加载的呢？\n"
+                f"输出：<title>Python异步爬虫方案</title>"
+            )
+            content = self._call_llm_sync(
+                [{"role": "user", "content": title_prompt}],
+                base_url, api_key, model_name, timeout=15,
+                temperature=temperature, max_tokens=max_tokens, top_p=top_p,
+            )
+            if content:
+                m = re.search(r'<title>(.+?)</title>', content, re.IGNORECASE)
+                if m:
+                    title = m.group(1).strip()
+                    GLib.idle_add(self._on_title_generated, conv_id, title)
+        except Exception as e:
+            print(f"Error generating conversation title from context: {e}", flush=True)
 
     def _on_title_generated(self, conv_id: str, title: str):
         """Idle callback: update conversation title in store and refresh dropdown."""
