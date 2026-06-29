@@ -2737,6 +2737,11 @@ class ClipboardPanel(Gtk.Box):
                     margin-bottom: 8px;
                 }}
                 {pygments_css}
+                /* Pygments classifies brackets/arrows in language-less code blocks as
+                   Token.Error (.err), rendering them with red text+background (monokai
+                   theme: #ED007E on #1E0010). Override to use normal text color so they
+                   don't appear as distracting red boxes in LLM response code blocks. */
+                .codehilite .err {{ color: inherit; background-color: transparent; border: none; }}
                 .copy-btn {{
                     position: absolute;
                     top: 4px;
