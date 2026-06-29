@@ -12,6 +12,7 @@ import os
 import subprocess
 import urllib.parse
 import re
+import html
 from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional, Callable
 
@@ -115,6 +116,7 @@ class _DuckDuckGoResultParser(HTMLParser):
         self._in_url = False
         self._in_snippet = False
         self._current: Dict[str, str] = {}
+        self._div_depth = 0
 
     def handle_starttag(self, tag, attrs):
         attrs_dict = dict(attrs)
@@ -123,8 +125,13 @@ class _DuckDuckGoResultParser(HTMLParser):
         if "result__body" in cls:
             self._in_result_body = True
             self._current = {}
+            self._div_depth = 1
+            return
         if not self._in_result_body:
             return
+
+        if tag == "div":
+            self._div_depth += 1
 
         if "result__title" in cls:
             self._in_title = True
@@ -150,21 +157,22 @@ class _DuckDuckGoResultParser(HTMLParser):
             elif self._in_snippet and tag == "a":
                 self._in_snippet = False
 
-        if tag == "div" and self._in_result_body and self._current.get("title"):
-            # Check if this closes the result__body by proximity
-            if self.results is not None and len(self.results) < self.max_results:
-                # Deduplicate by title
-                title = self._current.get("title", "").strip()
-                url = self._current.get("url", "").strip()
-                snippet = self._current.get("snippet", "").strip()
-                if title and not any(r["title"] == title for r in self.results):
-                    self.results.append({
-                        "title": title,
-                        "url": url,
-                        "snippet": snippet,
-                    })
-            self._in_result_body = False
-            self._current = {}
+            if tag == "div":
+                self._div_depth -= 1
+                if self._div_depth <= 0 and self._current.get("title"):
+                    if self.results is not None and len(self.results) < self.max_results:
+                        # Deduplicate by title
+                        title = self._current.get("title", "").strip()
+                        url = self._current.get("url", "").strip()
+                        snippet = self._current.get("snippet", "").strip()
+                        if title and not any(r["title"] == title for r in self.results):
+                            self.results.append({
+                                "title": title,
+                                "url": url,
+                                "snippet": snippet,
+                            })
+                    self._in_result_body = False
+                    self._current = {}
 
 
 # ── Tool Functions ─────────────────────────────────────────────────────────
@@ -173,7 +181,7 @@ class _DuckDuckGoResultParser(HTMLParser):
 MAX_TOOL_RESULT_CHARS = 5000
 
 # Obscura headless browser binary (pre-installed)
-_OBSCURA_BIN = "/home/hzb/.local/bin/obscura"
+_OBSCURA_BIN = os.environ.get("OBSCURA_BIN") or os.path.expanduser("~/.local/bin/obscura")
 
 _OBSCURA_EVAL_TPL = """JSON.stringify(
     Array.from(document.querySelectorAll('.result__body')).slice(0, %d).map(el => ({
@@ -431,14 +439,14 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
 
         if name == "web_search":
             query = args.get("query", "")
-            safe_query = _html_escape(query)
+            safe_query = html.escape(query)
             parts.append(f'<div class="tool-call-info">🔍 <b>网络搜索：</b>{safe_query}</div>')
         elif name == "web_fetch":
             url = args.get("url", "")
-            safe_url = _html_escape(url)
+            safe_url = html.escape(url)
             parts.append(f'<div class="tool-call-info">📄 <b>获取页面：</b>{safe_url}</div>')
         else:
-            safe_name = _html_escape(name)
+            safe_name = html.escape(name)
             parts.append(f'<div class="tool-call-info">🔧 <b>工具调用：</b>{safe_name}</div>')
 
     return "\n".join(parts)
@@ -450,18 +458,9 @@ def format_tool_result_for_display(name: str, content: str) -> str:
     Results are collapsed to avoid visual noise; only the tool name is shown
     as a brief line (full content is rendered during conversation rebuild).
     """
-    safe_name = _html_escape(name)
+    safe_name = html.escape(name)
     return (
         f'<div class="tool-result">'
         f'<b>📎 工具执行完成：</b>{safe_name}'
         f'</div>'
     )
-
-
-def _html_escape(text: str) -> str:
-    """Minimal HTML escaping."""
-    return (text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;"))
