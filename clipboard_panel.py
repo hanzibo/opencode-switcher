@@ -1117,7 +1117,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_hint_label.set_margin_end(4)
         self._ai_hint_label.set_opacity(0.6)
         self._ai_hint_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self._ai_hint_label.set_max_width_chars(55)
+        self._ai_hint_label.set_max_width_chars(55)  # ~55 chars fits panel width without stretching
         self._ai_hint_label.set_tooltip_text(hint_text)
         self._ai_input_area.pack_start(self._ai_hint_label, False, False, 0)
 
@@ -3164,7 +3164,8 @@ class ClipboardPanel(Gtk.Box):
         )
         self._append_html_to_webview(notice_html)
 
-    def _handle_retry_command(self):
+    def _cancel_streaming_if_active(self):
+        """If a streaming response is in progress, cancel it and reset state."""
         if self._ai_streaming:
             self._ai_cancel_event.set()
             self._flush_stream_queue()
@@ -3172,6 +3173,9 @@ class ClipboardPanel(Gtk.Box):
             self._ai_streaming = False
             self._ai_spinner.stop()
             self._ai_spinner.hide()
+
+    def _handle_retry_command(self):
+        self._cancel_streaming_if_active()
 
         msgs = self._ai_messages
         if not msgs:
@@ -3198,19 +3202,32 @@ class ClipboardPanel(Gtk.Box):
         self._save_current_conversation()
 
     def _handle_rollback_command(self):
-        if self._ai_streaming:
-            self._ai_cancel_event.set()
-            self._flush_stream_queue()
-            self._update_send_button(False)
-            self._ai_streaming = False
-            self._ai_spinner.stop()
-            self._ai_spinner.hide()
+        self._cancel_streaming_if_active()
 
         msgs = self._ai_messages
         total_rounds = len(msgs) // 2
         if total_rounds == 0:
             return
+        self._append_html_to_webview(self._build_round_cards_html(msgs, total_rounds))
 
+    def _rollback_to_round(self, round_index: int):
+        msgs = self._ai_messages
+        end_idx = round_index * 2 + 2
+        if end_idx >= len(msgs):
+            return
+        discarded = msgs[end_idx].get("content", "") if end_idx < len(msgs) and msgs[end_idx].get("role") == "user" else ""
+        self._ai_messages = msgs[:end_idx]
+        buf = self._ai_entry.get_buffer()
+        buf.set_text(discarded)
+        buf.place_cursor(buf.get_end_iter())
+        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript("_autoScroll = true;", None, None)
+        self._render_markdown(self._ai_markdown_text)
+        self._save_current_conversation()
+
+    def _build_round_cards_html(self, msgs, total_rounds):
+        """Build HTML displaying conversation rounds as clickable cards."""
         is_dark = getattr(self, "_theme", "dark") == "dark"
         if is_dark:
             user_c = "#818cf8"
@@ -3262,7 +3279,7 @@ class ClipboardPanel(Gtk.Box):
             )
 
         html = (
-            f'<div style="border:1px solid {border_c}; border-radius:8px; '
+            f'<div class="rollback-panel" style="border:1px solid {border_c}; border-radius:8px; '
             f'padding:12px 14px; margin:8px 0;">'
             f'<div style="font-size:14px; font-weight:bold; margin-bottom:6px; color:{title_c};">'
             f'══ 对话回滚 ══ '
@@ -3270,26 +3287,10 @@ class ClipboardPanel(Gtk.Box):
             f'</div>{"".join(cards_html)}'
             f'<div style="text-align:right; margin-top:4px;">'
             f'<span style="font-size:12px; opacity:0.4; cursor:pointer;" '
-            f'onclick="this.closest(\'div[style*=\\\'border-radius:8px\\\']\').style.display=\'none\';">'
+            f'onclick="this.closest(\'.rollback-panel\').style.display=\'none\';">'
             f'[× 关闭]</span></div></div>'
         )
-        self._append_html_to_webview(html)
-
-    def _rollback_to_round(self, round_index: int):
-        msgs = self._ai_messages
-        end_idx = round_index * 2 + 2
-        if end_idx > len(msgs):
-            return
-        discarded = msgs[end_idx].get("content", "") if end_idx < len(msgs) and msgs[end_idx].get("role") == "user" else ""
-        self._ai_messages = msgs[:end_idx]
-        buf = self._ai_entry.get_buffer()
-        buf.set_text(discarded)
-        buf.place_cursor(buf.get_end_iter())
-        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
-        if hasattr(self, "_ai_webview") and self._ai_webview:
-            self._ai_webview.run_javascript("_autoScroll = true;", None, None)
-        self._render_markdown(self._ai_markdown_text)
-        self._save_current_conversation()
+        return html
 
     def _show_model_selector(self):
         for old in self._ai_model_listbox.get_children():
