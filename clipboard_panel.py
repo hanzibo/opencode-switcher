@@ -2315,6 +2315,15 @@ class ClipboardPanel(Gtk.Box):
         display_name = f"{model_config.alias} ({model_name})" if model_config else model_name
         return base_url, api_key, model_name, display_name, temperature, max_tokens, top_p
 
+    def _get_title_model_config(self):
+        """Return (base_url, api_key, model_name, temperature, max_tokens, top_p)
+        for the model marked as title-generation model, or None if not set."""
+        model = next((m for m in self._llm_settings_store.models if m.is_title_model), None)
+        if not model:
+            return None
+        return (model.base_url.strip(), model.api_key.strip(), model.model_name.strip(),
+                model.temperature, model.max_tokens, model.top_p)
+
     def _start_new_conversation(self, prompt_text: str):
         self._ai_messages = [{"role": "user", "content": prompt_text}]
         self._ai_conversation_id = None
@@ -3032,10 +3041,14 @@ class ClipboardPanel(Gtk.Box):
 
                 # Trigger background title generation for new conversations
                 try:
-                    base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
-                        self._ai_last_prompt_obj,
-                        getattr(self, "_ai_active_model_info", None)
-                    )
+                    title_cfg = self._get_title_model_config()
+                    if title_cfg:
+                        base_url, api_key, model_name, temperature, max_tokens, top_p = title_cfg
+                    else:
+                        base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+                            self._ai_last_prompt_obj,
+                            getattr(self, "_ai_active_model_info", None)
+                        )
                 except Exception:
                     base_url = ""
                     api_key = ""
@@ -3242,7 +3255,11 @@ class ClipboardPanel(Gtk.Box):
         self._append_html_to_webview(self._build_round_cards_html(msgs, total_rounds))
 
     def _handle_title_command(self, title_text: str):
-        """Handle /title command: set custom title or regenerate via LLM."""
+        """Handle /title command: set custom title or regenerate via LLM.
+
+        Called from _on_send_clicked (GTK signal callback, main thread).
+        Mode 2 sets title inline; Mode 1 spawns a background thread for LLM call.
+        """
         if not self._ai_conversation_id or not self._ai_messages:
             self._append_html_to_webview(
                 '<div style="color:#f43f5e; padding:8px;">没有活跃的对话可供设置标题。</div>'
@@ -3276,10 +3293,14 @@ class ClipboardPanel(Gtk.Box):
                 return
 
             try:
-                base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
-                    self._ai_last_prompt_obj,
-                    getattr(self, "_ai_active_model_info", None)
-                )
+                title_cfg = self._get_title_model_config()
+                if title_cfg:
+                    base_url, api_key, model_name, temperature, max_tokens, top_p = title_cfg
+                else:
+                    base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+                        self._ai_last_prompt_obj,
+                        getattr(self, "_ai_active_model_info", None)
+                    )
             except Exception:
                 base_url = ""
                 api_key = ""
@@ -3833,7 +3854,7 @@ class ClipboardPanel(Gtk.Box):
                 conv.messages = [ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages]
                 conv.model_config_snapshot = model_snapshot
             else:
-                local_title = "untitled"
+                local_title = "New Conversation"
                 if self._ai_messages:
                     local_title = _extract_local_title(
                         self._ai_messages[0].get("content", "")
@@ -4241,28 +4262,18 @@ class ClipboardPanel(Gtk.Box):
             temperature=temperature, max_tokens=max_tokens, top_p=top_p,
         )
 
-    def _generate_conversation_title(self, first_message: str, conv_id: str,
-                                      base_url: str, api_key: str, model_name: str,
-                                      temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
-                                      top_p: float = DEFAULT_TOP_P):
-        """Background thread: silently generate a short title for a new conversation."""
+    def _call_llm_and_set_title(self, prompt: str, conv_id: str,
+                                 base_url: str, api_key: str, model_name: str,
+                                 temperature: float, max_tokens: int, top_p: float,
+                                 log_label: str = "conversation title"):
+        """Call LLM with a title-generation prompt, parse <title> and update conversation.
+
+        Shared by _generate_conversation_title and _generate_title_from_context.
+        Designed to run in a background thread (result dispatched via GLib.idle_add).
+        """
         try:
-            title_prompt = (
-                f"第一条消息：\n{first_message}\n\n"
-                f"请为以上对话的第一条消息生成一个简明、专业的中文标题。\n"
-                f"规则：\n"
-                f"1. 概括用户提问的核心意图、主题或所涉及的关键技术，避免“代码分析”、“陈述文本解释”等泛泛而谈的废话。\n"
-                f"2. 标题长度严格控制在 12 个汉字以内。\n"
-                f"3. 必须且只能按照以下 XML 标签格式输出，不要附加任何解释、前缀、后缀、反引号或多余字符：\n"
-                f"   <title>具体标题</title>\n"
-                f"示例：\n"
-                f"输入：如何用Python爬取动态网页数据？\n"
-                f"输出：<title>Python动态爬虫</title>\n"
-                f"输入：try {{ await client.session.get(id) }} catch {{ ... }}\n"
-                f"输出：<title>异步错误处理</title>"
-            )
             content = self._call_llm_sync(
-                [{"role": "user", "content": title_prompt}],
+                [{"role": "user", "content": prompt}],
                 base_url, api_key, model_name, timeout=15,
                 temperature=temperature, max_tokens=max_tokens, top_p=top_p,
             )
@@ -4272,42 +4283,58 @@ class ClipboardPanel(Gtk.Box):
                     title = m.group(1).strip()
                     GLib.idle_add(self._on_title_generated, conv_id, title)
         except Exception as e:
-            print(f"Error generating conversation title: {e}", flush=True)
+            print(f"Error generating {log_label}: {e}", flush=True)
+
+    def _generate_conversation_title(self, first_message: str, conv_id: str,
+                                      base_url: str, api_key: str, model_name: str,
+                                      temperature: float = DEFAULT_TEMPERATURE,
+                                      max_tokens: int = DEFAULT_MAX_TOKENS,
+                                      top_p: float = DEFAULT_TOP_P):
+        """Background thread: generate a short title using only the first message."""
+        title_prompt = (
+            f"第一条消息：\n{first_message}\n\n"
+            f"请为以上对话的第一条消息生成一个简明、专业的中文标题。\n"
+            f"规则：\n"
+            f"1. 概括用户提问的核心意图、主题或所涉及的关键技术，避免“代码分析”、“陈述文本解释”等泛泛而谈的废话。\n"
+            f"2. 标题长度严格控制在 12 个汉字以内。\n"
+            f"3. 必须且只能按照以下 XML 标签格式输出，不要附加任何解释、前缀、后缀、反引号或多余字符：\n"
+            f"   <title>具体标题</title>\n"
+            f"示例：\n"
+            f"输入：如何用Python爬取动态网页数据？\n"
+            f"输出：<title>Python动态爬虫</title>\n"
+            f"输入：try {{ await client.session.get(id) }} catch {{ ... }}\n"
+            f"输出：<title>异步错误处理</title>"
+        )
+        self._call_llm_and_set_title(
+            title_prompt, conv_id, base_url, api_key, model_name,
+            temperature, max_tokens, top_p, log_label="conversation title"
+        )
 
     def _generate_title_from_context(self, context_text: str, conv_id: str,
                                       base_url: str, api_key: str, model_name: str,
                                       temperature: float = DEFAULT_TEMPERATURE,
                                       max_tokens: int = DEFAULT_MAX_TOKENS,
                                       top_p: float = DEFAULT_TOP_P):
-        """Background thread: generate a short title based on conversation context."""
-        try:
-            title_prompt = (
-                f"对话内容：\n{context_text}\n\n"
-                f"请为以上对话生成一个简明、专业的中文标题。\n"
-                f"规则：\n"
-                f"1. 概括整个对话的核心意图、主题或所涉及的关键技术。\n"
-                f"2. 标题长度严格控制在 12 个汉字以内。\n"
-                f"3. 必须且只能按照以下 XML 标签格式输出，不要附加任何解释、前缀、后缀、反引号或多余字符：\n"
-                f"   <title>具体标题</title>\n"
-                f"示例：\n"
-                f"对话内容：\n"
-                f"User: 如何用Python爬取动态网页数据？\n"
-                f"Assistant: 可以使用requests库配合BeautifulSoup解析HTML...\n"
-                f"User: 如果页面是异步加载的呢？\n"
-                f"输出：<title>Python异步爬虫方案</title>"
-            )
-            content = self._call_llm_sync(
-                [{"role": "user", "content": title_prompt}],
-                base_url, api_key, model_name, timeout=15,
-                temperature=temperature, max_tokens=max_tokens, top_p=top_p,
-            )
-            if content:
-                m = re.search(r'<title>(.+?)</title>', content, re.IGNORECASE)
-                if m:
-                    title = m.group(1).strip()
-                    GLib.idle_add(self._on_title_generated, conv_id, title)
-        except Exception as e:
-            print(f"Error generating conversation title from context: {e}", flush=True)
+        """Background thread: generate a short title based on full conversation context."""
+        title_prompt = (
+            f"对话内容：\n{context_text}\n\n"
+            f"请为以上对话生成一个简明、专业的中文标题。\n"
+            f"规则：\n"
+            f"1. 概括整个对话的核心意图、主题或所涉及的关键技术。\n"
+            f"2. 标题长度严格控制在 12 个汉字以内。\n"
+            f"3. 必须且只能按照以下 XML 标签格式输出，不要附加任何解释、前缀、后缀、反引号或多余字符：\n"
+            f"   <title>具体标题</title>\n"
+            f"示例：\n"
+            f"对话内容：\n"
+            f"User: 如何用Python爬取动态网页数据？\n"
+            f"Assistant: 可以使用requests库配合BeautifulSoup解析HTML...\n"
+            f"User: 如果页面是异步加载的呢？\n"
+            f"输出：<title>Python异步爬虫方案</title>"
+        )
+        self._call_llm_and_set_title(
+            title_prompt, conv_id, base_url, api_key, model_name,
+            temperature, max_tokens, top_p, log_label="conversation title from context"
+        )
 
     def _on_title_generated(self, conv_id: str, title: str):
         """Idle callback: update conversation title in store and refresh dropdown."""
@@ -4661,8 +4688,12 @@ class ClipboardPanel(Gtk.Box):
         model_hbox.pack_start(model_name_entry, True, True, 0)
         vbox_right.pack_start(model_hbox, False, False, 0)
 
-        # Default mark check button
+        # Check button row: default model + title generation model
+        check_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 16)
         default_check = Gtk.CheckButton.new_with_label("设为默认模型")
+        title_check = Gtk.CheckButton.new_with_label("标题生成模型")
+        check_hbox.pack_start(default_check, False, False, 0)
+        check_hbox.pack_start(title_check, False, False, 0)
         default_check.set_margin_top(4)
         default_check.set_margin_bottom(4)
 
@@ -4724,7 +4755,7 @@ class ClipboardPanel(Gtk.Box):
 
         params_frame.add(params_vbox)
 
-        vbox_right.pack_start(default_check, False, False, 0)
+        vbox_right.pack_start(check_hbox, False, False, 0)
         vbox_right.pack_start(params_frame, False, False, 0)
 
         # Actions box (Delete button)
@@ -4816,9 +4847,19 @@ class ClipboardPanel(Gtk.Box):
                 m.api_key = api_key_entry.get_text().strip()
                 m.model_name = model_name_entry.get_text().strip()
                 m.is_default = default_check.get_active()
+                m.is_title_model = title_check.get_active()
                 m.temperature = temperature_spin.get_value()
                 m.max_tokens = int(max_tokens_spin.get_value())
                 m.top_p = top_p_spin.get_value()
+
+        def _model_label(m):
+            parts = []
+            if m.is_default:
+                parts.append("默认")
+            if m.is_title_model:
+                parts.append("标题")
+            suffix = f" ({', '.join(parts)})" if parts else ""
+            return m.alias + suffix
 
         def rebuild_model_list():
             self._updating_model_ui = True
@@ -4831,7 +4872,7 @@ class ClipboardPanel(Gtk.Box):
                 for idx, m in enumerate(local_models):
                     row = Gtk.ListBoxRow.new()
                     row.idx = idx
-                    label_text = f"{m.alias} (默认)" if m.is_default else m.alias
+                    label_text = _model_label(m)
                     lbl = Gtk.Label.new(label_text)
                     lbl.set_xalign(0)
                     lbl.set_margin_start(8)
@@ -4859,6 +4900,7 @@ class ClipboardPanel(Gtk.Box):
                 api_key_entry.set_text(m.api_key)
                 model_name_entry.set_text(m.model_name)
                 default_check.set_active(m.is_default)
+                title_check.set_active(m.is_title_model)
                 temperature_spin.set_value(m.temperature)
                 max_tokens_spin.set_value(m.max_tokens)
                 top_p_spin.set_value(m.top_p)
@@ -4869,6 +4911,7 @@ class ClipboardPanel(Gtk.Box):
                 api_key_entry.set_sensitive(True)
                 model_name_entry.set_sensitive(True)
                 default_check.set_sensitive(True)
+                title_check.set_sensitive(True)
                 temperature_spin.set_sensitive(True)
                 max_tokens_spin.set_sensitive(True)
                 top_p_spin.set_sensitive(True)
@@ -4880,6 +4923,7 @@ class ClipboardPanel(Gtk.Box):
                 api_key_entry.set_text("")
                 model_name_entry.set_text("")
                 default_check.set_active(False)
+                title_check.set_active(False)
                 temperature_spin.set_value(DEFAULT_TEMPERATURE)
                 max_tokens_spin.set_value(DEFAULT_MAX_TOKENS)
                 top_p_spin.set_value(DEFAULT_TOP_P)
@@ -4890,6 +4934,7 @@ class ClipboardPanel(Gtk.Box):
                 api_key_entry.set_sensitive(False)
                 model_name_entry.set_sensitive(False)
                 default_check.set_sensitive(False)
+                title_check.set_sensitive(False)
                 temperature_spin.set_sensitive(False)
                 max_tokens_spin.set_sensitive(False)
                 top_p_spin.set_sensitive(False)
@@ -4956,9 +5001,7 @@ class ClipboardPanel(Gtk.Box):
                 if row:
                     lbl = row.get_child()
                     if isinstance(lbl, Gtk.Label):
-                        is_default = local_models[self._active_model_idx].is_default
-                        label_text = f"{alias_text} (默认)" if is_default else alias_text
-                        lbl.set_text(label_text)
+                        lbl.set_text(_model_label(local_models[self._active_model_idx]))
 
         def on_default_toggled(widget):
             if self._updating_model_ui:
@@ -4972,14 +5015,29 @@ class ClipboardPanel(Gtk.Box):
                         if row:
                             lbl = row.get_child()
                             if isinstance(lbl, Gtk.Label):
-                                label_text = f"{m.alias} (默认)" if m.is_default else m.alias
-                                lbl.set_text(label_text)
+                                lbl.set_text(_model_label(m))
                 else:
                     has_other_default = any(m.is_default for idx, m in enumerate(local_models) if idx != self._active_model_idx)
                     if not has_other_default:
                         self._updating_model_ui = True
                         widget.set_active(True)
                         self._updating_model_ui = False
+
+        def on_title_toggled(widget):
+            if self._updating_model_ui:
+                return
+            if 0 <= self._active_model_idx < len(local_models):
+                active = widget.get_active()
+                if active:
+                    for idx, m in enumerate(local_models):
+                        m.is_title_model = (idx == self._active_model_idx)
+                        row = model_list_box.get_row_at_index(idx)
+                        if row:
+                            lbl = row.get_child()
+                            if isinstance(lbl, Gtk.Label):
+                                label_text = _model_label(m)
+                                lbl.set_text(label_text)
+                # uncheck is always allowed (title model is optional)
 
         def refresh_model_combo():
             model_combo.remove_all()
@@ -4992,6 +5050,7 @@ class ClipboardPanel(Gtk.Box):
         delete_model_btn.connect("clicked", on_delete_model_clicked)
         alias_entry.connect("changed", on_alias_entry_changed)
         default_check.connect("toggled", on_default_toggled)
+        title_check.connect("toggled", on_title_toggled)
 
         # Refresh model combo at startup
         refresh_model_combo()

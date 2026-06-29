@@ -828,6 +828,7 @@ class LLMModelConfig:
     api_key: str
     model_name: str
     is_default: bool = False
+    is_title_model: bool = False
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
     top_p: float = DEFAULT_TOP_P
@@ -866,6 +867,7 @@ class LLMSettingsStore:
                         api_key=m.get("api_key", ""),
                         model_name=m.get("model_name", ""),
                         is_default=m.get("is_default", False),
+                        is_title_model=m.get("is_title_model", False),
                         temperature=m.get("temperature", DEFAULT_TEMPERATURE),
                         max_tokens=m.get("max_tokens", DEFAULT_MAX_TOKENS),
                         top_p=m.get("top_p", DEFAULT_TOP_P),
