@@ -376,15 +376,15 @@ def _clean_history_title(title: str) -> str:
     return cleaned
 
 
-def _extract_local_title(text: str) -> str:
+def _extract_local_title(message_content: str) -> str:
     """从消息文本中提取简短标题，作为 LLM 完成前的占位符。
 
     纯规则提取，零外部依赖，即时返回。LLM 生成完成后会替换此值。
     返回的标题一定是非空字符串（默认 fallback "New Conversation"）。
     """
-    if not text:
+    if not message_content:
         return "New Conversation"
-    first_line = text.split("\n")[0].strip()
+    first_line = message_content.split("\n")[0].strip()
     if not first_line:
         return "New Conversation"
     cleaned = re.sub(r"^[\s#*>\-+`]+", "", first_line).strip()
@@ -3834,14 +3834,15 @@ class ClipboardPanel(Gtk.Box):
     def _save_current_conversation(self, model_snapshot: Dict[str, Any],
                                     preserve_updated_at: bool = False):
         """Save or update the current active conversation to the store, preserving its title."""
+        local_title = "New Conversation"
+        if self._ai_messages:
+            local_title = _extract_local_title(
+                self._ai_messages[0].get("content", "")
+            )
+
         if not self._ai_conversation_id:
             now = int(time.time() * 1000)
             self._ai_conversation_created_at = now
-            local_title = "New Conversation"
-            if self._ai_messages:
-                local_title = _extract_local_title(
-                    self._ai_messages[0].get("content", "")
-                )
             conv = self._conversation_store.create_conversation(
                 title=local_title,
                 model_config=model_snapshot
@@ -3855,11 +3856,6 @@ class ClipboardPanel(Gtk.Box):
                 conv.messages = [ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages]
                 conv.model_config_snapshot = model_snapshot
             else:
-                local_title = "New Conversation"
-                if self._ai_messages:
-                    local_title = _extract_local_title(
-                        self._ai_messages[0].get("content", "")
-                    )
                 conv = Conversation(
                     id=self._ai_conversation_id,
                     title=local_title,
@@ -4382,6 +4378,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_active_model_info = None
         self._ai_last_prompt_obj = None
         self._ai_title_generated = False
+        self._ai_pending_title_notification = False
         
         self._ai_input_area.set_no_show_all(False)
         self._ai_input_area.show_all()
