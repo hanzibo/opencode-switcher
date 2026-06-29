@@ -514,9 +514,31 @@ class _LLMHttpClient:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
         }
+        cleaned_messages = []
+        for m in messages:
+            role = m.get("role")
+            content = m.get("content")
+            msg = {"role": role}
+            if role == "assistant":
+                tool_calls = m.get("tool_calls")
+                if tool_calls:
+                    msg["tool_calls"] = tool_calls
+                    if content:
+                        msg["content"] = content
+                    else:
+                        msg["content"] = None
+                else:
+                    msg["content"] = content or ""
+            elif role == "tool":
+                msg["content"] = content or ""
+                msg["tool_call_id"] = m.get("tool_call_id") or ""
+            else:
+                msg["content"] = content or ""
+            cleaned_messages.append(msg)
+
         body = {
             "model": model_name,
-            "messages": messages,
+            "messages": cleaned_messages,
             "stream": stream,
             "temperature": temperature,
             "max_tokens": max_tokens,
@@ -2723,6 +2745,8 @@ class ClipboardPanel(Gtk.Box):
                     if getattr(self, "_ai_request_id", 0) != req_id:
                         return
                     result = tool_registry.execute_tool_call(tc)
+                    if getattr(self, "_ai_request_id", 0) != req_id:
+                        return
                     self._ai_messages.append({
                         "role": "tool",
                         "tool_call_id": tc.get("id", ""),
@@ -4060,7 +4084,25 @@ class ClipboardPanel(Gtk.Box):
         # Keep first message, drop oldest from the rest to stay within trim target
         first = self._ai_messages[:1]
         rest = self._ai_messages[1:]
-        self._ai_messages = first + rest[-(AI_MESSAGES_TRIM_TARGET - 1):]
+        target_len = AI_MESSAGES_TRIM_TARGET - 1
+        start_idx = len(rest) - target_len
+        if start_idx < 0:
+            start_idx = 0
+
+        # Adjust start_idx backward if it lands on a "tool" message to keep
+        # the tool call sequence intact.
+        while start_idx > 0 and rest[start_idx].get("role") == "tool":
+            start_idx -= 1
+
+        # If we reached the very beginning (start_idx == 0) and rest[0] is still "tool",
+        # it means the initiating assistant message was pruned. To prevent sending
+        # orphan tool messages (which crashes the API), we must move start_idx forward
+        # past the block of tool messages.
+        if start_idx == 0 and rest and rest[0].get("role") == "tool":
+            while start_idx < len(rest) and rest[start_idx].get("role") == "tool":
+                start_idx += 1
+
+        self._ai_messages = first + rest[start_idx:]
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         self._render_markdown(self._ai_markdown_text)
 

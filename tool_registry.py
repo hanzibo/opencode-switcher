@@ -115,7 +115,6 @@ class _DuckDuckGoResultParser(HTMLParser):
         self._in_url = False
         self._in_snippet = False
         self._current: Dict[str, str] = {}
-        self._depth = 0
 
     def handle_starttag(self, tag, attrs):
         attrs_dict = dict(attrs)
@@ -124,7 +123,6 @@ class _DuckDuckGoResultParser(HTMLParser):
         if "result__body" in cls:
             self._in_result_body = True
             self._current = {}
-            self._depth = 0
         if not self._in_result_body:
             return
 
@@ -151,10 +149,6 @@ class _DuckDuckGoResultParser(HTMLParser):
                 self._in_url = False
             elif self._in_snippet and tag == "a":
                 self._in_snippet = False
-            elif tag == "div":
-                # Heuristic: close of nested div may close result__body
-                # We track depth to handle nested divs properly
-                pass
 
         if tag == "div" and self._in_result_body and self._current.get("title"):
             # Check if this closes the result__body by proximity
@@ -287,6 +281,20 @@ _SUSPICIOUS_PATTERNS = re.compile(
 )
 
 
+def _is_cjk(ch: str) -> bool:
+    """Check if character is in CJK ideograph, punctuation or fullwidth range."""
+    val = ord(ch)
+    return (
+        (0x4E00 <= val <= 0x9FFF) or      # CJK Unified Ideographs
+        (0x3400 <= val <= 0x4DBF) or      # CJK Ext A
+        (0x3000 <= val <= 0x303F) or      # CJK Symbols & Punctuation
+        (0xFF00 <= val <= 0xFFEF) or      # Halfwidth/Fullwidth Forms
+        (0x3040 <= val <= 0x309F) or      # Hiragana
+        (0x30A0 <= val <= 0x30FF) or      # Katakana
+        (0xAC00 <= val <= 0xD7AF)         # Hangul Syllables
+    )
+
+
 def _try_requests_fetch(url: str, max_chars: int) -> Optional[str]:
     """Try fetching a page via plain HTTP requests. Returns None on failure
     or if the result looks suspicious (too short, garbled, JS-required page)."""
@@ -315,15 +323,16 @@ def _try_requests_fetch(url: str, max_chars: int) -> Optional[str]:
     if _SUSPICIOUS_PATTERNS.search(text):
         return None
 
-    # Check for excessive garbled content: >15% non-ASCII characters
+    # Check for excessive garbled content: >15% non-ASCII (excluding CJK) characters
     if text:
-        non_ascii = sum(1 for ch in text if ord(ch) > 127)
-        if non_ascii / len(text) > 0.15:
+        non_ascii_non_cjk = sum(1 for ch in text if ord(ch) > 127 and not _is_cjk(ch))
+        if non_ascii_non_cjk / len(text) > 0.15:
             return None
 
     if len(text) > max_chars:
         text = text[:max_chars] + f"\n\n...（内容已截断）"
     return text
+
 
 
 def _try_obscura_fetch(url: str, max_chars: int) -> str:
@@ -438,17 +447,10 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
 def format_tool_result_for_display(name: str, content: str) -> str:
     """Format a tool execution result into an HTML snippet for WebView display.
 
-    Results are collapsed/hidden to avoid visual noise; tool calls are visible
-    but results are only shown as a brief line.
+    Results are collapsed to avoid visual noise; only the tool name is shown
+    as a brief line (full content is rendered during conversation rebuild).
     """
     safe_name = _html_escape(name)
-
-    # Truncate very long results for display
-    display = content
-    if len(display) > 500:
-        display = display[:500] + f"\n\n...（共 {len(content)} 字符）"
-
-    safe_content = _html_escape(display)
     return (
         f'<div class="tool-result">'
         f'<b>📎 工具执行完成：</b>{safe_name}'
