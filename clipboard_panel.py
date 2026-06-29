@@ -376,6 +376,26 @@ def _clean_history_title(title: str) -> str:
     return cleaned
 
 
+def _extract_local_title(text: str) -> str:
+    """从消息文本中提取简短标题，作为 LLM 完成前的占位符。
+
+    纯规则提取，零外部依赖，即时返回。LLM 生成完成后会替换此值。
+    返回的标题一定是非空字符串（默认 fallback "New Conversation"）。
+    """
+    if not text:
+        return "New Conversation"
+    first_line = text.split("\n")[0].strip()
+    if not first_line:
+        return "New Conversation"
+    cleaned = re.sub(r"^[\s#*>\-+`]+", "", first_line).strip()
+    cleaned = cleaned.strip(" \"'()[]{}*`_~")
+    if not cleaned:
+        return "New Conversation"
+    if len(cleaned) > 25:
+        cleaned = cleaned[:22] + "..."
+    return cleaned
+
+
 def _textview_draw_placeholder(widget, cr):
     """Draw placeholder text on a Gtk.TextView when its buffer is empty.
 
@@ -801,6 +821,7 @@ class ClipboardPanel(Gtk.Box):
         btn_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
         self._ai_history_btn_label = Gtk.Label.new("历史对话")
         self._ai_history_btn_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self._ai_history_btn_label.set_max_width_chars(15)
         self._ai_history_btn_label.set_xalign(0)
         arrow = Gtk.Label.new("▾")
         
@@ -3010,12 +3031,12 @@ class ClipboardPanel(Gtk.Box):
 
                 # Trigger background title generation for new conversations
                 try:
-                    _, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+                    base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
                         self._ai_last_prompt_obj,
                         getattr(self, "_ai_active_model_info", None)
                     )
-                    base_url = (getattr(self, "_ai_active_model_info", None) or {}).get("base_url", "")
                 except Exception:
+                    base_url = ""
                     api_key = ""
                 if (not self._ai_title_generated
                         and self._ai_conversation_id
@@ -3725,8 +3746,13 @@ class ClipboardPanel(Gtk.Box):
         if not self._ai_conversation_id:
             now = int(time.time() * 1000)
             self._ai_conversation_created_at = now
+            local_title = "New Conversation"
+            if self._ai_messages:
+                local_title = _extract_local_title(
+                    self._ai_messages[0].get("content", "")
+                )
             conv = self._conversation_store.create_conversation(
-                title="untitled",
+                title=local_title,
                 model_config=model_snapshot
             )
             self._ai_conversation_id = conv.id
@@ -3738,9 +3764,14 @@ class ClipboardPanel(Gtk.Box):
                 conv.messages = [ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages]
                 conv.model_config_snapshot = model_snapshot
             else:
+                local_title = "untitled"
+                if self._ai_messages:
+                    local_title = _extract_local_title(
+                        self._ai_messages[0].get("content", "")
+                    )
                 conv = Conversation(
                     id=self._ai_conversation_id,
-                    title="untitled",
+                    title=local_title,
                     system_prompt="",
                     messages=[ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages],
                     model_config_snapshot=model_snapshot,
@@ -3883,6 +3914,7 @@ class ClipboardPanel(Gtk.Box):
             lbl.set_margin_top(6)
             lbl.set_margin_bottom(6)
             lbl.set_ellipsize(Pango.EllipsizeMode.END)
+            lbl.set_max_width_chars(25)
             
             if edit_mode:
                 hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
@@ -4147,7 +4179,7 @@ class ClipboardPanel(Gtk.Box):
         """Background thread: silently generate a short title for a new conversation."""
         try:
             title_prompt = (
-                f"<{first_message}>\n"
+                f"第一条消息：\n{first_message}\n\n"
                 f"请为以上对话的第一条消息生成一个简明、专业的中文标题。\n"
                 f"规则：\n"
                 f"1. 概括用户提问的核心意图、主题或所涉及的关键技术，避免“代码分析”、“陈述文本解释”等泛泛而谈的废话。\n"
@@ -4155,9 +4187,9 @@ class ClipboardPanel(Gtk.Box):
                 f"3. 必须且只能按照以下 XML 标签格式输出，不要附加任何解释、前缀、后缀、反引号或多余字符：\n"
                 f"   <title>具体标题</title>\n"
                 f"示例：\n"
-                f"输入：\"如何用Python爬取动态网页数据？\"\n"
+                f"输入：如何用Python爬取动态网页数据？\n"
                 f"输出：<title>Python动态爬虫</title>\n"
-                f"输入：\"try {{ await client.session.get(id) }} catch {{ ... }}\"\n"
+                f"输入：try {{ await client.session.get(id) }} catch {{ ... }}\n"
                 f"输出：<title>异步错误处理</title>"
             )
             content = self._call_llm_sync(
@@ -4166,7 +4198,6 @@ class ClipboardPanel(Gtk.Box):
                 temperature=temperature, max_tokens=max_tokens, top_p=top_p,
             )
             if content:
-                import re
                 m = re.search(r'<title>(.+?)</title>', content, re.IGNORECASE)
                 if m:
                     title = m.group(1).strip()
