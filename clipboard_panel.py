@@ -4,6 +4,7 @@ import threading
 import os
 import re
 import html
+import tool_registry
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
@@ -70,6 +71,7 @@ AI_MESSAGES_SOFT_LIMIT = 200
 AI_MESSAGES_TRIM_TARGET = 100
 AI_BTN_LABEL_SEND = "发送"
 AI_BTN_LABEL_STOP = "暂停"
+MAX_TOOL_ITERATIONS = 25  # ReAct loop safety limit
 
 # LaTeX commands that LLMs commonly double-escape (\\frac → \frac, etc.)
 _LATEX_COMMANDS = frozenset({
@@ -120,6 +122,17 @@ def _copy_to_clipboard(text: str):
 
 
 _DIV_CLOSE_LEN = 6  # len('</div>')
+
+
+def _dict_to_chat_message(m: dict) -> ChatMessage:
+    """Convert an OpenAI-format message dict to a ChatMessage dataclass."""
+    return ChatMessage(
+        role=m.get("role", ""),
+        content=m.get("content", ""),
+        tool_call_id=m.get("tool_call_id"),
+        name=m.get("name"),
+        tool_calls=m.get("tool_calls"),
+    )
 
 
 def _extract_after_header(raw: str, marker: str) -> Optional[str]:
@@ -424,6 +437,56 @@ def _textview_draw_placeholder(widget, cr):
     return False
 
 
+class _ToolCallAccumulator:
+    """Accumulate SSE streamed tool_calls deltas into complete ToolCall dicts.
+
+    OpenAI SSE streams send tool_calls in multiple chunks:
+      chunk 1: {index:0, id:"call_xxx", type:"function", function:{name:"web_search", arguments:""}}
+      chunk 2: {index:0, function:{arguments:"{\\"query\\":\\"hello\\""}}
+
+    This accumulator merges chunks by index. Tool calls are NOT yielded
+    incrementally — they are only extracted when the stream ends
+    (finish_reason: "tool_calls" or [DONE]).
+    """
+    def __init__(self):
+        self._calls: Dict[int, dict] = {}
+
+    def add_delta(self, delta: dict) -> None:
+        """Accumulate a tool_calls delta chunk from the SSE stream."""
+        index = delta.get("index")
+        if index is None:
+            return
+        if index not in self._calls:
+            self._calls[index] = {
+                "id": "",
+                "type": "function",
+                "function": {"name": "", "arguments": ""},
+            }
+        call = self._calls[index]
+        if "id" in delta:
+            call["id"] += delta["id"]
+        if "function" in delta:
+            fn = delta["function"]
+            if "name" in fn:
+                call["function"]["name"] += fn["name"]
+            if "arguments" in fn:
+                call["function"]["arguments"] += fn["arguments"]
+
+    def get_calls(self) -> List[dict]:
+        """Return all accumulated tool calls, ordered by index, filtering out incomplete ones."""
+        return [self._calls[k] for k in sorted(self._calls.keys())
+                if self._calls[k]["id"] and self._calls[k]["function"]["name"]]
+
+    def clear(self) -> None:
+        """Clear all accumulated tool calls."""
+        self._calls.clear()
+
+    @property
+    def has_calls(self) -> bool:
+        """True if any tool calls have been accumulated."""
+        return any(c["id"] and c["function"]["name"] for c in self._calls.values())
+
+
 class _LLMHttpError(Exception):
     pass
 
@@ -443,7 +506,9 @@ class _LLMHttpClient:
 
     def _build_request(self, base_url: str, api_key: str, model_name: str, messages: list,
                        stream: bool, temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
-                       top_p: float = DEFAULT_TOP_P):
+                       top_p: float = DEFAULT_TOP_P,
+                       tools: Optional[list] = None,
+                       tool_choice: Optional[str] = None):
         url = base_url.rstrip("/") + "/chat/completions"
         headers = {
             "Content-Type": "application/json",
@@ -457,6 +522,9 @@ class _LLMHttpClient:
             "max_tokens": max_tokens,
             "top_p": top_p,
         }
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = tool_choice or tool_registry.TOOL_CHOICE_AUTO
         return url, headers, body
 
     def stream_chat_completion(
@@ -470,11 +538,26 @@ class _LLMHttpClient:
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         top_p: float = DEFAULT_TOP_P,
+        tools: Optional[list] = None,
+        tool_choice: Optional[str] = None,
     ):
-        """SSE streaming. Yields delta dicts with optional 'content'/'reasoning_content'."""
+        """SSE streaming. Yields delta dicts.
+
+        Each yielded delta has:
+          - content: text delta (str, optional)
+          - reasoning_content: reasoning text delta (str, optional)
+          - tool_calls: list of complete ToolCall dicts, yielded once per tool_call
+                        (after all chunks for that tool_call are accumulated)
+          - finish_reason: "stop", "tool_calls", etc.
+
+        For tool_calls, this method accumulates SSE chunks internally and yields
+        complete tool_call dicts when each is done. Callers receive one yield
+        per tool_call with key "tool_calls" containing the fully assembled call.
+        """
         url, headers, body = self._build_request(
             base_url, api_key, model_name, messages, stream=True,
             temperature=temperature, max_tokens=max_tokens, top_p=top_p,
+            tools=tools, tool_choice=tool_choice,
         )
 
         try:
@@ -487,6 +570,9 @@ class _LLMHttpClient:
             )
             response.raise_for_status()
 
+            # Accumulator for incremental tool_calls delta
+            tc_accum = _ToolCallAccumulator()
+
             for line in response.iter_lines(decode_unicode=True):
                 if cancel_event and cancel_event.is_set():
                     return
@@ -495,15 +581,42 @@ class _LLMHttpClient:
                 if line.startswith("data:"):
                     data_str = line[5:].strip()
                     if data_str == "[DONE]":
+                        calls = tc_accum.get_calls()
+                        if calls:
+                            yield {"tool_calls": calls}
                         return
                     if not data_str:
                         continue
                     try:
                         chunk = json.loads(data_str)
                         delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        yield delta
                     except (json.JSONDecodeError, IndexError, KeyError):
                         continue
+
+                    tc_delta = delta.get("tool_calls")
+                    if tc_delta:
+                        for tcd in tc_delta:
+                            tc_accum.add_delta(tcd)
+                        finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
+                        if finish_reason == "tool_calls":
+                            calls = tc_accum.get_calls()
+                            if calls:
+                                tc_accum.clear()
+                                yield {"tool_calls": calls}
+                        continue
+
+                    finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
+                    if finish_reason == "tool_calls":
+                        calls = tc_accum.get_calls()
+                        if calls:
+                            tc_accum.clear()
+                            yield {"tool_calls": calls}
+                        continue
+
+                    content = delta.get("content")
+                    reasoning = delta.get("reasoning_content")
+                    if content is not None or reasoning is not None:
+                        yield delta
 
         except requests.exceptions.Timeout:
             raise _LLMHttpError(f"请求超时（{timeout}秒）")
@@ -626,6 +739,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_history_done_btn: Optional[Gtk.Button] = None
         self._conversation_store = ConversationStore()
         self._ai_cancel_event = threading.Event()
+        self._ai_tool_iteration = 0  # ReAct loop iteration counter (safety limit)
         self._llm_client = _LLMHttpClient()
         self._pygments_css_cache: Dict[str, str] = {}
 
@@ -2528,9 +2642,20 @@ class ClipboardPanel(Gtk.Box):
     def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, messages: list,
                               req_id: int, temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
                               top_p: float = DEFAULT_TOP_P):
+        """Start the ReAct loop by making the first LLM call."""
+        self._ai_tool_iteration = 0
+        self._perform_llm_call(base_url, api_key, model_name, messages, req_id,
+                               temperature, max_tokens, top_p, iteration=0)
+
+    def _perform_llm_call(self, base_url: str, api_key: str, model_name: str, messages: list,
+                          req_id: int, temperature: float, max_tokens: int, top_p: float,
+                          iteration: int):
+        """One iteration of the ReAct loop: stream LLM response, handle tool_calls."""
         has_thinking = False
         thinking_header_added = False
         response_header_added = False
+        assistant_text = ""
+        tool_calls_found: list = []
 
         try:
             cancel_event = getattr(self, "_ai_cancel_event", None)
@@ -2538,9 +2663,17 @@ class ClipboardPanel(Gtk.Box):
                 base_url, api_key, model_name, messages,
                 timeout=30, cancel_event=cancel_event,
                 temperature=temperature, max_tokens=max_tokens, top_p=top_p,
+                tools=tool_registry.TOOL_DEFINITIONS,
+                tool_choice=tool_registry.TOOL_CHOICE_AUTO,
             ):
                 if getattr(self, "_ai_request_id", 0) != req_id:
                     return
+
+                # Check for tool_calls in delta
+                tc_delta = delta.get("tool_calls")
+                if tc_delta:
+                    tool_calls_found.extend(tc_delta)
+                    continue
 
                 reasoning = delta.get("reasoning_content")
                 content = delta.get("content")
@@ -2564,8 +2697,67 @@ class ClipboardPanel(Gtk.Box):
                                 self._ai_stream_queue.append('\n\n<div class="assistant-header">🤖 Assistant:</div>\n')
                     with self._ai_stream_lock:
                         self._ai_stream_queue.append(content)
+                    assistant_text += content
 
-            GLib.idle_add(self._on_llm_api_finished, req_id)
+            # Stream finished — check for tool_calls
+            if tool_calls_found:
+                # Append assistant message with tool_calls to conversation
+                self._ai_messages.append({
+                    "role": "assistant",
+                    "content": assistant_text,
+                    "tool_calls": tool_calls_found,
+                })
+
+                # Flush any streamed content before rendering tool call UI
+                self._flush_stream_queue()
+
+                # Render tool call info to WebView (via idle_add)
+                tc_html = tool_registry.format_tool_calls_for_display(tool_calls_found)
+                GLib.idle_add(self._append_html_to_webview, tc_html)
+
+                # Execute each tool call
+                for tc in tool_calls_found:
+                    if getattr(self, "_ai_request_id", 0) != req_id:
+                        return
+                    result = tool_registry.execute_tool_call(tc)
+                    self._ai_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "name": tc.get("function", {}).get("name", ""),
+                        "content": result,
+                    })
+                    # Render tool result summary to WebView
+                    tc_name = tc.get("function", {}).get("name", "")
+                    result_html = tool_registry.format_tool_result_for_display(tc_name, result)
+                    GLib.idle_add(self._append_html_to_webview, result_html)
+
+                # Check iteration limit
+                if iteration + 1 >= MAX_TOOL_ITERATIONS:
+                    err_msg = (
+                        f'\n\n<div class="tool-result"><b>⚠️ 已达到最大工具调用次数'
+                        f'（{MAX_TOOL_ITERATIONS}），请简化请求或重试。</b></div>\n\n'
+                    )
+                    GLib.idle_add(self._append_html_to_webview, err_msg)
+                    self._ai_messages.append({
+                        "role": "assistant",
+                        "content": f"⚠️ 已达到最大工具调用次数（{MAX_TOOL_ITERATIONS}），请简化请求或重试。"
+                    })
+                    # Finalize to end the conversation turn
+                    GLib.idle_add(self._finalize_after_tool_loop, req_id)
+                    return
+
+                # Continue ReAct loop in a new thread
+                self._ai_tool_iteration = iteration + 1
+                threading.Thread(
+                    target=self._perform_llm_call,
+                    args=(base_url, api_key, model_name, self._ai_messages, req_id,
+                          temperature, max_tokens, top_p, iteration + 1),
+                    daemon=True,
+                ).start()
+            else:
+                # No tool_calls — pure text response, finish
+                GLib.idle_add(self._on_llm_api_finished, req_id)
+
         except _LLMHttpError as e:
             with self._ai_stream_lock:
                 self._ai_stream_queue.append(f"\n\n❌ [请求失败]:\n{e}")
@@ -2574,6 +2766,62 @@ class ClipboardPanel(Gtk.Box):
             with self._ai_stream_lock:
                 self._ai_stream_queue.append(f"\n\n❌ [内部错误]:\n{e}")
             GLib.idle_add(self._on_llm_api_finished, req_id)
+
+    def _finalize_after_tool_loop(self, req_id: int):
+        """Finalize after tool loop ends (used when tool iteration limit hit)."""
+        if getattr(self, "_ai_request_id", 0) != req_id:
+            return
+        self._flush_stream_queue()
+        # Rebuild full markdown from messages (which now include tool call/results)
+        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+        self._render_markdown(self._ai_markdown_text)
+        self._ai_spinner.stop()
+        self._ai_spinner.hide()
+        self._handle_stream_end(req_id)
+
+    def _handle_stream_end(self, req_id: int):
+        """Common cleanup after a conversation turn ends (save, prune, title gen)."""
+        if getattr(self, "_ai_request_id", 0) != req_id:
+            return
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript("_scrollToBottom();", None, None)
+        self._ai_streaming = False
+        self._update_send_button(False)
+        self._ai_entry.placeholder_text = "输入后续问题..."
+        try:
+            model_snapshot = self._build_model_snapshot()
+            self._save_current_conversation(model_snapshot)
+        except Exception as e:
+            print(f"Error saving conversation: {e}", flush=True)
+        self._prune_messages()
+        try:
+            title_cfg = self._get_title_model_config()
+            if title_cfg:
+                base_url, api_key, model_name, temperature, max_tokens, top_p = title_cfg
+            else:
+                base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+                    self._ai_last_prompt_obj,
+                    getattr(self, "_ai_active_model_info", None)
+                )
+            if (not self._ai_title_generated
+                    and self._ai_conversation_id
+                    and self._ai_messages
+                    and base_url and api_key):
+                self._ai_title_generated = True
+                first_msg = self._ai_messages[0].get("content", "")
+                if first_msg:
+                    threading.Thread(
+                        target=self._generate_conversation_title,
+                        args=(first_msg, self._ai_conversation_id, base_url, api_key, model_name,
+                              temperature, max_tokens, top_p),
+                        daemon=True
+                    ).start()
+        except Exception as e:
+            print(f"Title generation error: {e}", flush=True)
+        try:
+            self._refresh_conversation_dropdown()
+        except Exception as e:
+            print(f"Dropdown refresh error: {e}", flush=True)
 
     def _flush_stream_queue(self) -> bool:
         new_text_list = []
@@ -2743,6 +2991,26 @@ class ClipboardPanel(Gtk.Box):
                    Override all three properties so these characters inherit normal code text
                    color instead of appearing as distracting red boxes. */
                 .codehilite .err {{ color: inherit; background-color: transparent; border: none; }}
+                .tool-call-info {{
+                    background: rgba(99, 102, 241, 0.08);
+                    border: 1px solid rgba(99, 102, 241, 0.15);
+                    border-radius: 6px;
+                    padding: 6px 10px;
+                    margin: 6px 0;
+                    font-size: 13px;
+                    font-family: ui-monospace, SFMono-Regular, monospace;
+                }}
+                .tool-result {{
+                    background: rgba(45, 212, 191, 0.05);
+                    border-left: 3px solid rgba(45, 212, 191, 0.3);
+                    padding: 6px 10px;
+                    margin: 4px 0 6px 0;
+                    font-size: 13px;
+                    white-space: pre-wrap;
+                    word-break: break-all;
+                    max-height: 200px;
+                    overflow-y: auto;
+                }}
                 .copy-btn {{
                     position: absolute;
                     top: 4px;
@@ -3005,13 +3273,17 @@ class ClipboardPanel(Gtk.Box):
         self._ai_webview.run_javascript(js_code, None, None)
 
     def _on_llm_api_finished(self, req_id: int):
+        """Called when LLM stream completes with a pure text response (no tool_calls)."""
         if getattr(self, "_ai_request_id", 0) != req_id:
             return
 
         self._flush_stream_queue()
 
-        # Append assistant response to messages BEFORE full rebuild
+        # Append assistant text response to messages
         if self._ai_messages and self._ai_messages[-1].get("role") == "user":
+            self._ai_messages.append({"role": "assistant", "content": self._ai_assistant_buffer})
+        elif self._ai_messages and self._ai_assistant_buffer:
+            # If last is tool role (happens after tool call loop → final text), append normally
             self._ai_messages.append({"role": "assistant", "content": self._ai_assistant_buffer})
         self._ai_assistant_buffer = ""
         self._ai_current_assistant_text = ""
@@ -3021,67 +3293,15 @@ class ClipboardPanel(Gtk.Box):
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
             self._ai_render_timeout_id = 0
-        # Full rebuild from messages list with headers and copy markers
+
+        # Full rebuild from messages list
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         self._render_markdown(self._ai_markdown_text)
 
         self._ai_spinner.stop()
         self._ai_spinner.hide()
 
-        def stop_streaming():
-            if getattr(self, "_ai_request_id", 0) == req_id:
-                if hasattr(self, "_ai_webview") and self._ai_webview:
-                    self._ai_webview.run_javascript("_scrollToBottom();", None, None)
-                self._ai_streaming = False
-                self._update_send_button(False)
-                self._ai_entry.placeholder_text = "输入后续问题..."
-
-                # Auto-save conversation to disk
-                try:
-                    model_snapshot = self._build_model_snapshot()
-                    self._save_current_conversation(model_snapshot)
-                except Exception as e:
-                    print(f"Error saving conversation: {e}", flush=True)
-
-                self._prune_messages()
-
-                # Trigger background title generation for new conversations
-                try:
-                    title_cfg = self._get_title_model_config()
-                    if title_cfg:
-                        base_url, api_key, model_name, temperature, max_tokens, top_p = title_cfg
-                    else:
-                        base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
-                            self._ai_last_prompt_obj,
-                            getattr(self, "_ai_active_model_info", None)
-                        )
-                except Exception:
-                    base_url = ""
-                    api_key = ""
-                if (not self._ai_title_generated
-                        and self._ai_conversation_id
-                        and self._ai_messages
-                        and base_url and api_key):
-                    self._ai_title_generated = True
-                    first_msg = self._ai_messages[0].get("content", "")
-                    if first_msg:
-                        threading.Thread(
-                            target=self._generate_conversation_title,
-                            args=(first_msg, self._ai_conversation_id, base_url, api_key, model_name,
-                                  temperature, max_tokens, top_p),
-                            daemon=True
-                        ).start()
-
-                # Refresh dropdown to show new entry or updated message count immediately
-                self._refresh_conversation_dropdown()
-
-                if not self._ai_input_area.get_visible():
-                    self._ai_input_area.set_no_show_all(False)
-                    self._ai_input_area.show_all()
-                    self._ai_entry.grab_focus()
-                    self.queue_resize()
-
-        stop_streaming()
+        self._handle_stream_end(req_id)
 
     def _adjust_ai_entry_height(self):
         buf = self._ai_entry.get_buffer()
@@ -3778,8 +3998,39 @@ class ClipboardPanel(Gtk.Box):
         for i, m in enumerate(messages):
             role = m.get("role", "")
             content = m.get("content", "")
+            tool_calls = m.get("tool_calls")
+
+            if role == "tool":
+                # Tool result message — show compact result line
+                tool_name = m.get("name", "unknown")
+                MAX_TOOL_DISPLAY = 2000
+                display = content[:MAX_TOOL_DISPLAY]
+                if len(content) > MAX_TOOL_DISPLAY:
+                    display += f"\n\n...（结果已截断，共 {len(content)} 字符）"
+                safe_display = html.escape(display)
+                parts.append(
+                    f'\n\n<div class="tool-result"><b>📎 工具结果 ({html.escape(tool_name)}):</b>\n\n{safe_display}</div>\n\n'
+                )
+                continue
+
+            if role == "assistant" and tool_calls:
+                # Show tool call info
+                tc_html = tool_registry.format_tool_calls_for_display(tool_calls)
+                if tc_html:
+                    parts.append("\n\n" + tc_html + "\n\n")
+                # If there's also content, display it
+                if content and content.strip():
+                    has_header = ('<div class="assistant-header">' in content
+                                 or '<div class="answer-header">' in content
+                                 or '<div class="thinking-header">' in content)
+                    prefix = '' if has_header else '\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
+                    parts.append(f'{prefix}{content}\n\n')
+                parts.append(f'<copy-marker data-msg-index="{i}"></copy-marker>\n\n---\n\n')
+                continue
+
             if not content:
                 continue
+
             if i == 0:
                 rendered_prompt = _close_unclosed_code_blocks(content)
                 parts.append(f'<div class="user-header">You:</div>\n\n{rendered_prompt}\n\n<copy-marker data-msg-index="{i}" class="user-copy-marker"></copy-marker>\n\n---\n\n')
@@ -3854,19 +4105,19 @@ class ClipboardPanel(Gtk.Box):
                 model_config=model_snapshot
             )
             self._ai_conversation_id = conv.id
-            conv.messages = [ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages]
+            conv.messages = [_dict_to_chat_message(m) for m in self._ai_messages]
             self._conversation_store.save_conversation(conv, bump_updated_at=not preserve_updated_at)
         else:
             conv = self._conversation_store.load_conversation(self._ai_conversation_id)
             if conv:
-                conv.messages = [ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages]
+                conv.messages = [_dict_to_chat_message(m) for m in self._ai_messages]
                 conv.model_config_snapshot = model_snapshot
             else:
                 conv = Conversation(
                     id=self._ai_conversation_id,
                     title=local_title,
                     system_prompt="",
-                    messages=[ChatMessage(role=m["role"], content=m["content"]) for m in self._ai_messages],
+                    messages=[_dict_to_chat_message(m) for m in self._ai_messages],
                     model_config_snapshot=model_snapshot,
                     created_at=self._ai_conversation_created_at,
                     updated_at=int(time.time() * 1000),

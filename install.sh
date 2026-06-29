@@ -150,6 +150,7 @@ install_files() {
     cp "$SCRIPT_DIR/session_store.py"            "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/clipboard_store.py"          "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/clipboard_panel.py"          "$INSTALL_DIR/"
+    cp "$SCRIPT_DIR/tool_registry.py"            "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/migrate_history.py"          "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/utils.py"                    "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/run.sh"                      "$INSTALL_DIR/"

@@ -639,8 +639,11 @@ class CategoryStore:
 
 @dataclass
 class ChatMessage:
-    role: str  # "user", "assistant", "system"
+    role: str  # "user", "assistant", "system", "tool"
     content: str
+    tool_call_id: Optional[str] = None  # for "tool" role: links to the tool call that produced this result
+    name: Optional[str] = None          # for "tool" role: name of the tool that was called
+    tool_calls: Optional[List[Dict]] = None  # for "assistant" role: tool_calls array from LLM
 
 
 @dataclass
