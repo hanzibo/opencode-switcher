@@ -2656,6 +2656,9 @@ class ClipboardPanel(Gtk.Box):
         response_header_added = False
         assistant_text = ""
         tool_calls_found: list = []
+        # Reset per-iteration buffer so _on_llm_api_finished only gets this
+        # iteration's content, not accumulated text from previous ReAct turns.
+        self._ai_assistant_buffer = ""
 
         try:
             cancel_event = getattr(self, "_ai_cancel_event", None)
@@ -4147,8 +4150,17 @@ class ClipboardPanel(Gtk.Box):
         if not conv:
             return
 
-        # Restore state from loaded conversation
-        self._ai_messages = [{"role": m.role, "content": m.content} for m in conv.messages]
+        # Restore state from loaded conversation (preserve tool call fields)
+        self._ai_messages = []
+        for m in conv.messages:
+            msg = {"role": m.role, "content": m.content}
+            if m.tool_call_id:
+                msg["tool_call_id"] = m.tool_call_id
+            if m.name:
+                msg["name"] = m.name
+            if m.tool_calls:
+                msg["tool_calls"] = m.tool_calls
+            self._ai_messages.append(msg)
         self._ai_conversation_id = conv.id
         self._ai_conversation_created_at = conv.created_at
         self._ai_assistant_buffer = ""
