@@ -279,10 +279,17 @@ def execute_web_search(query: str, max_results: int = 5) -> str:
     return _execute_duckduckgo_search(query, max_results)
 
 
-def execute_web_fetch(url: str, max_chars: int = 5000) -> str:
-    """Fetch a page's content as plain text."""
-    max_chars = max(500, min(20000, max_chars))
+_SUSPICIOUS_PATTERNS = re.compile(
+    r"(Access Denied|Please enable JavaScript|请启用 JavaScript|"
+    r"Your browser does not support JavaScript|Just a moment|"
+    r"Checking your browser|DDoS protection|captcha|challenge)",
+    re.IGNORECASE,
+)
 
+
+def _try_requests_fetch(url: str, max_chars: int) -> Optional[str]:
+    """Try fetching a page via plain HTTP requests. Returns None on failure
+    or if the result looks suspicious (too short, garbled, JS-required page)."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (X11; Linux x86_64) "
@@ -290,22 +297,74 @@ def execute_web_fetch(url: str, max_chars: int = 5000) -> str:
             "Chrome/145.0.0.0 Safari/537.36"
         )
     }
-
     try:
         resp = requests.get(url, headers=headers, timeout=20)
         resp.raise_for_status()
-    except requests.RequestException as e:
-        return f"获取页面失败：{e}"
+    except requests.RequestException:
+        return None
 
     text = strip_html(resp.text)
-    # Collapse multiple whitespace
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = text.strip()
 
+    # Suspicious: too short (JS-rendered page got only shell HTML)
+    if len(text) < 200:
+        return None
+
+    # Suspicious: contains known JS-required / captcha / error patterns
+    if _SUSPICIOUS_PATTERNS.search(text):
+        return None
+
+    # Check for excessive garbled content: >15% non-ASCII characters
+    if text:
+        non_ascii = sum(1 for ch in text if ord(ch) > 127)
+        if non_ascii / len(text) > 0.15:
+            return None
+
     if len(text) > max_chars:
         text = text[:max_chars] + f"\n\n...（内容已截断）"
-
     return text
+
+
+def _try_obscura_fetch(url: str, max_chars: int) -> str:
+    """Fetch a page via Obscura headless browser with --dump markdown."""
+    if not os.path.isfile(_OBSCURA_BIN):
+        return f"获取页面失败：Obscura 不可用"
+    try:
+        result = subprocess.run(
+            [_OBSCURA_BIN, "fetch", url, "--dump", "markdown", "--quiet", "--timeout", "20"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return f"获取页面失败：Obscura 返回错误码 {result.returncode}"
+        text = result.stdout.strip()
+        if not text:
+            return f"获取页面失败：Obscura 返回空内容"
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError,
+            FileNotFoundError) as e:
+        return f"获取页面失败：{e}"
+
+    if len(text) > max_chars:
+        text = text[:max_chars] + f"\n\n...（内容已截断）"
+    return text
+
+
+def execute_web_fetch(url: str, max_chars: int = 5000) -> str:
+    """Fetch a page's content as plain text.
+
+    Tries plain HTTP requests (fast, zero overhead) first. If the result
+    is suspicious — too short (JS-rendered shell), contains JS-required /
+    captcha patterns, or garbled non-ASCII — falls back to Obscura headless
+    browser (--dump markdown) which executes JavaScript and renders the
+    real page content.
+    """
+    max_chars = max(500, min(20000, max_chars))
+
+    result = _try_requests_fetch(url, max_chars)
+    if result is not None:
+        return result
+
+    return _try_obscura_fetch(url, max_chars)
 
 
 # ── Tool Executor Registry ─────────────────────────────────────────────────
