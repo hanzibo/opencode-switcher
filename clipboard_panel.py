@@ -2928,6 +2928,7 @@ class ClipboardPanel(Gtk.Box):
             assistant_color = "#2dd4bf"
             table_header_bg = "rgba(255,255,255,0.06)"
             table_alt_bg = "rgba(255,255,255,0.03)"
+            toggle_color = "#38bdf8"
             pygments_css = self._get_pygments_css("dark")
         else:
             bg_color = "#ffffff"
@@ -2942,6 +2943,7 @@ class ClipboardPanel(Gtk.Box):
             assistant_color = "#0d9488"
             table_header_bg = "rgba(0,0,0,0.04)"
             table_alt_bg = "rgba(0,0,0,0.02)"
+            toggle_color = "#0284c7"
             pygments_css = self._get_pygments_css("light")
 
         return f"""
@@ -2969,6 +2971,23 @@ class ClipboardPanel(Gtk.Box):
                         }});
                     }}
                 }});
+
+                function toggleToolResult(btn) {{
+                    const box = btn.closest('.tool-result-box');
+                    if (!box) return;
+                    const content = box.querySelector('.tool-result-content');
+                    if (!content) return;
+                    if (content.style.display === 'none') {{
+                        content.style.display = 'block';
+                        btn.textContent = '收起';
+                    }} else {{
+                        content.style.display = 'none';
+                        btn.textContent = '展开';
+                    }}
+                    if (typeof _scrollToBottom === 'function') {{
+                        _scrollToBottom();
+                    }}
+                }}
             </script>
             <style>
                 body {{
@@ -3027,12 +3046,40 @@ class ClipboardPanel(Gtk.Box):
                     font-size: 13px;
                     font-family: ui-monospace, SFMono-Regular, monospace;
                 }}
-                .tool-result {{
-                    background: rgba(45, 212, 191, 0.05);
-                    border-left: 3px solid rgba(45, 212, 191, 0.3);
+                .tool-result-box {{
+                    border: 1px solid rgba(45, 212, 191, 0.15);
+                    border-left: 3px solid rgba(45, 212, 191, 0.4);
+                    border-radius: 6px;
+                    margin: 6px 0;
+                    overflow: hidden;
+                    background: rgba(45, 212, 191, 0.02);
+                }}
+                .tool-result-header {{
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    background: rgba(45, 212, 191, 0.06);
                     padding: 6px 10px;
-                    margin: 4px 0 6px 0;
                     font-size: 13px;
+                    font-weight: bold;
+                    border-bottom: 1px solid rgba(45, 212, 191, 0.08);
+                    user-select: none;
+                }}
+                .tool-result-toggle {{
+                    color: {toggle_color};
+                    cursor: pointer;
+                    font-size: 12px;
+                    user-select: none;
+                    font-weight: normal;
+                }}
+                .tool-result-toggle:hover {{
+                    text-decoration: underline;
+                    opacity: 0.85;
+                }}
+                .tool-result-content {{
+                    padding: 8px 10px;
+                    font-size: 13px;
+                    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
                     white-space: pre-wrap;
                     word-break: break-all;
                     max-height: 200px;
@@ -4036,7 +4083,13 @@ class ClipboardPanel(Gtk.Box):
                     display += f"\n\n...（结果已截断，共 {len(content)} 字符）"
                 safe_display = html.escape(display)
                 parts.append(
-                    f'\n\n<div class="tool-result"><b>📎 工具结果 ({html.escape(tool_name)}):</b>\n\n{safe_display}</div>\n\n'
+                    f'\n\n<div class="tool-result-box">'
+                    f'<div class="tool-result-header">'
+                    f'<span>📎 工具结果 ({html.escape(tool_name)})</span>'
+                    f'<span class="tool-result-toggle" onclick="toggleToolResult(this)">展开</span>'
+                    f'</div>'
+                    f'<div class="tool-result-content" style="display: none;">\n\n{safe_display}\n\n</div>'
+                    f'</div>\n\n'
                 )
                 continue
 

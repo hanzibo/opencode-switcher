@@ -459,8 +459,20 @@ def format_tool_result_for_display(name: str, content: str) -> str:
     as a brief line (full content is rendered during conversation rebuild).
     """
     safe_name = html.escape(name)
+    MAX_TOOL_DISPLAY = 2000
+    display = content[:MAX_TOOL_DISPLAY]
+    if len(content) > MAX_TOOL_DISPLAY:
+        display += f"\n\n...（结果已截断，共 {len(content)} 字符）"
+    safe_display = html.escape(display)
+
     return (
-        f'<div class="tool-result">'
-        f'<b>📎 工具执行完成：</b>{safe_name}'
+        f'<div class="tool-result-box">'
+        f'<div class="tool-result-header">'
+        f'<span>📎 工具结果 ({safe_name})</span>'
+        f'<span class="tool-result-toggle" onclick="toggleToolResult(this)">展开</span>'
+        f'</div>'
+        f'<div class="tool-result-content" style="display: none;">\n'
+        f'{safe_display}\n'
+        f'</div>'
         f'</div>'
     )
