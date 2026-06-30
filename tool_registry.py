@@ -8,8 +8,11 @@ Tool Registry — Function Calling 工具定义与执行器
 """
 
 import datetime
+import fnmatch
 import json
 import os
+import pathlib
+import stat
 import subprocess
 import urllib.parse
 import re
@@ -126,6 +129,80 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     }
                 },
                 "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep_search",
+            "description": "在目录中按正则表达式或关键词全文搜索文件内容。支持按文件通配模式过滤（如 *.py、*.{ts,js}）。自动跳过隐藏目录和二进制文件。仅接受绝对路径。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "搜索的正则表达式或关键词（支持 Python re 语法）"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "要搜索的根目录的绝对路径"
+                    },
+                    "include": {
+                        "type": "string",
+                        "description": "文件通配过滤模式，如「*.py」「*.{ts,js}」。留空则搜索所有文本文件。",
+                        "default": ""
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "最多返回的匹配行数（1-200，默认 30）",
+                        "default": 30
+                    }
+                },
+                "required": ["pattern", "path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "glob_find",
+            "description": "按通配模式递归查找文件。仅接受绝对路径。自动跳过隐藏目录（以 . 开头）。返回匹配文件的绝对路径列表。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {
+                        "type": "string",
+                        "description": "通配模式，如「**/*.py」「config*.json」「src/**/*.ts」"
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "搜索的根目录绝对路径"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "最多返回的文件数（1-500，默认 100）",
+                        "default": 100
+                    }
+                },
+                "required": ["pattern", "path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "file_info",
+            "description": "获取文件或目录的元信息：大小、修改时间、访问时间、Unix 权限、类型（文件/目录/符号链接）、所有者等。仅接受绝对路径。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "文件或目录的绝对路径"
+                    }
+                },
+                "required": ["path"]
             }
         }
     },
@@ -385,6 +462,270 @@ def execute_get_current_time(timezone: str = "") -> str:
     )
 
 
+# ── Grep Search ─────────────────────────────────────────────────────────────
+
+_MAX_GREP_RESULTS = 200
+
+
+def _glob_match(filename: str, pattern: str) -> bool:
+    """Check if filename matches a glob pattern, handling {a,b} brace expansion."""
+    if "{" in pattern and "}" in pattern:
+        import re as _re
+        m = _re.search(r"\{([^}]+)\}", pattern)
+        if m:
+            alts = m.group(1).split(",")
+            prefix = pattern[:m.start()]
+            suffix = pattern[m.end():]
+            return any(fnmatch.fnmatch(filename, prefix + a + suffix) for a in alts)
+    return fnmatch.fnmatch(filename, pattern)
+
+_MAX_LINES_PER_FILE = 50
+
+
+def execute_grep_search(pattern: str, path: str, include: str = "",
+                        max_results: int = 30) -> str:
+    """Search file contents by regex/keyword in a directory tree.
+
+    Args:
+        pattern: Regex or keyword to search for (Python re syntax).
+        path: Absolute path of the root directory to search.
+        include: Glob pattern to filter files (e.g. "*.py", "*.{ts,js}").
+                 Empty string means all text files.
+        max_results: Maximum number of matching lines to return (1-200).
+
+    Returns:
+        Formatted string with matches per file.
+    """
+    resolved = _resolve_safe_path(path)
+    if resolved is None:
+        return f"错误：目录不存在或路径无效「{path}」"
+    if not os.path.isdir(resolved):
+        return f"错误：路径不是目录「{resolved}」"
+
+    max_results = max(1, min(_MAX_GREP_RESULTS, max_results))
+    max_lines_per_file = _MAX_LINES_PER_FILE
+
+    try:
+        compiled = re.compile(pattern)
+    except re.error as e:
+        return f"错误：无效的正则表达式「{pattern}」: {e}"
+
+    matches: List[str] = []
+    total_matches = 0
+    file_count = 0
+
+    for root, dirs, files in os.walk(resolved, topdown=True):
+        # Skip hidden directories
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
+
+        if total_matches >= max_results:
+            break
+
+        for fname in files:
+            if total_matches >= max_results:
+                break
+
+            if fname.startswith("."):
+                continue
+
+            if include:
+                if not _glob_match(fname, include):
+                    continue
+
+            fpath = os.path.join(root, fname)
+            file_matches: List[str] = []
+
+            try:
+                with open(fpath, "rb") as f:
+                    header = f.read(8192)
+                if b"\x00" in header:
+                    continue  # skip binary
+                with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                    for lineno, line in enumerate(f, 1):
+                        if len(file_matches) >= max_lines_per_file:
+                            file_matches.append(f"    ...（该文件匹配超过 {max_lines_per_file} 行，已截断）")
+                            break
+                        if compiled.search(line):
+                            stripped = line.rstrip("\n\r")
+                            if len(stripped) > 500:
+                                stripped = stripped[:500] + "..."
+                            file_matches.append(f"    L{lineno}: {stripped}")
+            except (PermissionError, OSError):
+                continue
+
+            if file_matches:
+                relpath = os.path.relpath(fpath, resolved)
+                matches.append(f"📄 {relpath}")
+                matches.extend(file_matches)
+                total_matches += sum(1 for m in file_matches if not m.startswith("    ..."))
+                file_count += 1
+
+    if not matches:
+        return f"在目录「{resolved}」中没有找到匹配「{pattern}」的内容。"
+
+    result = f"🔍 搜索「{pattern}」在 {resolved}\n共 {file_count} 个文件，{total_matches} 行匹配\n\n" + "\n".join(matches)
+
+    if total_matches >= max_results:
+        result += f"\n\n...（已达到最大显示行数 {max_results}，可能还有更多匹配）"
+
+    return result
+
+
+# ── Glob Find ───────────────────────────────────────────────────────────────
+
+_MAX_GLOB_RESULTS = 500
+
+
+def execute_glob_find(pattern: str, path: str, max_results: int = 100) -> str:
+    """Recursively find files matching a glob pattern.
+
+    Args:
+        pattern: Glob pattern such as "**/*.py", "config*.json".
+        path: Absolute path of the root directory to search.
+        max_results: Maximum number of files to return (1-500).
+
+    Returns:
+        Formatted string with matched file paths.
+    """
+    resolved = _resolve_safe_path(path)
+    if resolved is None:
+        return f"错误：目录不存在或路径无效「{path}」"
+    if not os.path.isdir(resolved):
+        return f"错误：路径不是目录「{resolved}」"
+
+    max_results = max(1, min(_MAX_GLOB_RESULTS, max_results))
+
+    root = pathlib.Path(resolved)
+
+    try:
+        matched = sorted(root.rglob(pattern))
+    except (PermissionError, OSError) as e:
+        return f"错误：搜索文件时出错「{resolved}」: {e}"
+
+    filtered: List[str] = []
+    for m in matched:
+        if not m.is_file() and not m.is_symlink():
+            continue
+        rel = m.relative_to(root)
+        parts = rel.parts
+        if any(p.startswith(".") for p in parts):
+            continue
+        filtered.append(str(m.resolve()))
+
+    if not filtered:
+        return f"在目录「{resolved}」中没有找到匹配「{pattern}」的文件。"
+
+    total = len(filtered)
+    if total > max_results:
+        filtered = filtered[:max_results]
+
+    result = f"📂 搜索模式「{pattern}」在 {resolved}\n共 {total} 个匹配" + (f"（显示前 {max_results} 个）" if total > max_results else "") + "\n\n"
+    result += "\n".join(filtered)
+
+    if total > max_results:
+        result += f"\n\n...（已截断，仅显示前 {max_results} 个，共 {total} 个）"
+
+    return result
+
+
+# ── File Info ───────────────────────────────────────────────────────────────
+
+_FILE_SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"]
+
+
+def _format_file_size(size_bytes: int) -> str:
+    if size_bytes == 0:
+        return "0 B"
+    import math
+    unit_idx = int(math.floor(math.log(size_bytes, 1024)))
+    unit_idx = min(unit_idx, len(_FILE_SIZE_UNITS) - 1)
+    value = size_bytes / (1024 ** unit_idx)
+    if unit_idx == 0:
+        return f"{int(value)} B"
+    return f"{value:.1f} {_FILE_SIZE_UNITS[unit_idx]}"
+
+
+def execute_file_info(path: str) -> str:
+    """Get file/directory metadata: size, mtime, atime, permissions, type, owner.
+
+    Args:
+        path: Absolute path of the file or directory.
+
+    Returns:
+        Formatted string with file metadata.
+    """
+    # Check symlink BEFORE path resolution
+    raw_path = os.path.expanduser(path)
+    is_symlink = os.path.islink(raw_path)
+    link_target = os.readlink(raw_path) if is_symlink else None
+
+    resolved = _resolve_safe_path(path)
+    if resolved is None:
+        if is_symlink:
+            return (
+                f"📋 文件信息: {raw_path}\n"
+                f"  类型: 符号链接（破损）→ {link_target}\n"
+                f"  大小: —（目标不存在）"
+            )
+        return f"错误：文件或目录不存在或路径无效「{path}」"
+
+    try:
+        st = os.stat(resolved)
+    except PermissionError:
+        return f"错误：无权访问「{resolved}」"
+    except OSError as e:
+        return f"错误：访问「{resolved}」时出错: {e}"
+
+    if is_symlink:
+        file_type = f"符号链接 → {link_target}"
+    elif os.path.isdir(resolved):
+        file_type = "目录"
+    elif os.path.isfile(resolved):
+        file_type = "文件"
+    else:
+        file_type = "其他"
+
+    mode = st.st_mode
+    perm_octal = oct(stat.S_IMODE(mode))[2:]  # e.g. "644", "755"
+    perm_str = stat.filemode(mode)             # e.g. "-rw-r--r--"
+
+    try:
+        import pwd
+        import grp
+        owner = pwd.getpwuid(st.st_uid).pw_name
+        group = grp.getgrgid(st.st_gid).gr_name
+    except (ImportError, KeyError):
+        owner = str(st.st_uid)
+        group = str(st.st_gid)
+    except Exception:
+        owner = str(st.st_uid)
+        group = str(st.st_gid)
+
+    if os.path.isdir(resolved) and not is_symlink:
+        size_str = "—（目录）"
+    else:
+        size_str = _format_file_size(st.st_size)
+
+    mtime = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    atime = datetime.datetime.fromtimestamp(st.st_atime).strftime("%Y-%m-%d %H:%M:%S")
+    ctime = datetime.datetime.fromtimestamp(st.st_ctime).strftime("%Y-%m-%d %H:%M:%S")
+
+    lines = [
+        f"📋 文件信息: {resolved}",
+        f"  类型: {file_type}",
+        f"  大小: {size_str}",
+        f"  权限: {perm_octal} ({perm_str})",
+        f"  所有者: {owner}:{group}",
+        f"  修改时间 (mtime): {mtime}",
+        f"  访问时间 (atime): {atime}",
+        f"  创建/状态变更 (ctime): {ctime}",
+        f"  Inode: {st.st_ino}",
+        f"  硬链接数: {st.st_nlink}",
+    ]
+
+    return "\n".join(lines)
+
+
 # ── Tool Functions ─────────────────────────────────────────────────────────
 
 # Max characters in a single tool result (to prevent token overflow)
@@ -602,6 +943,9 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "list_directory": execute_list_directory,
     "read_file": execute_read_file,
     "get_current_time": execute_get_current_time,
+    "grep_search": execute_grep_search,
+    "glob_find": execute_glob_find,
+    "file_info": execute_file_info,
 }
 
 
@@ -673,6 +1017,22 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
                 parts.append(f'<div class="tool-call-info">🕐 <b>查询时间：</b>{safe_tz}</div>')
             else:
                 parts.append(f'<div class="tool-call-info">🕐 <b>查询时间：</b>本地时间</div>')
+        elif name == "grep_search":
+            pattern = args.get("pattern", "")
+            search_path = args.get("path", "")
+            safe_pattern = html.escape(pattern)
+            safe_path = html.escape(search_path)
+            parts.append(f'<div class="tool-call-info">🔍 <b>搜索内容：</b>{safe_pattern} 在 {safe_path}</div>')
+        elif name == "glob_find":
+            gpattern = args.get("pattern", "")
+            gpath = args.get("path", "")
+            safe_gpattern = html.escape(gpattern)
+            safe_gpath = html.escape(gpath)
+            parts.append(f'<div class="tool-call-info">📂 <b>查找文件：</b>{safe_gpattern} 在 {safe_gpath}</div>')
+        elif name == "file_info":
+            fpath = args.get("path", "")
+            safe_fpath = html.escape(fpath)
+            parts.append(f'<div class="tool-call-info">📋 <b>文件信息：</b>{safe_fpath}</div>')
         else:
             safe_name = html.escape(name)
             parts.append(f'<div class="tool-call-info">🔧 <b>工具调用：</b>{safe_name}</div>')
