@@ -15,7 +15,7 @@ import urllib.parse
 import re
 import html
 from html.parser import HTMLParser
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, Final, List, Optional, Callable, Tuple
 
 import requests
 
@@ -337,7 +337,7 @@ def execute_read_file(path: str, max_chars: int = 5000) -> str:
 
 # ── Time Query ─────────────────────────────────────────────────────────────
 
-_WEEKDAYS_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+_WEEKDAYS_CN: Final[Tuple[str, ...]] = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
 
 
 def execute_get_current_time(timezone: str = "") -> str:
@@ -350,23 +350,19 @@ def execute_get_current_time(timezone: str = "") -> str:
     Returns:
         Formatted string with current time info.
     """
-    try:
-        if timezone:
-            try:
-                import zoneinfo
-                tz = zoneinfo.ZoneInfo(timezone)
-                now = datetime.datetime.now(tz)
-            except (ImportError, ModuleNotFoundError):
-                return f"错误：当前 Python 版本不支持 zoneinfo，无法使用时区参数「{timezone}」。请留空 timezone 使用本地时间。"
-            except (KeyError, TypeError, OSError):
-                return f"错误：无效的时区名称「{timezone}」"
-        else:
-            now = datetime.datetime.now().astimezone()
-    except Exception:
-        now = datetime.datetime.now()
-        tz_name = "?"
+    if timezone:
+        try:
+            import zoneinfo
+            tz = zoneinfo.ZoneInfo(timezone)
+            now = datetime.datetime.now(tz)
+        except (ImportError, ModuleNotFoundError):
+            return f"错误：当前 Python 版本不支持 zoneinfo，无法使用时区参数「{timezone}」。请留空 timezone 使用本地时间。"
+        except (KeyError, TypeError, OSError):
+            return f"错误：无效的时区名称「{timezone}」"
     else:
-        tz_name = now.tzname() or "?"
+        now = datetime.datetime.now().astimezone()
+
+    tz_name = now.tzname() or "?"
 
     weekday = _WEEKDAYS_CN[now.weekday()]
     ts = int(now.timestamp())
