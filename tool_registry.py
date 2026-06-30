@@ -452,12 +452,8 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
     return "\n".join(parts)
 
 
-def format_tool_result_for_display(name: str, content: str) -> str:
-    """Format a tool execution result into an HTML snippet for WebView display.
-
-    Results are collapsed to avoid visual noise; only the tool name is shown
-    as a brief line (full content is rendered during conversation rebuild).
-    """
+def render_collapsible_tool_result(name: str, content: str) -> str:
+    """Render tool result block into collapsible HTML structure."""
     safe_name = html.escape(name)
     MAX_TOOL_DISPLAY = 2000
     display = content[:MAX_TOOL_DISPLAY]
@@ -476,3 +472,8 @@ def format_tool_result_for_display(name: str, content: str) -> str:
         f'</div>'
         f'</div>'
     )
+
+
+def format_tool_result_for_display(name: str, content: str) -> str:
+    """Format a tool execution result into an HTML snippet for WebView display."""
+    return render_collapsible_tool_result(name, content)

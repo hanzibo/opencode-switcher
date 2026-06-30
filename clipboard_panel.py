@@ -4075,22 +4075,9 @@ class ClipboardPanel(Gtk.Box):
             tool_calls = m.get("tool_calls")
 
             if role == "tool":
-                # Tool result message — show compact result line
                 tool_name = m.get("name", "unknown")
-                MAX_TOOL_DISPLAY = 2000
-                display = content[:MAX_TOOL_DISPLAY]
-                if len(content) > MAX_TOOL_DISPLAY:
-                    display += f"\n\n...（结果已截断，共 {len(content)} 字符）"
-                safe_display = html.escape(display)
-                parts.append(
-                    f'\n\n<div class="tool-result-box">'
-                    f'<div class="tool-result-header">'
-                    f'<span>📎 工具结果 ({html.escape(tool_name)})</span>'
-                    f'<span class="tool-result-toggle" onclick="toggleToolResult(this)">展开</span>'
-                    f'</div>'
-                    f'<div class="tool-result-content" style="display: none;">\n\n{safe_display}\n\n</div>'
-                    f'</div>\n\n'
-                )
+                html_res = tool_registry.render_collapsible_tool_result(tool_name, content)
+                parts.append(f"\n\n{html_res}\n\n")
                 continue
 
             if role == "assistant" and tool_calls:
