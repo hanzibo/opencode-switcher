@@ -227,7 +227,7 @@ def _resolve_safe_path(path: str) -> Optional[str]:
     Returns the resolved absolute path if it exists, None otherwise.
     Requires absolute paths to prevent directory traversal attacks.
     """
-    if not path or not isinstance(path, str):
+    if not path or not isinstance(path, str) or not os.path.isabs(path):
         return None
     resolved = os.path.realpath(path)
     if not os.path.exists(resolved):
@@ -261,11 +261,12 @@ def execute_list_directory(path: str, include_hidden: bool = False) -> str:
             if os.path.islink(full):
                 marker = "[LINK]"
             elif os.path.isdir(full):
-                marker = "[DIR] "
+                marker = "[DIR]"
             else:
                 marker = "[FILE]"
         except OSError:
-            marker = "[?]  "
+            marker = "[?]"
+        marker = marker.ljust(6)
         filtered.append(f"{marker}  {name}")
 
     if not filtered:
@@ -303,9 +304,9 @@ def execute_read_file(path: str, max_chars: int = 5000) -> str:
 
     try:
         with open(resolved, "r", encoding="utf-8") as f:
-            content = f.read(max_chars + 500)
-            if len(content) > max_chars:
-                content = content[:max_chars] + f"\n\n...（内容已截断）"
+            content = f.read(max_chars)
+            if f.read(1):
+                content += f"\n\n...（内容已截断）"
             return content
     except UnicodeDecodeError:
         return f"错误：文件「{resolved}」不是有效的 UTF-8 文本文件。"
