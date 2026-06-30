@@ -7,6 +7,7 @@ Tool Registry — Function Calling 工具定义与执行器
 所有工具使用零新外部依赖（requests 和 stdlib only）。
 """
 
+import datetime
 import json
 import os
 import subprocess
@@ -107,6 +108,24 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     }
                 },
                 "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "获取当前日期和时间。支持可选时区参数。默认返回系统本地时间。用于回答当前时间、日期、星期几等问题。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "timezone": {
+                        "type": "string",
+                        "description": "时区名称，如「Asia/Shanghai」「America/New_York」「UTC」。留空则使用系统本地时区。",
+                        "default": ""
+                    }
+                },
+                "required": []
             }
         }
     },
@@ -314,6 +333,60 @@ def execute_read_file(path: str, max_chars: int = 5000) -> str:
         return f"错误：无权读取文件「{resolved}」"
     except OSError as e:
         return f"错误：读取文件时出错「{resolved}」: {e}"
+
+
+# ── Time Query ─────────────────────────────────────────────────────────────
+
+_WEEKDAYS_CN = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+
+
+def execute_get_current_time(timezone: str = "") -> str:
+    """Get current date, time, weekday and timezone info.
+
+    Args:
+        timezone: IANA timezone name (e.g. "Asia/Shanghai", "UTC").
+                  Empty string means system local time.
+
+    Returns:
+        Formatted string with current time info.
+    """
+    try:
+        if timezone:
+            try:
+                import zoneinfo
+                tz = zoneinfo.ZoneInfo(timezone)
+                now = datetime.datetime.now(tz)
+            except (ImportError, ModuleNotFoundError):
+                return f"错误：当前 Python 版本不支持 zoneinfo，无法使用时区参数「{timezone}」。请留空 timezone 使用本地时间。"
+            except (KeyError, TypeError, OSError):
+                return f"错误：无效的时区名称「{timezone}」"
+        else:
+            now = datetime.datetime.now().astimezone()
+    except Exception:
+        now = datetime.datetime.now()
+        tz_name = "?"
+    else:
+        tz_name = now.tzname() or "?"
+
+    weekday = _WEEKDAYS_CN[now.weekday()]
+    ts = int(now.timestamp())
+
+    # Compute UTC offset
+    offset = now.utcoffset()
+    if offset is not None:
+        total_minutes = int(offset.total_seconds() // 60)
+        offset_hours = total_minutes // 60
+        offset_minutes = abs(total_minutes) % 60
+        offset_str = f"UTC{offset_hours:+d}" + (f":{offset_minutes:02d}" if offset_minutes else "")
+    else:
+        offset_str = "?"
+
+    return (
+        f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"星期：{weekday}\n"
+        f"时区：{tz_name} ({offset_str})\n"
+        f"时间戳：{ts}"
+    )
 
 
 # ── Tool Functions ─────────────────────────────────────────────────────────
@@ -532,6 +605,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "web_fetch": execute_web_fetch,
     "list_directory": execute_list_directory,
     "read_file": execute_read_file,
+    "get_current_time": execute_get_current_time,
 }
 
 
@@ -596,6 +670,13 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             path = args.get("path", "")
             safe_path = html.escape(path)
             parts.append(f'<div class="tool-call-info">📝 <b>读取文件：</b>{safe_path}</div>')
+        elif name == "get_current_time":
+            tz = args.get("timezone", "")
+            if tz:
+                safe_tz = html.escape(tz)
+                parts.append(f'<div class="tool-call-info">🕐 <b>查询时间：</b>{safe_tz}</div>')
+            else:
+                parts.append(f'<div class="tool-call-info">🕐 <b>查询时间：</b>本地时间</div>')
         else:
             safe_name = html.escape(name)
             parts.append(f'<div class="tool-call-info">🔧 <b>工具调用：</b>{safe_name}</div>')
