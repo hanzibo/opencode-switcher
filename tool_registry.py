@@ -66,6 +66,50 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_directory",
+            "description": "列出指定目录的内容。仅接受绝对路径。返回文件和子目录列表，每条显示类型标记（[DIR] 目录、[FILE] 文件、[LINK] 符号链接）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "要列出的目录的绝对路径"
+                    },
+                    "include_hidden": {
+                        "type": "boolean",
+                        "description": "是否包含隐藏文件（以 . 开头），默认不包含",
+                        "default": False
+                    }
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "读取指定文件的内容。仅接受绝对路径，自动检测并拒绝二进制文件。返回文件的纯文本内容。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "要读取的文件的绝对路径"
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "最多返回字符数（默认 5000，最大 50000）",
+                        "default": 5000
+                    }
+                },
+                "required": ["path"]
+            }
+        }
+    },
 ]
 
 TOOL_CHOICE_AUTO = "auto"
@@ -173,6 +217,102 @@ class _DuckDuckGoResultParser(HTMLParser):
                             })
                     self._in_result_body = False
                     self._current = {}
+
+
+# ── Path Safety ────────────────────────────────────────────────────────────
+
+def _resolve_safe_path(path: str) -> Optional[str]:
+    """Resolve a path safely.
+
+    Returns the resolved absolute path if it exists, None otherwise.
+    Requires absolute paths to prevent directory traversal attacks.
+    """
+    if not path or not isinstance(path, str):
+        return None
+    resolved = os.path.realpath(path)
+    if not os.path.exists(resolved):
+        return None
+    return resolved
+
+
+_MAX_DIRECTORY_LISTING = 200
+
+
+def execute_list_directory(path: str, include_hidden: bool = False) -> str:
+    """List contents of a directory. Accepts absolute paths only."""
+    resolved = _resolve_safe_path(path)
+    if resolved is None:
+        return f"错误：目录不存在或路径无效「{path}」"
+    if not os.path.isdir(resolved):
+        return f"错误：路径不是目录「{resolved}」"
+    try:
+        entries = sorted(os.listdir(resolved))
+    except PermissionError:
+        return f"错误：无权访问目录「{resolved}」"
+    except OSError as e:
+        return f"错误：访问目录时出错「{resolved}」: {e}"
+
+    filtered = []
+    for name in entries:
+        if not include_hidden and name.startswith("."):
+            continue
+        full = os.path.join(resolved, name)
+        try:
+            if os.path.islink(full):
+                marker = "[LINK]"
+            elif os.path.isdir(full):
+                marker = "[DIR] "
+            else:
+                marker = "[FILE]"
+        except OSError:
+            marker = "[?]  "
+        filtered.append(f"{marker}  {name}")
+
+    if not filtered:
+        return f"目录「{resolved}」为空。"
+
+    total = len(filtered)
+    if total > _MAX_DIRECTORY_LISTING:
+        filtered = filtered[:_MAX_DIRECTORY_LISTING]
+        filtered.append(f"\n...（已截断，仅显示前 {_MAX_DIRECTORY_LISTING} 项，共 {total} 项）")
+
+    result = f"📁 目录列表: {resolved}\n\n" + "\n".join(filtered)
+    return result
+
+
+def execute_read_file(path: str, max_chars: int = 5000) -> str:
+    """Read a text file's content. Accepts absolute paths only."""
+    resolved = _resolve_safe_path(path)
+    if resolved is None:
+        return f"错误：文件不存在或路径无效「{path}」"
+    if not os.path.isfile(resolved):
+        return f"错误：路径不是文件「{resolved}」"
+
+    max_chars = max(500, min(50000, max_chars))
+
+    try:
+        with open(resolved, "rb") as f:
+            header = f.read(8192)
+    except PermissionError:
+        return f"错误：无权读取文件「{resolved}」"
+    except OSError as e:
+        return f"错误：读取文件时出错「{resolved}」: {e}"
+
+    if b"\x00" in header:
+        return f"错误：文件「{resolved}」是二进制文件（或包含 null 字节），不支持读取。"
+
+    try:
+        with open(resolved, "r", encoding="utf-8") as f:
+            content = f.read(max_chars + 500)
+            if len(content) > max_chars:
+                content = content[:max_chars] + f"\n\n...（内容已截断）"
+            return content
+    except UnicodeDecodeError:
+        return f"错误：文件「{resolved}」不是有效的 UTF-8 文本文件。"
+    except PermissionError:
+        return f"错误：无权读取文件「{resolved}」"
+    except OSError as e:
+        return f"错误：读取文件时出错「{resolved}」: {e}"
 
 
 # ── Tool Functions ─────────────────────────────────────────────────────────
@@ -389,6 +529,8 @@ def execute_web_fetch(url: str, max_chars: int = 5000) -> str:
 TOOL_EXECUTORS: Dict[str, Callable] = {
     "web_search": execute_web_search,
     "web_fetch": execute_web_fetch,
+    "list_directory": execute_list_directory,
+    "read_file": execute_read_file,
 }
 
 
@@ -445,6 +587,14 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             url = args.get("url", "")
             safe_url = html.escape(url)
             parts.append(f'<div class="tool-call-info">📄 <b>获取页面：</b>{safe_url}</div>')
+        elif name == "list_directory":
+            path = args.get("path", "")
+            safe_path = html.escape(path)
+            parts.append(f'<div class="tool-call-info">📁 <b>列出目录：</b>{safe_path}</div>')
+        elif name == "read_file":
+            path = args.get("path", "")
+            safe_path = html.escape(path)
+            parts.append(f'<div class="tool-call-info">📝 <b>读取文件：</b>{safe_path}</div>')
         else:
             safe_name = html.escape(name)
             parts.append(f'<div class="tool-call-info">🔧 <b>工具调用：</b>{safe_name}</div>')
