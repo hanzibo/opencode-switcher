@@ -1173,9 +1173,26 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             parts.append('<div class="tool-call-info">💬 <b>询问用户</b></div>')
         elif name == "write_file":
             wpath = args.get("path", "")
+            content = args.get("content", "")
             safe_wpath = html.escape(wpath)
             mode = "覆盖" if args.get("force", False) else "写入"
-            parts.append(f'<div class="tool-call-info">✏️ <b>{mode}文件：</b>{safe_wpath}</div>')
+            MAX_PREVIEW = 500
+            preview = content[:MAX_PREVIEW]
+            safe_preview = html.escape(preview)
+            truncated = len(content) > MAX_PREVIEW
+            preview_label = f"内容预览（{len(content)} 字符）" if not truncated else f"内容预览（前{MAX_PREVIEW} / 共{len(content)} 字符）"
+            parts.append(
+                f'<div class="tool-call-info">✏️ <b>{mode}文件：</b>{safe_wpath}</div>'
+                f'<div class="tool-result-box">'
+                f'<div class="tool-result-header">'
+                f'<span>📄 {preview_label}</span>'
+                f'<span class="tool-result-toggle" onclick="toggleToolResult(this)">展开</span>'
+                f'</div>'
+                f'<div class="tool-result-content" style="display: none;">\n'
+                f'{safe_preview}\n'
+                f'</div>'
+                f'</div>'
+            )
         else:
             safe_name = html.escape(name)
             parts.append(f'<div class="tool-call-info">🔧 <b>工具调用：</b>{safe_name}</div>')
