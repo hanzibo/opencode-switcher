@@ -9,8 +9,9 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ./                          # Flat project root (no __init__.py — not a package)
 ├── main.py                 # Entrypoint: flock lock, App(), Gtk.main()
 ├── panel.py                # Search panel UI (~1350 lines), tab switcher, slash commands, CSS providers, evdev keyboard injection
-├── clipboard_panel.py      # Clipboard/LLM panel — largest file (~6200 lines)
+├── clipboard_panel.py      # Clipboard/LLM panel — largest file (~7100 lines)
 ├── clipboard_store.py      # Clipboard store (~1000 lines), heuristic classification, categories, prompts, LLM config, conversations
+├── tool_registry.py        # AI tool definitions + executors — 8 tools, ReAct dispatcher (~1070 lines)
 ├── session_store.py        # SQLite reader + live-session detection via pgrep/proc
 ├── hotkey.py               # X11 pynput + Wayland Unix socket hotkey manager
 ├── launcher.py             # Terminal discovery + session spawner
@@ -29,6 +30,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ├── requirements.txt        # PyGObject, pynput, python-xlib, markdown, pygments, requests
 ├── opencode-switcher-toggle # Shell→Python hybrid: sends "toggle"/"toggle_ai" to Unix socket
 ├── opencode-switcher.desktop # Desktop entry (placeholder __INSTALL_DIR__ replaced at install time)
+├── opencode-switcher.service # systemd unit: Restart=on-failure, RestartSec=3, KillMode=process
 ├── LICENSE                 # MIT
 └── opencode-switcher.png   # Tray icon
 ```
@@ -37,9 +39,9 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 
 | Path | Contents |
 |------|----------|
-| `.hzb-agents/experience/` | 59 experience files — per-feature postmortems with pitfalls, solutions, and reasoning |
-| `.omo/plans/` | 25 structured work plans from past feature development |
-| `.omo/evidence/` | Verification artifacts from past sessions |
+| `.hzb-agents/experience/` | 72 experience files — per-feature postmortems with pitfalls, solutions, and reasoning |
+| `.omo/plans/` | 32 structured work plans from past feature development |
+| `.omo/evidence/` | 2 verification artifacts from past sessions |
 
 ## COMMANDS
 
@@ -56,7 +58,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 
 **System deps** (beyond pip): `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard xclip xdotool gir1.2-webkit2-4.1` (webkit2gtk for AI panel WebView)
 
-**Commit convention** (observed from git log): `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `style(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`).
+**Commit convention** (observed from git log): `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `style(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`, `tool-registry`).
 
 ## KEY FEATURES NOT OBVIOUS FROM FILENAMES
 
@@ -114,6 +116,39 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 - `CustomPromptsStore` manages named prompts with categories + action_type (web, ai_chat)
 - Default prompt: "Ask Google" (Chinese: "以上内容是什么意思，如果是代码，请分析并注释。")
 - WebKit settings optimized: WebGL/HTML5 databases/localStorage disabled to reduce memory
+- **ReAct Tool Calling loop**: LLM can call 8 tools (web_search, web_fetch, list_directory, read_file, get_current_time, grep_search, glob_find, file_info). See "AI Tool Calling" section below.
+
+### AI Tool Calling (ReAct Loop)
+Integrated across `clipboard_panel.py` (ReAct loop, `_ToolCallAccumulator`) and `tool_registry.py` (tool definitions + executors):
+
+- **Loop**: LLM streams response → if `finish_reason: "tool_calls"`, accumulate SSE deltas via `_ToolCallAccumulator` → execute synchronously via `tool_registry.execute_tool_call()` → feed result back as `role: "tool"` message → repeat.
+- **Safety limit**: `MAX_TOOL_ITERATIONS = 25` (kills runaway loops)
+- **8 tools registered** in `tool_registry.py`:
+  - `web_search` — Obscura headless browser search
+  - `web_fetch` — Obscura page fetch
+  - `list_directory` — directory listing (safe-path guarded)
+  - `read_file` — read file contents (safe-path guarded, 8192-byte binary pre-check)
+  - `get_current_time` — timezone-aware current time
+  - `grep_search` — recursive regex search, brace-expansion includes, binary skip
+  - `glob_find` — recursive pattern match via `pathlib.Path.rglob`
+  - `file_info` — stat metadata, symlink-safe detection
+- **Tool results** rendered as collapsible HTML sections in the WebView
+- **`ChatMessage`** in `clipboard_store.py` extended with `tool_call_id` and `tool_calls` fields for tool round-trip persistence
+- **`TOOL_CHOICE_AUTO`** configurable per request in `clipboard_panel.py`
+- **Tool definitions schema**: OpenAI function-calling format (`TOOL_DEFINITIONS` in `tool_registry.py`)
+
+## TOOL_REGISTRY DETAILS
+
+`tool_registry.py` (~1070 lines) is a self-contained module housing all tool schema definitions, executors, and display helpers:
+
+- **`TOOL_DEFINITIONS`**: `List[Dict]` — OpenAI function-calling schemas for all 8 tools
+- **`TOOL_EXECUTORS`**: `Dict[str, Callable]` — maps tool name → executor function
+- **`execute_tool_call(tool_call: dict) -> str`**: dispatches by function name, truncates at `MAX_TOOL_RESULT_CHARS = 5000`
+- **`_resolve_safe_path(path) -> Optional[str]`**: safety guard used by all file tools — validates abs path, resolves realpath, rejects non-existent paths
+- **Helper functions**: `_glob_match()` (brace expansion for `{a,b}` patterns), `_format_file_size()` (human-readable byte sizes)
+- **Display helpers**: `format_tool_calls_for_display()`, `format_tool_result_for_display()`, `render_collapsible_tool_result()`
+- **Limits**: `_MAX_GREP_RESULTS = 200`, `_MAX_LINES_PER_FILE = 50`, `_MAX_GLOB_RESULTS = 500`
+- **File safety**: 3-layer guard (null check → `os.path.isabs` → `os.path.realpath`), binary file detection (8192-byte null byte scan)
 
 ## PLATFORM DUAL-MODE
 
