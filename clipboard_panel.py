@@ -2744,17 +2744,20 @@ class ClipboardPanel(Gtk.Box):
                 for tc in tool_calls_found:
                     if getattr(self, "_ai_request_id", 0) != req_id:
                         return
-                    result = tool_registry.execute_tool_call(tc)
+                    tc_name = tc.get("function", {}).get("name", "")
+                    if tc_name == "ask_user_question":
+                        result = self._handle_ask_user_question(tc)
+                    else:
+                        result = tool_registry.execute_tool_call(tc)
                     if getattr(self, "_ai_request_id", 0) != req_id:
                         return
                     self._ai_messages.append({
                         "role": "tool",
                         "tool_call_id": tc.get("id", ""),
-                        "name": tc.get("function", {}).get("name", ""),
+                        "name": tc_name,
                         "content": result,
                     })
                     # Render tool result summary to WebView
-                    tc_name = tc.get("function", {}).get("name", "")
                     result_html = tool_registry.format_tool_result_for_display(tc_name, result)
                     GLib.idle_add(self._append_html_to_webview, result_html)
 
@@ -2805,6 +2808,63 @@ class ClipboardPanel(Gtk.Box):
         self._ai_spinner.stop()
         self._ai_spinner.hide()
         self._handle_stream_end(req_id)
+
+    def _handle_ask_user_question(self, tool_call: dict) -> str:
+        try:
+            arguments = json.loads(tool_call.get("function", {}).get("arguments", "{}"))
+        except json.JSONDecodeError:
+            return "[询问用户失败：参数解析错误]"
+
+        question = arguments.get("question", "")
+        if not question:
+            return "[询问用户失败：问题为空]"
+
+        event = threading.Event()
+        self._ai_ask_user_state = {
+            "question": question,
+            "event": event,
+            "answer": None,
+        }
+
+        rendered_question = _markdown_to_html_safe(question)
+        question_html = (
+            '<div class="tool-ask-user" style="margin: 12px 0; border-radius: 8px; '
+            'border: 1px solid rgba(129, 140, 248, 0.25); overflow: hidden;">'
+            '<div style="padding: 10px 14px; background: rgba(129, 140, 248, 0.08); '
+            'border-bottom: 1px solid rgba(129, 140, 248, 0.15); '
+            'font-size: 12px; color: #818cf8; font-weight: 600;">'
+            '💬 Agent 需要确认'
+            '</div>'
+            '<div style="padding: 14px 16px; background: rgba(129, 140, 248, 0.05); '
+            'font-size: 14px; line-height: 1.6;">'
+            + rendered_question +
+            '</div>'
+            '<div style="padding: 8px 14px; background: rgba(129, 140, 248, 0.05); '
+            'border-top: 1px solid rgba(129, 140, 248, 0.15); '
+            'font-size: 12px; color: #818cf8;">'
+            '✏️ 在下方输入框中回答，或输入 /cancel 取消'
+            '</div>'
+            '</div>'
+        )
+        GLib.idle_add(self._append_html_to_webview, question_html)
+        GLib.idle_add(self._enable_ask_user_entry)
+
+        event.wait()
+
+        state = getattr(self, "_ai_ask_user_state", None)
+        answer = state.get("answer", "") if state else ""
+        self._ai_ask_user_state = None
+        GLib.idle_add(self._ai_entry.grab_focus)
+
+        if not answer:
+            return "[用户取消了回答]"
+        return answer
+
+    def _enable_ask_user_entry(self):
+        self._ai_entry.placeholder_text = "请输入回答..."
+        self._ai_send_btn.set_label("发送")
+        self._ai_send_btn.set_sensitive(True)
+        self._ai_entry.grab_focus()
 
     def _handle_stream_end(self, req_id: int):
         """Common cleanup after a conversation turn ends (save, prune, title gen)."""
@@ -3406,6 +3466,39 @@ class ClipboardPanel(Gtk.Box):
         self._ai_send_btn.set_sensitive(sensitive)
 
     def _on_send_clicked(self, _btn=None):
+        # Check for pending AskUserQuestion first — must precede streaming check
+        ask_state = getattr(self, "_ai_ask_user_state", None)
+        if ask_state is not None:
+            buf = self._ai_entry.get_buffer()
+            start = buf.get_start_iter()
+            end = buf.get_end_iter()
+            text = buf.get_text(start, end, True).strip()
+            if not text:
+                return
+            buf.set_text("")
+            self._ai_entry.placeholder_text = "输入后续问题..."
+            self._update_send_button(False)
+
+            if text in ("/cancel", "/abort"):
+                # Cancel the pending question
+                safe_q = html.escape(ask_state["question"])
+                self._append_html_to_webview(
+                    f'<div style="color: #f87171; padding: 8px 12px; '
+                    f'font-size: 13px;">❌ 已取消问题：「{safe_q}」</div>'
+                )
+                ask_state["answer"] = ""
+                ask_state["event"].set()
+                return
+
+            # Display user's answer in WebView
+            safe_answer = html.escape(text)
+            self._append_html_to_webview(
+                f'\n\n---\n\n<div class="user-header">You:</div>\n\n{safe_answer}\n\n---\n\n'
+            )
+            ask_state["answer"] = text
+            ask_state["event"].set()
+            return
+
         if self._ai_streaming:
             self._ai_cancel_event.set()
             self._flush_stream_queue()

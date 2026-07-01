@@ -206,6 +206,49 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "ask_user_question",
+            "description": "向用户提问以获取澄清信息。当你需要更多信息、确认或用户决策才能继续执行时使用。问题应当清晰具体，避免模糊提问。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "要向用户提出的问题，应当清晰具体"
+                    }
+                },
+                "required": ["question"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_file",
+            "description": "创建新文件或覆盖已有文件的内容。仅接受绝对路径。默认不覆盖已有文件（需设置 force=True 覆盖）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "要写入的文件的绝对路径"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "文件内容（文本格式）"
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "当目标文件已存在时是否覆盖，默认 false",
+                        "default": False
+                    }
+                },
+                "required": ["path", "content"]
+            }
+        }
+    },
 ]
 
 TOOL_CHOICE_AUTO = "auto"
@@ -327,6 +370,26 @@ def _resolve_safe_path(path: str) -> Optional[str]:
         return None
     resolved = os.path.realpath(path)
     if not os.path.exists(resolved):
+        return None
+    return resolved
+
+
+def _resolve_write_path(path: str, force: bool = False) -> Optional[str]:
+    """Resolve a path for write operations.
+
+    Unlike _resolve_safe_path, this does NOT require the file to exist.
+    Requires absolute paths to prevent directory traversal attacks.
+    If the file already exists, force must be True to allow overwriting.
+
+    Returns the resolved absolute path if valid, None otherwise.
+    """
+    if not path or not isinstance(path, str) or not os.path.isabs(path):
+        return None
+    resolved = os.path.realpath(path)
+    parent = os.path.dirname(resolved)
+    if not os.path.isdir(parent):
+        return None
+    if os.path.exists(resolved) and not force:
         return None
     return resolved
 
@@ -726,6 +789,77 @@ def execute_file_info(path: str) -> str:
     return "\n".join(lines)
 
 
+def execute_ask_user_question(question: str) -> str:
+    """Ask the user a question and return their response.
+
+    Note: This is a placeholder executor. The actual blocking user interaction
+    is handled by clipboard_panel.py which intercepts this tool before calling
+    execute_tool_call(). This function exists for registration completeness.
+
+    Args:
+        question: The question to ask the user.
+
+    Returns:
+        A placeholder string indicating the question was asked.
+    """
+    return f"请回答: {question}"
+
+
+# ── Write File ──────────────────────────────────────────────────────────────
+
+_MAX_WRITE_CHARS = 100000
+
+
+def execute_write_file(path: str, content: str, force: bool = False) -> str:
+    """Create a new file or overwrite an existing file's content.
+
+    Only accepts absolute paths. By default, will NOT overwrite an existing
+    file — set force=True to allow overwriting.
+
+    Args:
+        path: Absolute path of the file to write.
+        content: Text content to write to the file.
+        force: If True, overwrite existing file without warning.
+               Defaults to False (safer).
+
+    Returns:
+        Formatted string with result summary.
+    """
+    resolved = _resolve_write_path(path, force)
+    if resolved is None:
+        if not os.path.isabs(path):
+            return "错误：必须使用绝对路径！"
+        parent_dir = os.path.dirname(os.path.realpath(path))
+        if not os.path.isdir(parent_dir):
+            return f"错误：父目录不存在「{os.path.dirname(path)}」"
+        if os.path.exists(os.path.realpath(path)):
+            return f"错误：文件已存在「{path}」。如需覆盖请设置 force=True。"
+        return f"错误：无法写入文件「{path}」"
+
+    parent = os.path.dirname(resolved)
+    if not os.access(parent, os.W_OK):
+        return f"错误：目录不可写「{parent}」"
+
+    if len(content) > _MAX_WRITE_CHARS:
+        content = content[:_MAX_WRITE_CHARS]
+
+    try:
+        with open(resolved, "w", encoding="utf-8") as f:
+            f.write(content)
+    except PermissionError:
+        return f"错误：无权写入文件「{resolved}」"
+    except OSError as e:
+        return f"错误：写入文件时出错「{resolved}」: {e}"
+
+    size_bytes = len(content.encode("utf-8"))
+    size_str = _format_file_size(size_bytes)
+    return (
+        f"✅ 文件已写入: {resolved}\n"
+        f"  大小: {size_str}\n"
+        f"  字符数: {len(content)}"
+    )
+
+
 # ── Tool Functions ─────────────────────────────────────────────────────────
 
 # Max characters in a single tool result (to prevent token overflow)
@@ -946,6 +1080,8 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "grep_search": execute_grep_search,
     "glob_find": execute_glob_find,
     "file_info": execute_file_info,
+    "ask_user_question": execute_ask_user_question,
+    "write_file": execute_write_file,
 }
 
 
@@ -1033,6 +1169,13 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             fpath = args.get("path", "")
             safe_fpath = html.escape(fpath)
             parts.append(f'<div class="tool-call-info">📋 <b>文件信息：</b>{safe_fpath}</div>')
+        elif name == "ask_user_question":
+            parts.append('<div class="tool-call-info">💬 <b>询问用户</b></div>')
+        elif name == "write_file":
+            wpath = args.get("path", "")
+            safe_wpath = html.escape(wpath)
+            mode = "覆盖" if args.get("force", False) else "写入"
+            parts.append(f'<div class="tool-call-info">✏️ <b>{mode}文件：</b>{safe_wpath}</div>')
         else:
             safe_name = html.escape(name)
             parts.append(f'<div class="tool-call-info">🔧 <b>工具调用：</b>{safe_name}</div>')
