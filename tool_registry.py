@@ -28,6 +28,23 @@ import requests
 _IGNORE_DIRS: Final = {"node_modules", "venv", ".venv", "env", "__pycache__", "build", "dist", "target", "cache", ".cache"}
 
 
+def _get_ignore_dirs() -> set:
+    config_path = os.path.expanduser("~/.config/opencode-switcher/config.json")
+    ignore_dirs = set(_IGNORE_DIRS)
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+            custom_ignores = config.get("search_ignore_dirs", [])
+            if isinstance(custom_ignores, list):
+                for d in custom_ignores:
+                    if isinstance(d, str) and d.strip():
+                        ignore_dirs.add(d.strip())
+        except Exception:
+            pass
+    return ignore_dirs
+
+
 # ── Tool Definitions (OpenAI function calling schema) ──────────────────────
 
 TOOL_DEFINITIONS: List[Dict[str, Any]] = [
@@ -656,9 +673,10 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
     total_matches = 0
     file_count = 0
 
+    ignore_dirs = _get_ignore_dirs()
     for root, dirs, files in os.walk(resolved, topdown=True):
         # Skip hidden directories and build/dependency directories
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _IGNORE_DIRS]
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ignore_dirs]
 
         if total_matches >= max_results:
             break
@@ -751,9 +769,10 @@ def execute_glob_find(pattern: str, path: str, max_results: int = 100) -> str:
         return False
 
     try:
+        ignore_dirs = _get_ignore_dirs()
         for root_dir, dirs, files in os.walk(resolved, topdown=True):
             # Skip hidden directories and build/dependency directories
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _IGNORE_DIRS]
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ignore_dirs]
             
             for fname in files:
                 if fname.startswith("."):

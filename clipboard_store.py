@@ -331,8 +331,10 @@ class ClipboardStore:
             try:
                 if os.path.exists(image_path):
                     os.remove(image_path)
-            except Exception:
-                pass
+            except Exception as e:
+                import sys
+                sys.stderr.write(f"Error deleting image file {image_path}: {e}\n")
+                sys.stderr.flush()
 
     def add(self, text: str):
         with self._lock:
