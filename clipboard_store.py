@@ -322,6 +322,18 @@ class ClipboardStore:
     def detect_language_name(self, text: str) -> Optional[str]:
         return detect_language_name(text)
 
+    def _delete_image_file_if_unreferenced(self, image_path: str):
+        if not image_path:
+            return
+        # Count references to this image path in the current items list
+        ref_count = sum(1 for item in self._items if item.image_path == image_path)
+        if ref_count == 0:
+            try:
+                if os.path.exists(image_path):
+                    os.remove(image_path)
+            except Exception:
+                pass
+
     def add(self, text: str):
         with self._lock:
             if not text.strip():
@@ -335,7 +347,11 @@ class ClipboardStore:
             language = self.detect_language_name(text) if item_type == "code" else None
             self._items.append(ClipboardItem(text=text, timestamp=int(time.time() * 1000), hash=h, type=item_type, language=language))
             if len(self._items) > MAX_CLIPBOARD:
+                evicted = self._items[:-MAX_CLIPBOARD]
                 self._items = self._items[-MAX_CLIPBOARD:]
+                for item in evicted:
+                    if item.type == "image" and item.image_path:
+                        self._delete_image_file_if_unreferenced(item.image_path)
             self._save()
 
     def add_image(self, image_data: bytes):
@@ -367,7 +383,11 @@ class ClipboardStore:
                 image_path=img_path
             ))
             if len(self._items) > MAX_CLIPBOARD:
+                evicted = self._items[:-MAX_CLIPBOARD]
                 self._items = self._items[-MAX_CLIPBOARD:]
+                for item in evicted:
+                    if item.type == "image" and item.image_path:
+                        self._delete_image_file_if_unreferenced(item.image_path)
             self._save()
         
         # Notify UI by writing marker
@@ -383,12 +403,18 @@ class ClipboardStore:
     def delete(self, index: int):
         with self._lock:
             if 0 <= index < len(self._items):
-                self._items.pop(index)
+                item = self._items.pop(index)
+                if item.type == "image" and item.image_path:
+                    self._delete_image_file_if_unreferenced(item.image_path)
                 self._save()
 
     def clear_all(self):
         with self._lock:
+            old_items = list(self._items)
             self._items.clear()
+            for item in old_items:
+                if item.type == "image" and item.image_path:
+                    self._delete_image_file_if_unreferenced(item.image_path)
             self._save()
 
     def get_all(self) -> List[ClipboardItem]:

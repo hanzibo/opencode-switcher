@@ -25,6 +25,9 @@ from typing import Any, Dict, Final, List, Optional, Callable, Tuple
 import requests
 
 
+_IGNORE_DIRS: Final = {"node_modules", "venv", ".venv", "__pycache__", "build", "dist", "target", "cache", ".cache"}
+
+
 # ── Tool Definitions (OpenAI function calling schema) ──────────────────────
 
 TOOL_DEFINITIONS: List[Dict[str, Any]] = [
@@ -654,8 +657,8 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
     file_count = 0
 
     for root, dirs, files in os.walk(resolved, topdown=True):
-        # Skip hidden directories
-        dirs[:] = [d for d in dirs if not d.startswith(".")]
+        # Skip hidden directories and build/dependency directories
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _IGNORE_DIRS]
 
         if total_matches >= max_results:
             break
@@ -716,7 +719,7 @@ _MAX_GLOB_RESULTS = 500
 
 
 def execute_glob_find(pattern: str, path: str, max_results: int = 100) -> str:
-    """Recursively find files matching a glob pattern.
+    """Recursively find files matching a glob pattern, skipping blacklisted directories.
 
     Args:
         pattern: Glob pattern such as "**/*.py", "config*.json".
@@ -734,22 +737,36 @@ def execute_glob_find(pattern: str, path: str, max_results: int = 100) -> str:
 
     max_results = max(1, min(_MAX_GLOB_RESULTS, max_results))
 
-    root = pathlib.Path(resolved)
+    filtered: List[str] = []
+
+    def _is_match(relpath: str, fname: str, pat: str) -> bool:
+        if fnmatch.fnmatch(fname, pat):
+            return True
+        if fnmatch.fnmatch(relpath, pat):
+            return True
+        if pat.startswith("**/"):
+            clean_pat = pat[3:]
+            if fnmatch.fnmatch(relpath, clean_pat) or fnmatch.fnmatch(fname, clean_pat):
+                return True
+        return False
 
     try:
-        matched = sorted(root.rglob(pattern))
+        for root_dir, dirs, files in os.walk(resolved, topdown=True):
+            # Skip hidden directories and build/dependency directories
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _IGNORE_DIRS]
+            
+            for fname in files:
+                if fname.startswith("."):
+                    continue
+                fpath = os.path.join(root_dir, fname)
+                relpath = os.path.relpath(fpath, resolved)
+                if _is_match(relpath, fname, pattern):
+                    filtered.append(os.path.abspath(fpath))
     except (PermissionError, OSError) as e:
         return f"错误：搜索文件时出错「{resolved}」: {e}"
 
-    filtered: List[str] = []
-    for m in matched:
-        if not m.is_file() and not m.is_symlink():
-            continue
-        rel = m.relative_to(root)
-        parts = rel.parts
-        if any(p.startswith(".") for p in parts):
-            continue
-        filtered.append(str(m.resolve()))
+    # Sort results for deterministic output
+    filtered.sort()
 
     if not filtered:
         return f"在目录「{resolved}」中没有找到匹配「{pattern}」的文件。"
