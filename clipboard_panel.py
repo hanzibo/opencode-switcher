@@ -2785,10 +2785,17 @@ class ClipboardPanel(Gtk.Box):
         msgs = self._ai_messages
         if not (0 <= assistant_index < len(msgs)) or msgs[assistant_index].get("role") != "assistant":
             return
-        self._ai_messages = msgs[:assistant_index]
 
-        if not self._ai_messages or self._ai_messages[-1].get("role") != "user":
+        # 逆向寻找到触发该回复的最后一个 user 消息节点
+        user_index = assistant_index
+        while user_index >= 0 and msgs[user_index].get("role") != "user":
+            user_index -= 1
+
+        if user_index < 0:
             return
+
+        # 丢弃该轮交互产生的所有中间状态（包括工具调用、结果、当前回答等）
+        self._ai_messages = msgs[:user_index + 1]
 
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         # 重置 JS 自动滚动标志，确保重试后滚动到最底端

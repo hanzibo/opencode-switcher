@@ -1520,7 +1520,7 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             cmd_label = f"命令预览（{len(cmd)} 字符）" if len(cmd) <= 300 else f"命令预览（前300 / 共{len(cmd)} 字符）"
             parts.append(
                 f'<div class="tool-call-info">🖥️ <b>执行命令：</b>{safe_first}</div>'
-                f'<div style="margin: 2px 0 4px 16px; font-size: 11px; color: #888;">超时：{cmd_timeout}s</div>'
+                f'<div style="margin: 2px 0 4px 16px; font-size: 11px; color: #888;">超时限制：{cmd_timeout}s</div>'
                 + _make_collapsible_preview(cmd, cmd_label, max_chars=300, use_pre=True)
             )
         else:
