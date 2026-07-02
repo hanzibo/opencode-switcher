@@ -4631,7 +4631,7 @@ class ClipboardPanel(Gtk.Box):
                                  or '<div class="thinking-header">' in content)
                     prefix = '' if has_header else '\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
                     parts.append(f'{prefix}{content}\n\n')
-                parts.append(f'<copy-marker data-msg-index="{i}"></copy-marker>\n\n---\n\n')
+                parts.append('\n\n---\n\n')
                 continue
 
             if not content:
