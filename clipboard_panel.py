@@ -3872,7 +3872,7 @@ class ClipboardPanel(Gtk.Box):
 
     def _switch_model_by_alias(self, alias: str):
         """Switch AI model by alias. Updates active model info and header label."""
-        model = next((m for m in self._llm_settings_store.models if m.alias == alias), None)
+        model = next((m for m in self._llm_settings_store.models if m.alias.lower() == alias.lower()), None)
         if not model:
             lines = [f"❌ 未找到模型别名 **\"{alias}\"**。\n", "可用模型:\n"]
             for m in self._llm_settings_store.models:
@@ -3925,15 +3925,26 @@ class ClipboardPanel(Gtk.Box):
         if not msgs:
             return
 
-        last_user_content = ""
-        if len(msgs) >= 2 and msgs[-1].get("role") == "assistant":
-            last_user_content = msgs[-2].get("content", "")
-            self._ai_messages = msgs[:-2]
-        elif msgs[-1].get("role") == "user":
-            last_user_content = msgs[-1].get("content", "")
-            self._ai_messages = msgs[:-1]
-        else:
+        # 逆向寻找到最后一个用户提问的节点
+        user_index = len(msgs) - 1
+        while user_index >= 0 and msgs[user_index].get("role") != "user":
+            user_index -= 1
+
+        if user_index < 0:
             return
+
+        user_content = msgs[user_index].get("content", "")
+        if isinstance(user_content, list):
+            # 针对多模态列表，提取文本片段
+            last_user_content = next(
+                (p["text"] for p in user_content if isinstance(p, dict) and p.get("type") == "text"),
+                ""
+            )
+        else:
+            last_user_content = user_content
+
+        # 将历史消息完全回滚到该用户提问前的状态
+        self._ai_messages = msgs[:user_index]
 
         buf = self._ai_entry.get_buffer()
         buf.set_text(last_user_content)
@@ -3949,10 +3960,22 @@ class ClipboardPanel(Gtk.Box):
         self._cancel_streaming_if_active()
 
         msgs = self._ai_messages
-        total_rounds = len(msgs) // 2
-        if total_rounds == 0:
+        # 动态将消息聚合为以 user 提问为起点的轮次结构
+        rounds = []
+        for idx, m in enumerate(msgs):
+            if m.get("role") == "user":
+                rounds.append({
+                    "user_idx": idx,
+                    "user_msg": m.get("content", ""),
+                    "asst_msg": ""
+                })
+            elif m.get("role") == "assistant" and rounds:
+                rounds[-1]["asst_msg"] = m.get("content", "")
+
+        if not rounds:
             return
-        self._append_html_to_webview(self._build_round_cards_html(msgs, total_rounds))
+
+        self._append_html_to_webview(self._build_round_cards_html(msgs, rounds))
 
     def _handle_title_command(self, title_text: str):
         """Handle /title command: set custom title or regenerate via LLM.
@@ -4024,21 +4047,46 @@ class ClipboardPanel(Gtk.Box):
 
     def _rollback_to_round(self, round_index: int):
         msgs = self._ai_messages
-        end_idx = round_index * 2 + 2
-        if end_idx >= len(msgs):
+
+        # 重新扫描定位
+        rounds = []
+        for idx, m in enumerate(msgs):
+            if m.get("role") == "user":
+                rounds.append({
+                    "user_idx": idx,
+                    "user_msg": m.get("content", ""),
+                    "asst_msg": ""
+                })
+            elif m.get("role") == "assistant" and rounds:
+                rounds[-1]["asst_msg"] = m.get("content", "")
+
+        total_rounds = len(rounds)
+        next_round_idx = round_index + 1
+        if next_round_idx >= total_rounds:
             return
-        discarded = msgs[end_idx].get("content", "") if end_idx < len(msgs) and msgs[end_idx].get("role") == "user" else ""
-        self._ai_messages = msgs[:end_idx]
+
+        target_user_idx = rounds[next_round_idx]["user_idx"]
+        user_content = msgs[target_user_idx].get("content", "")
+        if isinstance(user_content, list):
+            discarded = next(
+                (p["text"] for p in user_content if isinstance(p, dict) and p.get("type") == "text"),
+                ""
+            )
+        else:
+            discarded = user_content
+
+        self._ai_messages = msgs[:target_user_idx]
         buf = self._ai_entry.get_buffer()
         buf.set_text(discarded)
         buf.place_cursor(buf.get_end_iter())
+        
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript("_autoScroll = true;", None, None)
         self._render_markdown(self._ai_markdown_text)
         self._save_current_conversation()
 
-    def _build_round_cards_html(self, msgs, total_rounds):
+    def _build_round_cards_html(self, msgs, rounds):
         """Build HTML displaying conversation rounds as clickable cards."""
         is_dark = getattr(self, "_theme", "dark") == "dark"
         if is_dark:
@@ -4062,9 +4110,14 @@ class ClipboardPanel(Gtk.Box):
             return re.sub(r'<[^>]+>', '', text).strip()
 
         cards_html = []
-        for i in range(total_rounds):
-            user_msg = msgs[i * 2].get("content", "")
-            asst_msg = msgs[i * 2 + 1].get("content", "")
+        total_rounds = len(rounds)
+        for i, rd in enumerate(rounds):
+            user_msg = rd["user_msg"]
+            asst_msg = rd["asst_msg"]
+            if isinstance(user_msg, list):
+                user_msg = _vision_content_to_text(user_msg)
+            if isinstance(asst_msg, list):
+                asst_msg = _vision_content_to_text(asst_msg)
             user_preview = _strip_html(user_msg)[:80] + ("..." if len(_strip_html(user_msg)) > 80 else "")
             asst_preview = _strip_html(asst_msg)[:80] + ("..." if len(_strip_html(asst_msg)) > 80 else "")
             is_last = (i == total_rounds - 1)
