@@ -659,6 +659,10 @@ class _LLMHttpClient:
                         msg["content"] = content
                     else:
                         msg["content"] = None
+                    # 思考模式下工具调用轮次必须回传 reasoning_content，否则 API 返回 400
+                    rc = m.get("reasoning_content")
+                    if rc:
+                        msg["reasoning_content"] = rc
                 else:
                     msg["content"] = content or ""
             elif role == "tool":
@@ -715,63 +719,68 @@ class _LLMHttpClient:
         )
 
         try:
-            response = self._session.post(
+            with self._session.post(
                 url,
                 json=body,
                 headers=headers,
                 stream=True,
                 timeout=timeout,
-            )
-            response.raise_for_status()
-            response.encoding = "utf-8"
+            ) as response:
+                response.raise_for_status()
+                response.encoding = "utf-8"
 
-            # Accumulator for incremental tool_calls delta
-            tc_accum = _ToolCallAccumulator()
+                # Accumulator for incremental tool_calls delta
+                tc_accum = _ToolCallAccumulator()
 
-            for line in response.iter_lines(decode_unicode=True):
-                if cancel_event and cancel_event.is_set():
-                    return
-                if not line:
-                    continue
-                if line.startswith("data:"):
-                    data_str = line[5:].strip()
-                    if data_str == "[DONE]":
-                        calls = tc_accum.get_calls()
-                        if calls:
-                            yield {"tool_calls": calls}
+                for line in response.iter_lines(decode_unicode=True):
+                    if cancel_event and cancel_event.is_set():
                         return
-                    if not data_str:
+                    if not line:
                         continue
-                    try:
-                        chunk = json.loads(data_str)
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    except (json.JSONDecodeError, IndexError, KeyError):
-                        continue
+                    if line.startswith("data:"):
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            calls = tc_accum.get_calls()
+                            if calls:
+                                yield {"tool_calls": calls}
+                            return
+                        if not data_str:
+                            continue
+                        try:
+                            chunk = json.loads(data_str)
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        except (json.JSONDecodeError, IndexError, KeyError):
+                            continue
 
-                    tc_delta = delta.get("tool_calls")
-                    if tc_delta:
-                        for tcd in tc_delta:
-                            tc_accum.add_delta(tcd)
+                        tc_delta = delta.get("tool_calls")
+                        if tc_delta:
+                            for tcd in tc_delta:
+                                tc_accum.add_delta(tcd)
+                            finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
+                            if finish_reason == "tool_calls":
+                                calls = tc_accum.get_calls()
+                                if calls:
+                                    tc_accum.clear()
+                                    yield {"tool_calls": calls}
+                            continue
+
                         finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
                         if finish_reason == "tool_calls":
                             calls = tc_accum.get_calls()
                             if calls:
                                 tc_accum.clear()
                                 yield {"tool_calls": calls}
-                        continue
+                            continue
 
-                    finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
-                    if finish_reason == "tool_calls":
-                        calls = tc_accum.get_calls()
-                        if calls:
-                            tc_accum.clear()
-                            yield {"tool_calls": calls}
-                        continue
+                        content = delta.get("content")
+                        reasoning = delta.get("reasoning_content")
+                        if content is not None or reasoning is not None:
+                            yield delta
 
-                    content = delta.get("content")
-                    reasoning = delta.get("reasoning_content")
-                    if content is not None or reasoning is not None:
-                        yield delta
+                # Fallback: if loop exits naturally without [DONE] message, yield remaining tool_calls
+                calls = tc_accum.get_calls()
+                if calls:
+                    yield {"tool_calls": calls}
 
         except requests.exceptions.Timeout:
             raise _LLMHttpError(f"请求超时（{timeout}秒）")
@@ -2780,10 +2789,17 @@ class ClipboardPanel(Gtk.Box):
         msgs = self._ai_messages
         if not (0 <= assistant_index < len(msgs)) or msgs[assistant_index].get("role") != "assistant":
             return
-        self._ai_messages = msgs[:assistant_index]
 
-        if not self._ai_messages or self._ai_messages[-1].get("role") != "user":
+        # 逆向寻找到触发该回复的最后一个 user 消息节点
+        user_index = assistant_index
+        while user_index >= 0 and msgs[user_index].get("role") != "user":
+            user_index -= 1
+
+        if user_index < 0:
             return
+
+        # 丢弃该轮交互产生的所有中间状态（包括工具调用、结果、当前回答等）
+        self._ai_messages = msgs[:user_index + 1]
 
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         # 重置 JS 自动滚动标志，确保重试后滚动到最底端
@@ -2920,6 +2936,7 @@ class ClipboardPanel(Gtk.Box):
         thinking_header_added = False
         response_header_added = False
         assistant_text = ""
+        reasoning_text = ""  # 累积本轮 reasoning_content，工具调用时必须回传
         tool_calls_found: list = []
         # Reset per-iteration buffer and stream div states for the new iteration
         self._ai_assistant_buffer = ""
@@ -2954,6 +2971,7 @@ class ClipboardPanel(Gtk.Box):
                         thinking_header_added = True
                     with self._ai_stream_lock:
                         self._ai_stream_queue.append(reasoning)
+                    reasoning_text += reasoning
                     has_thinking = True
                 elif content:
                     if not response_header_added:
@@ -2971,11 +2989,15 @@ class ClipboardPanel(Gtk.Box):
             # Stream finished — check for tool_calls
             if tool_calls_found:
                 # Append assistant message with tool_calls to conversation
-                self._ai_messages.append({
+                # 思考模式下必须携带 reasoning_content，否则 DeepSeek API 在后续子请求中返回 400
+                tool_call_msg: dict = {
                     "role": "assistant",
                     "content": assistant_text,
                     "tool_calls": tool_calls_found,
-                })
+                }
+                if reasoning_text:
+                    tool_call_msg["reasoning_content"] = reasoning_text
+                self._ai_messages.append(tool_call_msg)
 
                 # Flush any streamed content before rendering tool call UI
                 self._flush_stream_queue()
@@ -3860,7 +3882,8 @@ class ClipboardPanel(Gtk.Box):
 
     def _switch_model_by_alias(self, alias: str):
         """Switch AI model by alias. Updates active model info and header label."""
-        model = next((m for m in self._llm_settings_store.models if m.alias == alias), None)
+        # 大小写不敏感匹配，兼容用户输入与存储别名的大小写差异（如 /model GPT-4 匹配 gpt-4）
+        model = next((m for m in self._llm_settings_store.models if m.alias.lower() == alias.lower()), None)
         if not model:
             lines = [f"❌ 未找到模型别名 **\"{alias}\"**。\n", "可用模型:\n"]
             for m in self._llm_settings_store.models:
@@ -3906,6 +3929,25 @@ class ClipboardPanel(Gtk.Box):
             self._ai_spinner.stop()
             self._ai_spinner.hide()
 
+    def _build_conversation_rounds(self, msgs: list) -> list:
+        """将消息列表聚合为以 user 提问为起点的轮次结构列表。
+
+        每个元素形如 {"user_idx": int, "user_msg": str|list, "asst_msg": str|list}。
+        工具调用消息（role=tool）和中间 assistant 片段会被跳过，以第一个出现的
+        非空 assistant 消息作为该轮的 asst_msg。
+        """
+        rounds = []
+        for idx, m in enumerate(msgs):
+            if m.get("role") == "user":
+                rounds.append({
+                    "user_idx": idx,
+                    "user_msg": m.get("content", ""),
+                    "asst_msg": ""
+                })
+            elif m.get("role") == "assistant" and rounds:
+                rounds[-1]["asst_msg"] = m.get("content", "")
+        return rounds
+
     def _handle_retry_command(self):
         self._cancel_streaming_if_active()
 
@@ -3913,15 +3955,26 @@ class ClipboardPanel(Gtk.Box):
         if not msgs:
             return
 
-        last_user_content = ""
-        if len(msgs) >= 2 and msgs[-1].get("role") == "assistant":
-            last_user_content = msgs[-2].get("content", "")
-            self._ai_messages = msgs[:-2]
-        elif msgs[-1].get("role") == "user":
-            last_user_content = msgs[-1].get("content", "")
-            self._ai_messages = msgs[:-1]
-        else:
+        # 逆向寻找到最后一个用户提问的节点
+        user_index = len(msgs) - 1
+        while user_index >= 0 and msgs[user_index].get("role") != "user":
+            user_index -= 1
+
+        if user_index < 0:
             return
+
+        user_content = msgs[user_index].get("content", "")
+        if isinstance(user_content, list):
+            # 针对多模态列表，提取文本片段
+            last_user_content = next(
+                (p["text"] for p in user_content if isinstance(p, dict) and p.get("type") == "text"),
+                ""
+            )
+        else:
+            last_user_content = user_content
+
+        # 将历史消息完全回滚到该用户提问前的状态
+        self._ai_messages = msgs[:user_index]
 
         buf = self._ai_entry.get_buffer()
         buf.set_text(last_user_content)
@@ -3937,10 +3990,12 @@ class ClipboardPanel(Gtk.Box):
         self._cancel_streaming_if_active()
 
         msgs = self._ai_messages
-        total_rounds = len(msgs) // 2
-        if total_rounds == 0:
+        rounds = self._build_conversation_rounds(msgs)
+
+        if not rounds:
             return
-        self._append_html_to_webview(self._build_round_cards_html(msgs, total_rounds))
+
+        self._append_html_to_webview(self._build_round_cards_html(rounds))
 
     def _handle_title_command(self, title_text: str):
         """Handle /title command: set custom title or regenerate via LLM.
@@ -4012,21 +4067,35 @@ class ClipboardPanel(Gtk.Box):
 
     def _rollback_to_round(self, round_index: int):
         msgs = self._ai_messages
-        end_idx = round_index * 2 + 2
-        if end_idx >= len(msgs):
+
+        rounds = self._build_conversation_rounds(msgs)
+        total_rounds = len(rounds)
+        next_round_idx = round_index + 1
+        if next_round_idx >= total_rounds:
             return
-        discarded = msgs[end_idx].get("content", "") if end_idx < len(msgs) and msgs[end_idx].get("role") == "user" else ""
-        self._ai_messages = msgs[:end_idx]
+
+        target_user_idx = rounds[next_round_idx]["user_idx"]
+        user_content = msgs[target_user_idx].get("content", "")
+        if isinstance(user_content, list):
+            discarded = next(
+                (p["text"] for p in user_content if isinstance(p, dict) and p.get("type") == "text"),
+                ""
+            )
+        else:
+            discarded = user_content
+
+        self._ai_messages = msgs[:target_user_idx]
         buf = self._ai_entry.get_buffer()
         buf.set_text(discarded)
         buf.place_cursor(buf.get_end_iter())
+
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript("_autoScroll = true;", None, None)
         self._render_markdown(self._ai_markdown_text)
         self._save_current_conversation()
 
-    def _build_round_cards_html(self, msgs, total_rounds):
+    def _build_round_cards_html(self, rounds):
         """Build HTML displaying conversation rounds as clickable cards."""
         is_dark = getattr(self, "_theme", "dark") == "dark"
         if is_dark:
@@ -4050,11 +4119,18 @@ class ClipboardPanel(Gtk.Box):
             return re.sub(r'<[^>]+>', '', text).strip()
 
         cards_html = []
-        for i in range(total_rounds):
-            user_msg = msgs[i * 2].get("content", "")
-            asst_msg = msgs[i * 2 + 1].get("content", "")
-            user_preview = _strip_html(user_msg)[:80] + ("..." if len(_strip_html(user_msg)) > 80 else "")
-            asst_preview = _strip_html(asst_msg)[:80] + ("..." if len(_strip_html(asst_msg)) > 80 else "")
+        total_rounds = len(rounds)
+        for i, rd in enumerate(rounds):
+            user_msg = rd["user_msg"]
+            asst_msg = rd["asst_msg"]
+            if isinstance(user_msg, list):
+                user_msg = _vision_content_to_text(user_msg)
+            if isinstance(asst_msg, list):
+                asst_msg = _vision_content_to_text(asst_msg)
+            _u = _strip_html(user_msg)
+            _a = _strip_html(asst_msg)
+            user_preview = html.escape(_u[:80] + ("..." if len(_u) > 80 else ""))
+            asst_preview = html.escape(_a[:80] + ("..." if len(_a) > 80 else ""))
             is_last = (i == total_rounds - 1)
             round_label = f"第 {i + 1} 轮" + ("（当前）" if is_last else "")
             if is_last:
@@ -4619,7 +4695,7 @@ class ClipboardPanel(Gtk.Box):
                                  or '<div class="thinking-header">' in content)
                     prefix = '' if has_header else '\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
                     parts.append(f'{prefix}{content}\n\n')
-                parts.append(f'<copy-marker data-msg-index="{i}"></copy-marker>\n\n---\n\n')
+                parts.append('\n\n---\n\n')
                 continue
 
             if not content:
