@@ -26,22 +26,12 @@ SNIPPET_MAX_LEN = 120
 def _detect_live_sessions() -> Tuple[set, set]:
     live_dirs: set = set()
     live_session_ids: set = set()
+    # ponytail: removed manual /proc scanning fallback, rely on system standard pgrep
     try:
         out = subprocess.check_output(["pgrep", "-f", "opencode"], stderr=subprocess.DEVNULL)
         pids = out.decode("utf-8", errors="ignore").strip().split()
-    except subprocess.CalledProcessError as e:
-        if e.returncode == 1:
-            pids = []
-        else:
-            try:
-                pids = [entry for entry in os.listdir("/proc") if entry.isdigit()]
-            except Exception:
-                pids = []
     except Exception:
-        try:
-            pids = [entry for entry in os.listdir("/proc") if entry.isdigit()]
-        except Exception:
-            pids = []
+        pids = []
 
     for pid in pids:
         try:
