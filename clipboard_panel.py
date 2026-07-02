@@ -715,63 +715,68 @@ class _LLMHttpClient:
         )
 
         try:
-            response = self._session.post(
+            with self._session.post(
                 url,
                 json=body,
                 headers=headers,
                 stream=True,
                 timeout=timeout,
-            )
-            response.raise_for_status()
-            response.encoding = "utf-8"
+            ) as response:
+                response.raise_for_status()
+                response.encoding = "utf-8"
 
-            # Accumulator for incremental tool_calls delta
-            tc_accum = _ToolCallAccumulator()
+                # Accumulator for incremental tool_calls delta
+                tc_accum = _ToolCallAccumulator()
 
-            for line in response.iter_lines(decode_unicode=True):
-                if cancel_event and cancel_event.is_set():
-                    return
-                if not line:
-                    continue
-                if line.startswith("data:"):
-                    data_str = line[5:].strip()
-                    if data_str == "[DONE]":
-                        calls = tc_accum.get_calls()
-                        if calls:
-                            yield {"tool_calls": calls}
+                for line in response.iter_lines(decode_unicode=True):
+                    if cancel_event and cancel_event.is_set():
                         return
-                    if not data_str:
+                    if not line:
                         continue
-                    try:
-                        chunk = json.loads(data_str)
-                        delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    except (json.JSONDecodeError, IndexError, KeyError):
-                        continue
+                    if line.startswith("data:"):
+                        data_str = line[5:].strip()
+                        if data_str == "[DONE]":
+                            calls = tc_accum.get_calls()
+                            if calls:
+                                yield {"tool_calls": calls}
+                            return
+                        if not data_str:
+                            continue
+                        try:
+                            chunk = json.loads(data_str)
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        except (json.JSONDecodeError, IndexError, KeyError):
+                            continue
 
-                    tc_delta = delta.get("tool_calls")
-                    if tc_delta:
-                        for tcd in tc_delta:
-                            tc_accum.add_delta(tcd)
+                        tc_delta = delta.get("tool_calls")
+                        if tc_delta:
+                            for tcd in tc_delta:
+                                tc_accum.add_delta(tcd)
+                            finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
+                            if finish_reason == "tool_calls":
+                                calls = tc_accum.get_calls()
+                                if calls:
+                                    tc_accum.clear()
+                                    yield {"tool_calls": calls}
+                            continue
+
                         finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
                         if finish_reason == "tool_calls":
                             calls = tc_accum.get_calls()
                             if calls:
                                 tc_accum.clear()
                                 yield {"tool_calls": calls}
-                        continue
+                            continue
 
-                    finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
-                    if finish_reason == "tool_calls":
-                        calls = tc_accum.get_calls()
-                        if calls:
-                            tc_accum.clear()
-                            yield {"tool_calls": calls}
-                        continue
+                        content = delta.get("content")
+                        reasoning = delta.get("reasoning_content")
+                        if content is not None or reasoning is not None:
+                            yield delta
 
-                    content = delta.get("content")
-                    reasoning = delta.get("reasoning_content")
-                    if content is not None or reasoning is not None:
-                        yield delta
+                # Fallback: if loop exits naturally without [DONE] message, yield remaining tool_calls
+                calls = tc_accum.get_calls()
+                if calls:
+                    yield {"tool_calls": calls}
 
         except requests.exceptions.Timeout:
             raise _LLMHttpError(f"请求超时（{timeout}秒）")
