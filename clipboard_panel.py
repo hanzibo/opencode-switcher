@@ -653,7 +653,7 @@ class _LLMHttpClient:
                                 else:
                                     continue
                         resolved_parts.append(part)
-                    msg["content"] = resolved_parts
+                    msg["content"] = resolved_parts if resolved_parts else "[图片未就绪或已失效]"
             elif role == "assistant":
                 tool_calls = m.get("tool_calls")
                 if tool_calls:
