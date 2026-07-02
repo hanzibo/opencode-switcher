@@ -403,11 +403,54 @@ def _resolve_safe_path(path: str) -> Optional[str]:
     return resolved
 
 
+# ── Write Sandbox ─────────────────────────────────────────────────────────
+# Controls where write_file is allowed to create/modify files.
+# Defaults to the project root directory (where this script lives).
+_WRITE_SANDBOX_ROOT: Optional[str] = os.path.realpath(
+    os.path.dirname(os.path.abspath(__file__))
+)
+_WRITE_SANDBOX_ENABLED = True
+
+
+def set_write_sandbox(path: Optional[str] = None) -> str:
+    """Configure the write_file sandbox.
+
+    Args:
+        path: Absolute path to use as the sandbox root.
+              Pass None or "off" to disable sandbox (allow any absolute path).
+              Pass "reset" to restore default.
+
+    Returns:
+        Status message describing the new sandbox state.
+    """
+    global _WRITE_SANDBOX_ROOT, _WRITE_SANDBOX_ENABLED
+
+    if path is None or path == "off":
+        _WRITE_SANDBOX_ENABLED = False
+        return "🔓 沙箱已关闭，write_file 可写入任何绝对路径。"
+
+    if path == "reset":
+        _WRITE_SANDBOX_ROOT = os.path.realpath(
+            os.path.dirname(os.path.abspath(__file__))
+        )
+        _WRITE_SANDBOX_ENABLED = True
+        return f"🔒 沙箱已重置为默认路径: {_WRITE_SANDBOX_ROOT}"
+
+    resolved = os.path.realpath(os.path.expanduser(path))
+    if not os.path.isdir(resolved):
+        return f"错误：路径不存在或不是目录「{path}」"
+    _WRITE_SANDBOX_ROOT = resolved
+    _WRITE_SANDBOX_ENABLED = True
+    return f"🔒 沙箱路径已设置为: {resolved}"
+
+
 def _resolve_write_path(path: str, force: bool = False) -> Optional[str]:
     """Resolve a path for write operations.
 
     Unlike _resolve_safe_path, this does NOT require the file to exist.
     Requires absolute paths to prevent directory traversal attacks.
+    If the sandbox is enabled, verifies the resolved path stays within
+    the sandbox root (see set_write_sandbox()).
     If the file already exists, force must be True to allow overwriting.
 
     Returns the resolved absolute path if valid, None otherwise.
@@ -415,6 +458,10 @@ def _resolve_write_path(path: str, force: bool = False) -> Optional[str]:
     if not path or not isinstance(path, str) or not os.path.isabs(path):
         return None
     resolved = os.path.realpath(path)
+    if _WRITE_SANDBOX_ENABLED:
+        root = os.path.realpath(_WRITE_SANDBOX_ROOT)
+        if not resolved.startswith(root + os.sep) and resolved != root:
+            return None
     parent = os.path.dirname(resolved)
     if not os.path.isdir(parent):
         return None
@@ -1102,8 +1149,6 @@ def execute_web_fetch(url: str, max_chars: int = 5000) -> str:
 
 _MAX_BASH_OUTPUT_CHARS = 5000
 _BASH_TIMEOUT_DEFAULT = 60
-_BASH_SENTINEL = ",,,,bash-exit-"
-_BASH_SENTINEL_END = "-banner,,,,"
 _BASH_SHELL = "/bin/bash"
 _BASH_DEFAULT_CWD = os.path.dirname(os.path.abspath(__file__))
 
@@ -1192,7 +1237,7 @@ class _BashSession:
                     output_buf.extend(remaining)
                 break
 
-            events = poll.poll(200)
+            events = poll.poll(50)
             if not events:
                 continue
 
@@ -1253,7 +1298,7 @@ class _BashSession:
         try:
             self.process.terminate()
             self.process.wait(timeout=5)
-        except Exception:
+        except (subprocess.TimeoutExpired, ProcessLookupError, OSError):
             self._kill_process_group()
         self._started = False
         self.process = None
@@ -1427,22 +1472,10 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             content = args.get("content", "")
             safe_wpath = html.escape(wpath)
             mode = "覆盖" if args.get("force", False) else "写入"
-            MAX_PREVIEW = 500
-            preview = content[:MAX_PREVIEW]
-            safe_preview = html.escape(preview)
-            truncated = len(content) > MAX_PREVIEW
-            preview_label = f"内容预览（{len(content)} 字符）" if not truncated else f"内容预览（前{MAX_PREVIEW} / 共{len(content)} 字符）"
+            preview_label = f"内容预览（{len(content)} 字符）" if len(content) <= 500 else f"内容预览（前500 / 共{len(content)} 字符）"
             parts.append(
                 f'<div class="tool-call-info">✏️ <b>{mode}文件：</b>{safe_wpath}</div>'
-                f'<div class="tool-result-box">'
-                f'<div class="tool-result-header">'
-                f'<span>📄 {preview_label}</span>'
-                f'<span class="tool-result-toggle" onclick="toggleToolResult(this)">展开</span>'
-                f'</div>'
-                f'<div class="tool-result-content" style="display: none;">\n'
-                f'{safe_preview}\n'
-                f'</div>'
-                f'</div>'
+                + _make_collapsible_preview(content, preview_label)
             )
         elif name == "bash":
             cmd = args.get("command", "")
@@ -1450,29 +1483,48 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             safe_cmd = html.escape(cmd)
             first_line = cmd.split("\n")[0].strip() if cmd else ""
             safe_first = html.escape(first_line)
-            max_cmd_preview = 300
-            cmd_preview = cmd[:max_cmd_preview]
-            safe_cmd_preview = html.escape(cmd_preview)
-            cmd_truncated = len(cmd) > max_cmd_preview
-            cmd_preview_label = f"命令预览（共 {len(cmd)} 字符）" if not cmd_truncated else f"命令预览（前{max_cmd_preview} / 共{len(cmd)} 字符）"
+            cmd_label = f"命令预览（{len(cmd)} 字符）" if len(cmd) <= 300 else f"命令预览（前300 / 共{len(cmd)} 字符）"
             parts.append(
                 f'<div class="tool-call-info">🖥️ <b>执行命令：</b>{safe_first}</div>'
                 f'<div style="margin: 2px 0 4px 16px; font-size: 11px; color: #888;">超时：{cmd_timeout}s</div>'
-                f'<div class="tool-result-box">'
-                f'<div class="tool-result-header">'
-                f'<span>📄 {cmd_preview_label}</span>'
-                f'<span class="tool-result-toggle" onclick="toggleToolResult(this)">展开</span>'
-                f'</div>'
-                f'<div class="tool-result-content" style="display: none;">\n'
-                f'<pre style="margin:0; white-space:pre-wrap; word-break:break-all; font-size:12px;">{safe_cmd_preview}</pre>\n'
-                f'</div>'
-                f'</div>'
+                + _make_collapsible_preview(cmd, cmd_label, max_chars=300, use_pre=True)
             )
         else:
             safe_name = html.escape(name)
             parts.append(f'<div class="tool-call-info">🔧 <b>工具调用：</b>{safe_name}</div>')
 
     return "\n".join(parts)
+
+
+def _make_collapsible_preview(content: str, label: str, max_chars: int = 500,
+                              use_pre: bool = False) -> str:
+    """Build a collapsible preview HTML block.
+
+    Args:
+        content: The text content to preview.
+        label: Display label for the collapsed state (e.g. "内容预览（120 字符）").
+        max_chars: Truncation limit before the fold.
+        use_pre: If True, wrap content in a <pre> tag.
+
+    Returns:
+        HTML string of the collapsible box.
+    """
+    truncated = len(content) > max_chars
+    preview = content[:max_chars]
+    inner = html.escape(preview)
+    if use_pre:
+        inner = f'<pre style="margin:0; white-space:pre-wrap; word-break:break-all; font-size:12px;">{inner}</pre>'
+    return (
+        f'<div class="tool-result-box">'
+        f'<div class="tool-result-header">'
+        f'<span>📄 {html.escape(label)}</span>'
+        f'<span class="tool-result-toggle" onclick="toggleToolResult(this)">展开</span>'
+        f'</div>'
+        f'<div class="tool-result-content" style="display: none;">\n'
+        f'{inner}\n'
+        f'</div>'
+        f'</div>'
+    )
 
 
 def render_collapsible_tool_result(name: str, content: str) -> str:
