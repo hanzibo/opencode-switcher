@@ -559,6 +559,8 @@ class SearchPanel:
             # 同步兜底检查下拉框是否正处于弹出状态
             if self._clipboard_panel and self._clipboard_panel.is_history_popup_shown():
                 return False
+            if self._window.is_active():
+                return False
             self.hide()
             return False
         GLib.timeout_add(100, do_hide)
