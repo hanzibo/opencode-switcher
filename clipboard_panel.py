@@ -9,9 +9,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("WebKit2", "4.1")
-import os
 import sys
-import threading
 import hashlib
 import mimetypes
 import urllib.parse
@@ -24,7 +22,6 @@ import time
 import requests
 import json
 import base64
-import hashlib
 from utils import relative_time, is_wayland, request_window_focus
 from urllib.parse import urlparse, parse_qs
 
