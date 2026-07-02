@@ -148,7 +148,15 @@ def _image_to_data_uri(image_path: str) -> Optional[str]:
 
 def _image_hash_path(image_hash: str) -> str:
     """Return the absolute path to a cached image by its SHA-256 hash (16-char prefix)."""
-    return os.path.join(CONFIG_DIR, "images", f"{image_hash}.png")
+    img_dir = os.path.join(CONFIG_DIR, "images")
+    if os.path.isdir(img_dir):
+        try:
+            for f in os.listdir(img_dir):
+                if f.startswith(image_hash):
+                    return os.path.join(img_dir, f)
+        except Exception:
+            pass
+    return os.path.join(img_dir, f"{image_hash}.png")
 
 
 def _cached_image_to_data_uri(image_hash: str) -> Optional[str]:
@@ -642,6 +650,8 @@ class _LLMHttpClient:
                                             "detail": iu.get("detail", "high"),
                                         },
                                     }
+                                else:
+                                    continue
                         resolved_parts.append(part)
                     msg["content"] = resolved_parts
             elif role == "assistant":
