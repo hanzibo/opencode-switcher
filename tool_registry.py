@@ -25,7 +25,7 @@ from typing import Any, Dict, Final, List, Optional, Callable, Tuple
 import requests
 
 
-_IGNORE_DIRS: Final = {"node_modules", "venv", ".venv", "__pycache__", "build", "dist", "target", "cache", ".cache"}
+_IGNORE_DIRS: Final = {"node_modules", "venv", ".venv", "env", "__pycache__", "build", "dist", "target", "cache", ".cache"}
 
 
 # ── Tool Definitions (OpenAI function calling schema) ──────────────────────
