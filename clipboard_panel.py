@@ -2850,7 +2850,12 @@ class ClipboardPanel(Gtk.Box):
         GLib.idle_add(self._append_html_to_webview, question_html)
         GLib.idle_add(self._enable_ask_user_entry)
 
-        event.wait()
+        if not event.wait(timeout=300):
+            # Timeout — user did not answer within 5 minutes
+            self._ai_ask_user_state = None
+            GLib.idle_add(self._ai_entry.grab_focus)
+            GLib.idle_add(self._update_send_button, True)
+            return "[询问用户超时：用户未在 5 分钟内回答]"
 
         state = getattr(self, "_ai_ask_user_state", None)
         answer = state.get("answer", "") if state else ""
@@ -3492,7 +3497,22 @@ class ClipboardPanel(Gtk.Box):
                 self._ai_entry.placeholder_text = "输入后续问题..."
                 return
 
-            # Display user's answer in WebView
+            # If user types a system command while waiting, cancel the question
+            text_cmd = text.split()[0] if text else ""
+            known_cmds = {cmd for cmd, _ in self._AI_COMMANDS}
+            if text_cmd in known_cmds:
+                cmd_name = html.escape(text_cmd)
+                self._append_html_to_webview(
+                    f'<div style="color: #f87171; padding: 8px 12px; '
+                    f'font-size: 13px;">❌ 问题已取消（检测到系统命令「{cmd_name}」）。'
+                    f'请重新输入命令。</div>'
+                )
+                ask_state["answer"] = ""
+                ask_state["event"].set()
+                self._update_send_button(True)
+                self._ai_entry.placeholder_text = "输入后续问题..."
+                return
+
             safe_answer = html.escape(text)
             self._append_html_to_webview(
                 f'\n\n---\n\n<div class="user-header">You:</div>\n\n{safe_answer}\n\n---\n\n'

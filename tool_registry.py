@@ -1171,8 +1171,6 @@ class _BashSession:
 
     def start(self):
         """Spawn a new persistent bash subprocess (binary pipe mode)."""
-        if self._timed_out:
-            self._timed_out = False
         self.process = subprocess.Popen(
             [_BASH_SHELL],
             stdin=subprocess.PIPE,
