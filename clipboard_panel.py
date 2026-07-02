@@ -3882,6 +3882,7 @@ class ClipboardPanel(Gtk.Box):
 
     def _switch_model_by_alias(self, alias: str):
         """Switch AI model by alias. Updates active model info and header label."""
+        # 大小写不敏感匹配，兼容用户输入与存储别名的大小写差异（如 /model GPT-4 匹配 gpt-4）
         model = next((m for m in self._llm_settings_store.models if m.alias.lower() == alias.lower()), None)
         if not model:
             lines = [f"❌ 未找到模型别名 **\"{alias}\"**。\n", "可用模型:\n"]
@@ -3928,6 +3929,25 @@ class ClipboardPanel(Gtk.Box):
             self._ai_spinner.stop()
             self._ai_spinner.hide()
 
+    def _build_conversation_rounds(self, msgs: list) -> list:
+        """将消息列表聚合为以 user 提问为起点的轮次结构列表。
+
+        每个元素形如 {"user_idx": int, "user_msg": str|list, "asst_msg": str|list}。
+        工具调用消息（role=tool）和中间 assistant 片段会被跳过，以第一个出现的
+        非空 assistant 消息作为该轮的 asst_msg。
+        """
+        rounds = []
+        for idx, m in enumerate(msgs):
+            if m.get("role") == "user":
+                rounds.append({
+                    "user_idx": idx,
+                    "user_msg": m.get("content", ""),
+                    "asst_msg": ""
+                })
+            elif m.get("role") == "assistant" and rounds:
+                rounds[-1]["asst_msg"] = m.get("content", "")
+        return rounds
+
     def _handle_retry_command(self):
         self._cancel_streaming_if_active()
 
@@ -3970,22 +3990,12 @@ class ClipboardPanel(Gtk.Box):
         self._cancel_streaming_if_active()
 
         msgs = self._ai_messages
-        # 动态将消息聚合为以 user 提问为起点的轮次结构
-        rounds = []
-        for idx, m in enumerate(msgs):
-            if m.get("role") == "user":
-                rounds.append({
-                    "user_idx": idx,
-                    "user_msg": m.get("content", ""),
-                    "asst_msg": ""
-                })
-            elif m.get("role") == "assistant" and rounds:
-                rounds[-1]["asst_msg"] = m.get("content", "")
+        rounds = self._build_conversation_rounds(msgs)
 
         if not rounds:
             return
 
-        self._append_html_to_webview(self._build_round_cards_html(msgs, rounds))
+        self._append_html_to_webview(self._build_round_cards_html(rounds))
 
     def _handle_title_command(self, title_text: str):
         """Handle /title command: set custom title or regenerate via LLM.
@@ -4058,18 +4068,7 @@ class ClipboardPanel(Gtk.Box):
     def _rollback_to_round(self, round_index: int):
         msgs = self._ai_messages
 
-        # 重新扫描定位
-        rounds = []
-        for idx, m in enumerate(msgs):
-            if m.get("role") == "user":
-                rounds.append({
-                    "user_idx": idx,
-                    "user_msg": m.get("content", ""),
-                    "asst_msg": ""
-                })
-            elif m.get("role") == "assistant" and rounds:
-                rounds[-1]["asst_msg"] = m.get("content", "")
-
+        rounds = self._build_conversation_rounds(msgs)
         total_rounds = len(rounds)
         next_round_idx = round_index + 1
         if next_round_idx >= total_rounds:
@@ -4089,14 +4088,14 @@ class ClipboardPanel(Gtk.Box):
         buf = self._ai_entry.get_buffer()
         buf.set_text(discarded)
         buf.place_cursor(buf.get_end_iter())
-        
+
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript("_autoScroll = true;", None, None)
         self._render_markdown(self._ai_markdown_text)
         self._save_current_conversation()
 
-    def _build_round_cards_html(self, msgs, rounds):
+    def _build_round_cards_html(self, rounds):
         """Build HTML displaying conversation rounds as clickable cards."""
         is_dark = getattr(self, "_theme", "dark") == "dark"
         if is_dark:
@@ -4128,8 +4127,10 @@ class ClipboardPanel(Gtk.Box):
                 user_msg = _vision_content_to_text(user_msg)
             if isinstance(asst_msg, list):
                 asst_msg = _vision_content_to_text(asst_msg)
-            user_preview = _strip_html(user_msg)[:80] + ("..." if len(_strip_html(user_msg)) > 80 else "")
-            asst_preview = _strip_html(asst_msg)[:80] + ("..." if len(_strip_html(asst_msg)) > 80 else "")
+            _u = _strip_html(user_msg)
+            _a = _strip_html(asst_msg)
+            user_preview = html.escape(_u[:80] + ("..." if len(_u) > 80 else ""))
+            asst_preview = html.escape(_a[:80] + ("..." if len(_a) > 80 else ""))
             is_last = (i == total_rounds - 1)
             round_label = f"第 {i + 1} 轮" + ("（当前）" if is_last else "")
             if is_last:
