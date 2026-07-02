@@ -659,6 +659,10 @@ class _LLMHttpClient:
                         msg["content"] = content
                     else:
                         msg["content"] = None
+                    # 思考模式下工具调用轮次必须回传 reasoning_content，否则 API 返回 400
+                    rc = m.get("reasoning_content")
+                    if rc:
+                        msg["reasoning_content"] = rc
                 else:
                     msg["content"] = content or ""
             elif role == "tool":
@@ -2932,6 +2936,7 @@ class ClipboardPanel(Gtk.Box):
         thinking_header_added = False
         response_header_added = False
         assistant_text = ""
+        reasoning_text = ""  # 累积本轮 reasoning_content，工具调用时必须回传
         tool_calls_found: list = []
         # Reset per-iteration buffer and stream div states for the new iteration
         self._ai_assistant_buffer = ""
@@ -2966,6 +2971,7 @@ class ClipboardPanel(Gtk.Box):
                         thinking_header_added = True
                     with self._ai_stream_lock:
                         self._ai_stream_queue.append(reasoning)
+                    reasoning_text += reasoning
                     has_thinking = True
                 elif content:
                     if not response_header_added:
@@ -2983,11 +2989,15 @@ class ClipboardPanel(Gtk.Box):
             # Stream finished — check for tool_calls
             if tool_calls_found:
                 # Append assistant message with tool_calls to conversation
-                self._ai_messages.append({
+                # 思考模式下必须携带 reasoning_content，否则 DeepSeek API 在后续子请求中返回 400
+                tool_call_msg: dict = {
                     "role": "assistant",
                     "content": assistant_text,
                     "tool_calls": tool_calls_found,
-                })
+                }
+                if reasoning_text:
+                    tool_call_msg["reasoning_content"] = reasoning_text
+                self._ai_messages.append(tool_call_msg)
 
                 # Flush any streamed content before rendering tool call UI
                 self._flush_stream_queue()
