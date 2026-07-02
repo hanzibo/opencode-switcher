@@ -2921,9 +2921,10 @@ class ClipboardPanel(Gtk.Box):
         response_header_added = False
         assistant_text = ""
         tool_calls_found: list = []
-        # Reset per-iteration buffer so _on_llm_api_finished only gets this
-        # iteration's content, not accumulated text from previous ReAct turns.
+        # Reset per-iteration buffer and stream div states for the new iteration
         self._ai_assistant_buffer = ""
+        self._ai_response_div_added = False
+        self._ai_assistant_html_base = ""
 
         try:
             cancel_event = getattr(self, "_ai_cancel_event", None)
@@ -3184,7 +3185,8 @@ class ClipboardPanel(Gtk.Box):
         if getattr(self, "_ai_request_id", 0) != req_id:
             return
         
-        msg_id = f"msg-{req_id}"
+        iteration = getattr(self, "_ai_tool_iteration", 0)
+        msg_id = f"msg-{req_id}-{iteration}"
         if not self._ai_response_div_added:
             js_append = f"appendMessageContainer('{msg_id}');"
             self._ai_webview.run_javascript(js_append, None, None)
