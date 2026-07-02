@@ -12,8 +12,10 @@ import fnmatch
 import json
 import os
 import pathlib
+import select
 import stat
 import subprocess
+import time
 import urllib.parse
 import re
 import html
@@ -246,6 +248,33 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     }
                 },
                 "required": ["path", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "执行 shell 命令。在一个持久化的 bash session 中运行，环境变量和工作目录跨命令保持。支持命令链（&&、||、;）。不支持交互式命令（vim、less、top 等需要 TTY 的程序）。命令执行结果包含 stdout、stderr 和退出码。非零退出码不会导致工具崩溃——错误信息会作为正常反馈返回。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "要执行的 shell 命令。支持多行和命令链。"
+                    },
+                    "restart": {
+                        "type": "boolean",
+                        "description": "设为 true 以重启 bash session。当 session 卡死、超时或状态异常时使用。",
+                        "default": False
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "命令超时秒数（1 到 120，默认 60）。超时后 session 将进入异常状态，需重启。",
+                        "default": 60
+                    }
+                },
+                "required": ["command"]
             }
         }
     },
@@ -1069,6 +1098,227 @@ def execute_web_fetch(url: str, max_chars: int = 5000) -> str:
     return _try_obscura_fetch(url, max_chars)
 
 
+# ── Bash Tool ───────────────────────────────────────────────────────────────
+
+_MAX_BASH_OUTPUT_CHARS = 5000
+_BASH_TIMEOUT_DEFAULT = 60
+_BASH_SENTINEL = ",,,,bash-exit-"
+_BASH_SENTINEL_END = "-banner,,,,"
+_BASH_SHELL = "/bin/bash"
+_BASH_DEFAULT_CWD = os.path.dirname(os.path.abspath(__file__))
+
+
+class _BashSession:
+    """Persistent bash session that maintains state across command executions.
+
+    Uses binary pipe I/O (bypassing Python's TextIOWrapper buffering) with a
+    sentinel protocol to reliably detect command completion and capture exit
+    codes. On timeout the session enters an error state and must be restarted.
+    """
+
+    _SENTINEL_B = b",,,,bash-exit-"
+    _SENTINEL_END_B = b"-banner,,,,"
+
+    def __init__(self):
+        self.process: Optional["subprocess.Popen[bytes]"] = None
+        self._timed_out = False
+        self._started = False
+
+    def start(self):
+        """Spawn a new persistent bash subprocess (binary pipe mode)."""
+        if self._timed_out:
+            self._timed_out = False
+        self.process = subprocess.Popen(
+            [_BASH_SHELL],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+            cwd=_BASH_DEFAULT_CWD,
+            preexec_fn=os.setsid if hasattr(os, "setsid") else None,
+        )
+        self._started = True
+
+    def execute(self, command: str, timeout: int = _BASH_TIMEOUT_DEFAULT) -> dict:
+        """Execute a command and return ``{output, exit_code, timed_out}``.
+
+        Raises ``RuntimeError`` if the session is in a timed-out state and
+        needs to be restarted.
+        """
+        if self._timed_out:
+            raise RuntimeError("Bash session has timed out and must be restarted (restart=True).")
+        if not self._started or self.process is None:
+            self.start()
+        if self.process is None:
+            return {"output": "错误：Bash 进程未能启动", "exit_code": -1, "timed_out": False}
+
+        process = self.process
+
+        if process.returncode is not None:
+            return {"output": "错误：Bash 进程已意外退出", "exit_code": process.returncode, "timed_out": False}
+
+        # Use binary mode to bypass Python TextIOWrapper buffering.
+        # TextIOWrapper.read() reads large chunks → poll() sees empty pipe.
+        sentinel_cmd_b = (
+            b"{ "
+            + command.encode("utf-8", errors="replace")
+            + b"; } 2>&1; echo "
+            + self._SENTINEL_B
+            + b"$?"
+            + self._SENTINEL_END_B
+            + b"\n"
+        )
+
+        try:
+            process.stdin.write(sentinel_cmd_b)
+            process.stdin.flush()
+        except BrokenPipeError:
+            return {"output": "错误：Bash 进程已关闭（stdin 写入失败）", "exit_code": -1, "timed_out": False}
+
+        output_buf = bytearray()
+        sentinel_found = False
+        exit_code = -1
+        fd = process.stdout.fileno()
+
+        poll = select.poll()
+        poll.register(fd, select.POLLIN)
+
+        deadline = time.monotonic() + timeout if timeout > 0 else float("inf")
+
+        while time.monotonic() < deadline:
+            if process.poll() is not None and not sentinel_found:
+                remaining = os.read(fd, 65536)
+                if remaining:
+                    output_buf.extend(remaining)
+                break
+
+            events = poll.poll(200)
+            if not events:
+                continue
+
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+
+            output_buf.extend(chunk)
+
+            sidx = output_buf.find(self._SENTINEL_B)
+            if sidx != -1:
+                sentinel_found = True
+                # Extract exit code between sentinel and sentinel_end
+                after = output_buf[sidx:]
+                eidx = after.find(self._SENTINEL_END_B)
+                if eidx != -1:
+                    code_bytes = after[len(self._SENTINEL_B):eidx]
+                    try:
+                        exit_code = int(code_bytes.decode("ascii"))
+                    except (ValueError, UnicodeDecodeError):
+                        exit_code = -1
+                output_buf = output_buf[:sidx]
+                break
+
+        if not sentinel_found:
+            self._timed_out = True
+            self._kill_process_group()
+            output = output_buf.decode("utf-8", errors="replace").strip()
+            if len(output) > _MAX_BASH_OUTPUT_CHARS:
+                output = output[:_MAX_BASH_OUTPUT_CHARS] + "\n...（输出已截断）"
+            return {
+                "output": f"命令执行超时（{timeout}秒），session 已强制终止。请设置 restart=True 重启。\n最后输出：{output[:500]}",
+                "exit_code": -1,
+                "timed_out": True,
+            }
+
+        output = output_buf.decode("utf-8", errors="replace").strip()
+        if len(output) > _MAX_BASH_OUTPUT_CHARS:
+            output = output[:_MAX_BASH_OUTPUT_CHARS] + f"\n...（输出已截断，共 {len(output)} 字符）"
+
+        return {"output": output, "exit_code": exit_code, "timed_out": False}
+
+    def _kill_process_group(self):
+        """Kill the entire process group to clean up children."""
+        if self.process is not None and self.process.pid is not None:
+            try:
+                os.killpg(os.getpgid(self.process.pid), 9)
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    self.process.kill()
+                except OSError:
+                    pass
+
+    def stop(self):
+        """Gracefully stop the bash session, with force-kill fallback."""
+        if self.process is None:
+            return
+        try:
+            self.process.terminate()
+            self.process.wait(timeout=5)
+        except Exception:
+            self._kill_process_group()
+        self._started = False
+        self.process = None
+
+    def restart(self):
+        """Restart the bash session (stop + start)."""
+        self.stop()
+        self._timed_out = False
+        self.start()
+
+
+# Global bash session (module-level singleton)
+_bash_session: Optional[_BashSession] = None
+
+
+def execute_bash(command: str, restart: bool = False, timeout: int = _BASH_TIMEOUT_DEFAULT) -> str:
+    """Execute a shell command in a persistent bash session.
+
+    Args:
+        command: Shell command to execute.
+        restart: If True, restart the session before executing.
+        timeout: Command timeout in seconds (1-120).
+
+    Returns:
+        Formatted result string with output, exit code, and status.
+    """
+    global _bash_session
+
+    if restart:
+        if _bash_session is not None:
+            _bash_session.stop()
+        _bash_session = _BashSession()
+        _bash_session.start()
+        if not command or not command.strip():
+            return "🔄 Bash session 已重启。"
+
+    if not command or not command.strip():
+        return "错误：命令不能为空。"
+
+    timeout = max(1, min(120, timeout))
+
+    if _bash_session is None:
+        _bash_session = _BashSession()
+        _bash_session.start()
+
+    try:
+        result = _bash_session.execute(command, timeout=timeout)
+    except RuntimeError as e:
+        return f"错误：{e}"
+
+    output = result.get("output", "")
+    exit_code = result.get("exit_code", -1)
+    timed_out = result.get("timed_out", False)
+
+    status_icon = "✅" if exit_code == 0 else "❌" if exit_code != -1 else "⚠️"
+    status_text = f"{status_icon} 命令执行完成（退出码：{exit_code}）"
+
+    parts = [status_text]
+    if output:
+        parts.append("")
+        parts.append(output)
+
+    return "\n".join(parts)
+
+
 # ── Tool Executor Registry ─────────────────────────────────────────────────
 
 TOOL_EXECUTORS: Dict[str, Callable] = {
@@ -1082,6 +1332,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "file_info": execute_file_info,
     "ask_user_question": execute_ask_user_question,
     "write_file": execute_write_file,
+    "bash": execute_bash,
 }
 
 
@@ -1190,6 +1441,30 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
                 f'</div>'
                 f'<div class="tool-result-content" style="display: none;">\n'
                 f'{safe_preview}\n'
+                f'</div>'
+                f'</div>'
+            )
+        elif name == "bash":
+            cmd = args.get("command", "")
+            cmd_timeout = args.get("timeout", 60)
+            safe_cmd = html.escape(cmd)
+            first_line = cmd.split("\n")[0].strip() if cmd else ""
+            safe_first = html.escape(first_line)
+            max_cmd_preview = 300
+            cmd_preview = cmd[:max_cmd_preview]
+            safe_cmd_preview = html.escape(cmd_preview)
+            cmd_truncated = len(cmd) > max_cmd_preview
+            cmd_preview_label = f"命令预览（共 {len(cmd)} 字符）" if not cmd_truncated else f"命令预览（前{max_cmd_preview} / 共{len(cmd)} 字符）"
+            parts.append(
+                f'<div class="tool-call-info">🖥️ <b>执行命令：</b>{safe_first}</div>'
+                f'<div style="margin: 2px 0 4px 16px; font-size: 11px; color: #888;">超时：{cmd_timeout}s</div>'
+                f'<div class="tool-result-box">'
+                f'<div class="tool-result-header">'
+                f'<span>📄 {cmd_preview_label}</span>'
+                f'<span class="tool-result-toggle" onclick="toggleToolResult(this)">展开</span>'
+                f'</div>'
+                f'<div class="tool-result-content" style="display: none;">\n'
+                f'<pre style="margin:0; white-space:pre-wrap; word-break:break-all; font-size:12px;">{safe_cmd_preview}</pre>\n'
                 f'</div>'
                 f'</div>'
             )
