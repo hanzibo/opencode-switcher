@@ -3267,6 +3267,7 @@ class ClipboardPanel(Gtk.Box):
                     {{left: '\\\\(', right: '\\\\)', display: false}},
                     {{left: '\\\\[', right: '\\\\]', display: true}}
                 ];
+                window._isStreaming = false;
 
                 document.addEventListener('DOMContentLoaded', function() {{
                     if (typeof renderMathInElement === 'function') {{
@@ -3482,6 +3483,7 @@ class ClipboardPanel(Gtk.Box):
             </style>
             <script>
                 function _renderMath(element) {{
+                    if (window._isStreaming) return;
                     if (typeof renderMathInElement === 'function') {{
                         renderMathInElement(element || document.body, {{
                             delimiters: KATEX_DELIMITERS,
@@ -3508,6 +3510,7 @@ class ClipboardPanel(Gtk.Box):
                     }}
                 }}
                 function updateContent(html) {{
+                    window._isStreaming = false;
                     const content = document.getElementById('content');
                     content.innerHTML = html;
                     addCopyButtons();
@@ -3515,6 +3518,7 @@ class ClipboardPanel(Gtk.Box):
                     _scrollToBottom();
                 }}
                 function appendMessageContainer(msgId) {{
+                    window._isStreaming = true;
                     const content = document.getElementById('content');
                     if (!document.getElementById(msgId)) {{
                         const div = document.createElement('div');
