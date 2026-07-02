@@ -2900,15 +2900,25 @@ class ClipboardPanel(Gtk.Box):
     def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, messages: list,
                               req_id: int, temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
                               top_p: float = DEFAULT_TOP_P):
-        """Start the ReAct loop by making the first LLM call."""
+        """Start the ReAct loop by making sequential LLM calls in the current thread."""
         self._ai_tool_iteration = 0
-        self._perform_llm_call(base_url, api_key, model_name, messages, req_id,
-                               temperature, max_tokens, top_p, iteration=0)
+        iteration = 0
+        while iteration < MAX_TOOL_ITERATIONS:
+            should_continue = self._perform_llm_call(
+                base_url, api_key, model_name, messages, req_id,
+                temperature, max_tokens, top_p, iteration
+            )
+            if not should_continue:
+                break
+            iteration += 1
 
     def _perform_llm_call(self, base_url: str, api_key: str, model_name: str, messages: list,
                           req_id: int, temperature: float, max_tokens: int, top_p: float,
-                          iteration: int):
-        """One iteration of the ReAct loop: stream LLM response, handle tool_calls."""
+                          iteration: int) -> bool:
+        """One iteration of the ReAct loop: stream LLM response, handle tool_calls.
+
+        Returns True to continue the loop, False to stop.
+        """
         has_thinking = False
         thinking_header_added = False
         response_header_added = False
@@ -2928,7 +2938,7 @@ class ClipboardPanel(Gtk.Box):
                 tool_choice=tool_registry.TOOL_CHOICE_AUTO,
             ):
                 if getattr(self, "_ai_request_id", 0) != req_id:
-                    return
+                    return False
 
                 # Check for tool_calls in delta
                 tc_delta = delta.get("tool_calls")
@@ -2979,14 +2989,14 @@ class ClipboardPanel(Gtk.Box):
                 # Execute each tool call
                 for tc in tool_calls_found:
                     if getattr(self, "_ai_request_id", 0) != req_id:
-                        return
+                        return False
                     tc_name = tc.get("function", {}).get("name", "")
                     if tc_name == "ask_user_question":
                         result = self._handle_ask_user_question(tc)
                     else:
                         result = tool_registry.execute_tool_call(tc)
                     if getattr(self, "_ai_request_id", 0) != req_id:
-                        return
+                        return False
                     self._ai_messages.append({
                         "role": "tool",
                         "tool_call_id": tc.get("id", ""),
@@ -3010,28 +3020,26 @@ class ClipboardPanel(Gtk.Box):
                     })
                     # Finalize to end the conversation turn
                     GLib.idle_add(self._finalize_after_tool_loop, req_id)
-                    return
+                    return False
 
-                # Continue ReAct loop in a new thread
+                # Continue ReAct loop
                 self._ai_tool_iteration = iteration + 1
-                threading.Thread(
-                    target=self._perform_llm_call,
-                    args=(base_url, api_key, model_name, self._ai_messages, req_id,
-                          temperature, max_tokens, top_p, iteration + 1),
-                    daemon=True,
-                ).start()
+                return True
             else:
                 # No tool_calls — pure text response, finish
                 GLib.idle_add(self._on_llm_api_finished, req_id)
+                return False
 
         except _LLMHttpError as e:
             with self._ai_stream_lock:
                 self._ai_stream_queue.append(f"\n\n❌ [请求失败]:\n{e}")
             GLib.idle_add(self._on_llm_api_finished, req_id)
+            return False
         except Exception as e:
             with self._ai_stream_lock:
                 self._ai_stream_queue.append(f"\n\n❌ [内部错误]:\n{e}")
             GLib.idle_add(self._on_llm_api_finished, req_id)
+            return False
 
     def _finalize_after_tool_loop(self, req_id: int):
         """Finalize after tool loop ends (used when tool iteration limit hit)."""
