@@ -9,14 +9,22 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("WebKit2", "4.1")
+import os
+import sys
+import threading
+import hashlib
+import mimetypes
+import urllib.parse
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, WebKit2
 from typing import Optional, Callable, List, Dict, Any, Tuple, Set
 from copy import deepcopy
 from uuid import uuid4
-from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P
+from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P, CONFIG_DIR
 import time
 import requests
 import json
+import base64
+import hashlib
 from utils import relative_time, is_wayland, request_window_focus
 from urllib.parse import urlparse, parse_qs
 
@@ -119,6 +127,96 @@ def _copy_to_clipboard(text: str):
             p.communicate(text.encode("utf-8"))
         except FileNotFoundError:
             pass
+
+
+def _image_to_data_uri(image_path: str) -> Optional[str]:
+    """Read an image file and return a base64 data URI string.
+
+    Detects mime type dynamically (fallback to image/png).
+    """
+    try:
+        with open(image_path, "rb") as f:
+            raw = f.read()
+        b64 = base64.b64encode(raw).decode("utf-8")
+        mime, _ = mimetypes.guess_type(image_path)
+        if not mime or not mime.startswith("image/"):
+            mime = "image/png"
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return None
+
+
+def _image_hash_path(image_hash: str) -> str:
+    """Return the absolute path to a cached image by its SHA-256 hash (16-char prefix)."""
+    return os.path.join(CONFIG_DIR, "images", f"{image_hash}.png")
+
+
+def _cached_image_to_data_uri(image_hash: str) -> Optional[str]:
+    """Read a cached image by hash and return its data URI, or None if missing."""
+    path = _image_hash_path(image_hash)
+    if not os.path.isfile(path):
+        return None
+    return _image_to_data_uri(path)
+
+
+def _vision_content_to_text(content: list) -> str:
+    """Extract plain text from a vision content parts list, ignoring images."""
+    texts = []
+    for p in content:
+        if isinstance(p, dict) and p.get("type") == "text":
+            texts.append(p.get("text", ""))
+    return "\n".join(texts)
+
+
+def _vision_content_to_markdown(content: list) -> str:
+    """Convert a vision content parts list to markdown+HTML representation.
+
+    Text parts are joined and run through code-block closure.
+    Image parts are resolved (hash→data URI) and rendered as ``<img>`` tags.
+    """
+    md_parts = []
+    for p in content:
+        if not isinstance(p, dict):
+            continue
+        if p.get("type") == "text":
+            md_parts.append(p.get("text", ""))
+        elif p.get("type") == "image_url":
+            src = _resolve_vision_image_src([p])
+            if src:
+                md_parts.append(
+                    f'<img src="{src}" style="max-width:400px;border-radius:6px;">'
+                )
+    md_text = "\n".join(md_parts)
+    return _close_unclosed_code_blocks(md_text)
+
+
+def _resolve_vision_image_src(content: list) -> Optional[str]:
+    """Extract image source from vision content parts list.
+
+    Handles both direct ``url`` (legacy) and ``hash`` reference formats.
+    Returns a local ``file://`` URI or ``data:`` URI string, or None if no image part found/failed.
+    """
+    for p in content:
+        if not isinstance(p, dict) or p.get("type") != "image_url":
+            continue
+        iu = p.get("image_url", {})
+        url = iu.get("url", "")
+        if url.startswith("data:") or url.startswith("file:"):
+            return url
+        h = iu.get("hash", "")
+        if h:
+            return "file://" + _image_hash_path(h)
+    return None
+
+
+def _model_supports_vision(model_name: str) -> bool:
+    """启发式判断模型名称是否支持多模态视觉输入"""
+    name_lower = model_name.lower()
+    vision_keywords = [
+        "vision", "vl", "gpt-4o", "claude-3", "gemini", "mimo", 
+        "minicpm", "internvl", "llava", "qwen2.5-vl", "qwen-vl", "deepseek-vl"
+    ]
+    return any(kw in name_lower for kw in vision_keywords)
 
 
 _DIV_CLOSE_LEN = 6  # len('</div>')
@@ -389,12 +487,16 @@ def _clean_history_title(title: str) -> str:
     return cleaned
 
 
-def _extract_local_title(message_content: str) -> str:
+def _extract_local_title(message_content: Union[str, List, Dict]) -> str:
     """从消息文本中提取简短标题，作为 LLM 完成前的占位符。
 
     纯规则提取，零外部依赖，即时返回。LLM 生成完成后会替换此值。
     返回的标题一定是非空字符串（默认 fallback "New Conversation"）。
     """
+    if isinstance(message_content, list):
+        message_content = _vision_content_to_text(message_content)
+    elif not isinstance(message_content, str):
+        message_content = str(message_content) if message_content else ""
     if not message_content:
         return "New Conversation"
     first_line = message_content.split("\n")[0].strip()
@@ -519,7 +621,30 @@ class _LLMHttpClient:
             role = m.get("role")
             content = m.get("content")
             msg = {"role": role}
-            if role == "assistant":
+
+            # Multimodal content (list of content parts for vision/audio) → resolve hash / downcast if model has no vision
+            if isinstance(content, list):
+                if not _model_supports_vision(model_name):
+                    msg["content"] = _vision_content_to_text(content)
+                else:
+                    resolved_parts = []
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "image_url":
+                            iu = part.get("image_url", {})
+                            h = iu.get("hash")
+                            if h and not iu.get("url", "").startswith("data:"):
+                                du = _cached_image_to_data_uri(h)
+                                if du:
+                                    part = {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": du,
+                                            "detail": iu.get("detail", "high"),
+                                        },
+                                    }
+                        resolved_parts.append(part)
+                    msg["content"] = resolved_parts
+            elif role == "assistant":
                 tool_calls = m.get("tool_calls")
                 if tool_calls:
                     msg["tool_calls"] = tool_calls
@@ -591,6 +716,7 @@ class _LLMHttpClient:
                 timeout=timeout,
             )
             response.raise_for_status()
+            response.encoding = "utf-8"
 
             # Accumulator for incremental tool_calls delta
             tc_accum = _ToolCallAccumulator()
@@ -719,6 +845,7 @@ class ClipboardPanel(Gtk.Box):
         self.on_ai_copy_finished: Optional[Callable[[], None]] = None
         self.on_menu_shown: Optional[Callable[[], None]] = None
         self.on_menu_hidden: Optional[Callable[[], None]] = None
+        self.on_clipboard_to_ai_request: Optional[Callable[[], None]] = None
         self.on_combo_popup_shown: Optional[Callable[[], None]] = None
         self.on_combo_popup_hidden: Optional[Callable[[], None]] = None
         self._editing_rename_row = None
@@ -1078,6 +1205,10 @@ class ClipboardPanel(Gtk.Box):
         ai_scrolled.set_vexpand(True)
 
         self._ai_streaming = False
+        # Pending image attachment for vision API
+        self._ai_pending_image_hash: Optional[str] = None
+        self._ai_pending_image_path: Optional[str] = None
+        self._ai_pending_image_data_uri: Optional[str] = None
         self._ai_webview = WebKit2.WebView.new()
         self._ai_webview.set_name("aiWebView")
 
@@ -1227,6 +1358,16 @@ class ClipboardPanel(Gtk.Box):
         self._ai_entry.connect_after("draw", _textview_draw_placeholder)
         self._ai_entry.connect("key-press-event", self._on_ai_entry_key_press)
         self._ai_entry.connect("button-press-event", self._on_ai_entry_button_press)
+        self._ai_entry.connect("paste-clipboard", self._on_ai_entry_paste_clipboard)
+
+        # Drag and Drop support for files
+        self._ai_entry.drag_dest_set(
+            Gtk.DestDefaults.ALL,
+            [],
+            Gdk.DragAction.COPY
+        )
+        self._ai_entry.drag_dest_add_uri_targets()
+        self._ai_entry.connect("drag-data-received", self._on_ai_entry_drag_data_received)
 
         self._ai_entry_sw = Gtk.ScrolledWindow.new()
         self._ai_entry_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -1241,11 +1382,36 @@ class ClipboardPanel(Gtk.Box):
         self._ai_new_btn.get_style_context().add_class("flat")
         self._ai_new_btn.connect("clicked", lambda *_: self.start_new_conversation())
 
+        self._ai_attach_btn = Gtk.Button.new_with_label("📎")
+        self._ai_attach_btn.set_tooltip_text("添加图片附件")
+        self._ai_attach_btn.set_size_request(32, -1)
+        self._ai_attach_btn.get_style_context().add_class("flat")
+        self._ai_attach_btn.connect("clicked", self._on_ai_attach_btn_clicked)
+
         self._ai_input_row = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
         self._ai_input_row.pack_start(self._ai_new_btn, False, False, 0)
         self._ai_input_row.pack_start(self._ai_entry_sw, True, True, 0)
+        self._ai_input_row.pack_start(self._ai_attach_btn, False, False, 0)
         self._ai_input_row.pack_start(self._ai_send_btn, False, False, 0)
         self._ai_input_area.pack_start(self._ai_input_row, False, False, 0)
+
+        # Attachment bar for pending image
+        self._ai_attachment_bar = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+        self._ai_attachment_bar.set_no_show_all(True)
+        self._ai_attachment_bar.set_margin_bottom(4)
+        self._ai_attachment_bar.set_margin_start(4)
+        self._ai_attach_thumb = Gtk.Image.new()
+        self._ai_attach_label = Gtk.Label.new("")
+        self._ai_attach_label.set_opacity(0.7)
+        self._ai_attach_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self._ai_attach_remove_btn = Gtk.Button.new_with_label("×")
+        self._ai_attach_remove_btn.set_relief(Gtk.ReliefStyle.NONE)
+        self._ai_attach_remove_btn.set_size_request(24, 24)
+        self._ai_attach_remove_btn.connect("clicked", lambda *_: self._remove_pending_image())
+        self._ai_attachment_bar.pack_start(self._ai_attach_thumb, False, False, 0)
+        self._ai_attachment_bar.pack_start(self._ai_attach_label, True, True, 0)
+        self._ai_attachment_bar.pack_start(self._ai_attach_remove_btn, False, False, 0)
+        self._ai_input_area.pack_start(self._ai_attachment_bar, False, False, 0)
 
         self._ai_model_popover = Gtk.Popover.new(self._ai_entry)
         self._ai_model_popover.set_position(Gtk.PositionType.TOP)
@@ -2253,23 +2419,27 @@ class ClipboardPanel(Gtk.Box):
             del_item.connect("activate", lambda *_: self._delete_item(item))
             menu.append(del_item)
 
+            item_type = getattr(item, "type", "text")
+            if item_type == "image":
+                send_ai_item = Gtk.MenuItem.new_with_label("🖼️ 发送到 AI 看盘")
+                send_ai_item.connect("activate", lambda *_: self._send_image_to_ai(item))
+                menu.append(send_ai_item)
+
             custom_prompts = self._custom_prompts_store.get_all()
             if custom_prompts:
-                item_type = getattr(item, "type", "text")
-                if item_type != "image":
-                    applicable_prompts = []
-                    for p in custom_prompts:
-                        p_categories = getattr(p, "categories", None) or ["text"]
-                        if item_type in p_categories:
-                            applicable_prompts.append(p)
-                    
-                    if applicable_prompts:
-                        sep = Gtk.SeparatorMenuItem.new()
-                        menu.append(sep)
-                        for p in applicable_prompts:
-                            prompt_item = Gtk.MenuItem.new_with_label(p.name)
-                            prompt_item.connect("activate", lambda *_, p_obj=p: self._ask_custom_prompt(item, p_obj))
-                            menu.append(prompt_item)
+                applicable_prompts = []
+                for p in custom_prompts:
+                    p_categories = getattr(p, "categories", None) or ["text"]
+                    if item_type in p_categories:
+                        applicable_prompts.append(p)
+                
+                if applicable_prompts:
+                    sep = Gtk.SeparatorMenuItem.new()
+                    menu.append(sep)
+                    for p in applicable_prompts:
+                        prompt_item = Gtk.MenuItem.new_with_label(p.name)
+                        prompt_item.connect("activate", lambda *_, p_obj=p: self._ask_custom_prompt(item, p_obj))
+                        menu.append(prompt_item)
         else:
             copy_item = Gtk.MenuItem.new_with_label("Copy")
             copy_item.connect("activate", lambda *_: self._activate_item(item))
@@ -2369,6 +2539,35 @@ class ClipboardPanel(Gtk.Box):
             self._open_google_search(final_query)
             if self.on_hide_request:
                 self.on_hide_request()
+
+    def _send_image_to_ai(self, item: ClipboardItem):
+        image_path = getattr(item, "image_path", None)
+        if not image_path or not os.path.isfile(image_path):
+            return
+
+        def do_background_send():
+            try:
+                data_uri = _image_to_data_uri(image_path)
+                if not data_uri:
+                    return
+                h = getattr(item, "hash", "") or hashlib.sha256(
+                    open(image_path, "rb").read()
+                ).hexdigest()[:16]
+                GLib.idle_add(self._set_pending_image_and_show_panel, h, image_path, data_uri)
+            except Exception:
+                pass
+
+        threading.Thread(target=do_background_send, daemon=True).start()
+
+    def _set_pending_image_and_show_panel(self, h, image_path, data_uri):
+        self._set_pending_image(h, image_path, data_uri)
+        self._ai_sep.set_no_show_all(False)
+        self._ai_sep.show()
+        self._ai_vbox.set_no_show_all(False)
+        self._ai_vbox.show()
+        self._ai_vbox.show_all()
+        self.queue_resize()
+        self._ai_entry.grab_focus()
 
     def _open_google_search(self, query: str):
         import urllib.parse
@@ -2478,7 +2677,22 @@ class ClipboardPanel(Gtk.Box):
         self._ai_webview.load_html(self.get_html_template(self._theme, user_html), "file:///")
 
     def _send_user_message(self, text: str):
-        self._ai_messages.append({"role": "user", "content": text})
+        # Build message content with or without pending image
+        if self._ai_pending_image_hash:
+            content = [
+                {"type": "text", "text": text},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "hash": self._ai_pending_image_hash,
+                        "detail": "high",
+                    },
+                },
+            ]
+        else:
+            content = text
+
+        self._ai_messages.append({"role": "user", "content": content})
         self._ai_request_id += 1
         current_req_id = self._ai_request_id
         self._ai_streaming = True
@@ -2492,7 +2706,18 @@ class ClipboardPanel(Gtk.Box):
             GLib.source_remove(self._ai_render_timeout_id)
             self._ai_render_timeout_id = 0
 
-        rendered_text = _close_unclosed_code_blocks(text)
+        # Build markdown for rendering — extract text part for code-block check
+        if isinstance(content, list):
+            text_part = next(
+                (p["text"] for p in content if isinstance(p, dict) and p.get("type") == "text"),
+                text
+            )
+            img_src = _resolve_vision_image_src(content)
+            rendered_text = _close_unclosed_code_blocks(text_part)
+            if img_src:
+                rendered_text += f'\n\n<img src="{img_src}" style="max-width:400px;border-radius:6px;">'
+        else:
+            rendered_text = _close_unclosed_code_blocks(content)
         user_msg_idx = len(self._ai_messages) - 1
         self._ai_markdown_text += f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n<copy-marker data-msg-index="{user_msg_idx}" class="user-copy-marker"></copy-marker>\n\n---\n\n'
         # 重置 JS 自动滚动标志，确保新消息提交后滚动到最底端并跟随流式输出
@@ -3531,7 +3756,8 @@ class ClipboardPanel(Gtk.Box):
         start = buf.get_start_iter()
         end = buf.get_end_iter()
         text = buf.get_text(start, end, True).strip()
-        if not text:
+        # Allow send with empty text if there is a pending image
+        if not text and not self._ai_pending_image_data_uri:
             return
         if text == "/new":
             buf.set_text("")
@@ -3590,8 +3816,6 @@ class ClipboardPanel(Gtk.Box):
                 f'<div style="color: #818cf8; padding: 8px 12px; margin: 4px 0; '
                 f'border: 1px solid #818cf8; border-radius: 6px; font-size: 13px;">'
                 f'📋 当前沙箱状态: <strong>{status}</strong>'
-                f'<br/><span style="font-size: 12px; opacity: 0.7;">'
-                f'路径: {_WRITE_SANDBOX_ROOT}</span>'
                 f'<br/><span style="font-size: 11px; opacity: 0.6;">'
                 f'/sandbox &lt;path&gt;  — 设置沙箱路径<br/>'
                 f'/sandbox off      — 关闭沙箱（谨慎）<br/>'
@@ -3611,6 +3835,7 @@ class ClipboardPanel(Gtk.Box):
             return
         buf.set_text("")
         self._send_user_message(text)
+        self._remove_pending_image()
 
     def _switch_model_by_alias(self, alias: str):
         """Switch AI model by alias. Updates active model info and header label."""
@@ -4005,6 +4230,143 @@ class ClipboardPanel(Gtk.Box):
             self.on_menu_hidden()
         return False
 
+    # ── Pending image support ──────────────────────────────────────────────
+
+    def _on_ai_entry_paste_clipboard(self, entry):
+        """Fires on any paste operation into the AI entry.
+
+        Does NOT block text paste. Schedules an async check for clipboard image.
+        """
+        GLib.idle_add(self._async_check_clipboard_image)
+        return False
+
+    def _async_check_clipboard_image(self):
+        threading.Thread(target=self._do_capture_clipboard_image, daemon=True).start()
+        return False
+
+    def _do_capture_clipboard_image(self):
+        from clipboard_store import _capture_image
+        image_data = _capture_image()
+        if not image_data:
+            return
+        h = hashlib.sha256(image_data).hexdigest()[:16]
+        img_dir = os.path.join(CONFIG_DIR, "images")
+        try:
+            os.makedirs(img_dir, exist_ok=True)
+            img_path = os.path.join(img_dir, f"{h}.png")
+            if not os.path.exists(img_path):
+                with open(img_path, "wb") as f:
+                    f.write(image_data)
+            data_uri = _image_to_data_uri(img_path)
+            if data_uri:
+                GLib.idle_add(self._set_pending_image, h, img_path, data_uri)
+        except Exception:
+            pass
+
+    def _set_pending_image(self, img_hash: str, img_path: str, data_uri: str):
+        self._ai_pending_image_hash = img_hash
+        self._ai_pending_image_path = img_path
+        self._ai_pending_image_data_uri = data_uri
+        self._show_attachment_bar()
+
+    def _remove_pending_image(self):
+        self._ai_pending_image_hash = None
+        self._ai_pending_image_path = None
+        self._ai_pending_image_data_uri = None
+        self._hide_attachment_bar()
+
+    def _show_attachment_bar(self):
+        if not self._ai_pending_image_path or not os.path.isfile(self._ai_pending_image_path):
+            return
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(
+                self._ai_pending_image_path, 60, 60
+            )
+            self._ai_attach_thumb.set_from_pixbuf(pixbuf)
+        except Exception:
+            self._ai_attach_thumb.clear()
+        fname = os.path.basename(self._ai_pending_image_path)
+        self._ai_attach_label.set_text(f"📎 {fname}")
+        
+        # Explicitly show the container and its children because set_no_show_all(True) blocks show_all()
+        self._ai_attachment_bar.show()
+        self._ai_attach_thumb.show()
+        self._ai_attach_label.show()
+        self._ai_attach_remove_btn.show()
+        self.queue_resize()
+
+    def _hide_attachment_bar(self):
+        self._ai_attachment_bar.hide()
+        self.queue_resize()
+
+    def _on_ai_attach_btn_clicked(self, _btn):
+        dialog = Gtk.FileChooserDialog(
+            title="选择图片",
+            parent=self.get_toplevel(),
+            action=Gtk.FileChooserAction.OPEN,
+        )
+        dialog.add_buttons(
+            Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL,
+            Gtk.STOCK_OPEN, Gtk.ResponseType.ACCEPT
+        )
+
+        dialog.connect("show", lambda *_: self.on_dialog_shown and self.on_dialog_shown())
+        dialog.connect("destroy", lambda *_: self.on_dialog_hidden and self.on_dialog_hidden())
+
+        filter_image = Gtk.FileFilter()
+        filter_image.set_name("图片文件 (png/jpg/jpeg/webp)")
+        filter_image.add_mime_type("image/png")
+        filter_image.add_mime_type("image/jpeg")
+        filter_image.add_mime_type("image/webp")
+        dialog.add_filter(filter_image)
+
+        response = dialog.run()
+        if response == Gtk.ResponseType.ACCEPT:
+            filename = dialog.get_filename()
+            dialog.destroy()
+            if filename:
+                self._attach_image_from_file(filename)
+        else:
+            dialog.destroy()
+
+    def _attach_image_from_file(self, filepath: str):
+        def do_background_attach():
+            try:
+                with open(filepath, "rb") as f:
+                    image_data = f.read()
+                h = hashlib.sha256(image_data).hexdigest()[:16]
+                img_dir = os.path.join(CONFIG_DIR, "images")
+                os.makedirs(img_dir, exist_ok=True)
+                ext = os.path.splitext(filepath)[1].lower()
+                if ext not in [".png", ".jpg", ".jpeg", ".webp"]:
+                    ext = ".png"
+                img_path = os.path.join(img_dir, f"{h}{ext}")
+                if not os.path.exists(img_path):
+                    with open(img_path, "wb") as f:
+                        f.write(image_data)
+                data_uri = _image_to_data_uri(img_path)
+                if data_uri:
+                    GLib.idle_add(self._set_pending_image, h, img_path, data_uri)
+            except Exception:
+                pass
+
+        threading.Thread(target=do_background_attach, daemon=True).start()
+
+    def _on_ai_entry_drag_data_received(self, widget, context, x, y, selection_data, info, time):
+        uris = selection_data.get_uris()
+        if uris:
+            for uri in uris:
+                parsed = urlparse(uri)
+                if parsed.scheme == "file":
+                    filepath = urllib.parse.unquote(parsed.path)
+                    mime_type, _ = mimetypes.guess_type(filepath)
+                    if mime_type and mime_type.startswith("image/"):
+                        self._attach_image_from_file(filepath)
+                        widget.stop_emission_by_name("drag-data-received")
+                        context.finish(True, False, time)
+                        return
+        context.finish(False, False, time)
+
     # ── Slash command autocomplete popover ────────────────────────────────────────
 
     def _init_ai_command_popover(self):
@@ -4228,6 +4590,8 @@ class ClipboardPanel(Gtk.Box):
                 if tc_html:
                     parts.append("\n\n" + tc_html + "\n\n")
                 # If there's also content, display it
+                if isinstance(content, list):
+                    content = _vision_content_to_text(content)
                 if content and content.strip():
                     has_header = ('<div class="assistant-header">' in content
                                  or '<div class="answer-header">' in content
@@ -4240,22 +4604,26 @@ class ClipboardPanel(Gtk.Box):
             if not content:
                 continue
 
+            if isinstance(content, list):
+                rendered_content = _vision_content_to_markdown(content)
+            else:
+                rendered_content = _close_unclosed_code_blocks(content)
+
             if i == 0:
-                rendered_prompt = _close_unclosed_code_blocks(content)
-                parts.append(f'<div class="user-header">You:</div>\n\n{rendered_prompt}\n\n<copy-marker data-msg-index="{i}" class="user-copy-marker"></copy-marker>\n\n---\n\n')
+                parts.append(f'<div class="user-header">You:</div>\n\n{rendered_content}\n\n<copy-marker data-msg-index="{i}" class="user-copy-marker"></copy-marker>\n\n---\n\n')
             elif role == "user":
-                rendered_text = _close_unclosed_code_blocks(content)
-                parts.append(f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n<copy-marker data-msg-index="{i}" class="user-copy-marker"></copy-marker>\n\n---\n\n')
+                parts.append(f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_content}\n\n<copy-marker data-msg-index="{i}" class="user-copy-marker"></copy-marker>\n\n---\n\n')
             elif role == "assistant":
-                if content.strip():
+                content_str = content if isinstance(content, str) else _vision_content_to_text(content)
+                if content_str.strip():
                     # Content already has role headers embedded from streaming phase;
                     # avoid adding another .assistant-header wrapper to prevent duplication.
-                    has_header = ('<div class="assistant-header">' in content
-                                 or '<div class="answer-header">' in content
-                                 or '<div class="thinking-header">' in content)
+                    has_header = ('<div class="assistant-header">' in content_str
+                                 or '<div class="answer-header">' in content_str
+                                 or '<div class="thinking-header">' in content_str)
                     prefix = '' if has_header else '\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
                     parts.append(
-                        f'{prefix}{content}\n\n'
+                        f'{prefix}{content_str}\n\n'
                         f'<copy-marker data-msg-index="{i}"></copy-marker>\n\n---\n\n'
                     )
         return "".join(parts)

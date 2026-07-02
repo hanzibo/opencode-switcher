@@ -45,7 +45,7 @@ import time
 import hashlib
 from copy import deepcopy
 from dataclasses import dataclass, asdict
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from uuid import uuid4
 
 from utils import is_wayland, CONVERSATIONS_DIR
@@ -640,7 +640,7 @@ class CategoryStore:
 @dataclass
 class ChatMessage:
     role: str  # "user", "assistant", "system", "tool"
-    content: str
+    content: Union[str, List[Dict]]  # str for text, list for multimodal (vision/audio)
     tool_call_id: Optional[str] = None  # for "tool" role: links to the tool call that produced this result
     name: Optional[str] = None          # for "tool" role: name of the tool that was called
     tool_calls: Optional[List[Dict]] = None  # for "assistant" role: tool_calls array from LLM
