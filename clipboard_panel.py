@@ -50,6 +50,7 @@ from sort_cats_dialog import show_sort_cats_dialog
 from llm_client import _LLMHttpClient, _LLMHttpError
 from prompt_dialog import show_prompt_dialog
 from prompts_config_dialog import show_prompts_config_dialog
+from ai_popovers import AICommandPopover, HistoryPopover
 
 AI_MESSAGES_SOFT_LIMIT = 200
 AI_MESSAGES_TRIM_TARGET = 100
@@ -237,7 +238,7 @@ class ClipboardPanel(Gtk.Box):
         self._snippet_color = Gdk.RGBA()
 
         self._build_ui()
-        self._refresh_conversation_dropdown()
+        self._ai_history_popover.refresh_dropdown()
 
         self._css_provider = Gtk.CssProvider()
         screen = self.get_screen() or Gdk.Screen.get_default()
@@ -424,76 +425,24 @@ class ClipboardPanel(Gtk.Box):
         btn_box.pack_start(self._ai_history_btn_label, True, True, 0)
         btn_box.pack_start(arrow, False, False, 0)
         self._ai_history_btn.add(btn_box)
-        self._ai_history_btn.connect("clicked", self._on_history_btn_clicked)
         
         ai_hdr.pack_start(self._ai_history_btn, False, False, 0)
         
         # Create Popover for history selection
-        self._ai_history_popover = Gtk.Popover.new(self._ai_history_btn)
-        self._ai_history_popover.get_style_context().add_class("ai-history-popover")
-        self._ai_history_popover.set_position(Gtk.PositionType.BOTTOM)
-        self._ai_history_popover.connect("closed", self._on_popover_closed)
-        
-        # Popover content: a vertical Box containing the ScrolledWindow, a Separator, and a Clear All button
-        popover_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
-        
-        popover_scrolled = Gtk.ScrolledWindow.new(None, None)
-        popover_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        popover_scrolled.set_size_request(240, 260)
-        
-        self._ai_history_listbox = Gtk.ListBox.new()
-        self._ai_history_listbox.connect("row-activated", self._on_history_row_activated)
-        
-        popover_scrolled.add(self._ai_history_listbox)
-        popover_vbox.pack_start(popover_scrolled, True, True, 0)
-        
-        # Separator line
-        popover_vbox.pack_start(Gtk.Separator.new(Gtk.Orientation.HORIZONTAL), False, False, 2)
-        
-        # Bottom toolbar container — two mode toolbars stacked, only one visible at a time
-        self._ai_history_toolbar = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
-        
-        # ── Normal mode toolbar ──
-        self._ai_history_normal_toolbar = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
-        self._ai_history_edit_btn = Gtk.Button.new_with_label("编辑")
-        self._ai_history_edit_btn.get_style_context().add_class("edit-mode-btn")
-        self._ai_history_edit_btn.set_size_request(60, -1)
-        self._ai_history_clear_all_btn = Gtk.Button.new_with_label("🗑️ 清除所有历史")
-        self._ai_history_clear_all_btn.get_style_context().add_class("clear-all-btn")
-        self._ai_history_clear_all_btn.connect("clicked", self._on_clear_all_history_clicked)
-        self._ai_history_normal_toolbar.pack_start(self._ai_history_edit_btn, False, False, 0)
-        self._ai_history_normal_toolbar.pack_start(self._ai_history_clear_all_btn, True, True, 0)
-        
-        # ── Edit mode toolbar ──
-        self._ai_history_edit_toolbar = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
-        self._ai_history_select_all_btn = Gtk.Button.new_with_label("☐ 全选")
-        self._ai_history_select_all_btn.get_style_context().add_class("edit-mode-btn")
-        self._ai_history_select_all_btn.set_size_request(68, -1)
-        self._ai_history_delete_sel_btn = Gtk.Button.new_with_label("删除选中 (0)")
-        self._ai_history_delete_sel_btn.get_style_context().add_class("delete-sel-btn")
-        self._ai_history_delete_sel_btn.set_sensitive(False)
-        self._ai_history_done_btn = Gtk.Button.new_with_label("完成")
-        self._ai_history_done_btn.get_style_context().add_class("edit-mode-btn")
-        self._ai_history_done_btn.set_size_request(56, -1)
-        self._ai_history_edit_toolbar.pack_start(self._ai_history_select_all_btn, False, False, 0)
-        self._ai_history_edit_toolbar.pack_start(self._ai_history_delete_sel_btn, True, True, 0)
-        self._ai_history_edit_toolbar.pack_start(self._ai_history_done_btn, False, False, 0)
-        
-        # Wire button signals
-        self._ai_history_edit_btn.connect("clicked", lambda *_: self._enter_edit_mode())
-        self._ai_history_select_all_btn.connect("clicked", self._on_select_all_clicked)
-        self._ai_history_delete_sel_btn.connect("clicked", self._on_delete_selected_clicked)
-        self._ai_history_done_btn.connect("clicked", lambda *_: self._exit_edit_mode())
-        
-        # Start with normal mode visible
-        self._ai_history_toolbar.pack_start(self._ai_history_normal_toolbar, False, False, 0)
-        self._ai_history_toolbar.pack_start(self._ai_history_edit_toolbar, False, False, 0)
-        
-        popover_vbox.pack_start(self._ai_history_toolbar, False, False, 2)
-        
-        self._ai_history_popover.add(popover_vbox)
-        popover_vbox.show_all()
-        self._ai_history_edit_toolbar.hide()  # start in normal mode
+        self._ai_history_popover = HistoryPopover(
+            relative_to_widget=self._ai_history_btn,
+            history_btn=self._ai_history_btn,
+            history_btn_label=self._ai_history_btn_label,
+            conversation_store=self._conversation_store,
+            get_current_conv_id_fn=lambda: self._ai_conversation_id,
+            get_sorted_conversations_fn=self._get_sorted_conversations,
+            on_conversation_selected=self._switch_to_conversation,
+            on_clear_all_deleted_reset_fn=self._reset_ai_panel_silent,
+            on_dialog_shown=self.on_dialog_shown,
+            on_dialog_hidden=self.on_dialog_hidden,
+            on_popover_shown=self.on_combo_popup_shown,
+            on_popover_closed=lambda: self.on_combo_popup_hidden() if self.on_combo_popup_hidden else None
+        )
 
         # Copy button
         self._btn_copy_ai = Gtk.Button.new_with_label("📋 复制")
@@ -777,7 +726,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_hint_label.set_tooltip_text(hint_text)
         self._ai_input_area.pack_start(self._ai_hint_label, False, False, 0)
 
-        self._init_ai_command_popover()
+        self._ai_cmd_popover = AICommandPopover(self._ai_entry, self._AI_COMMANDS)
 
         self._ai_vbox.pack_start(self._ai_input_area, False, False, 0)
 
@@ -2258,7 +2207,7 @@ class ClipboardPanel(Gtk.Box):
         except Exception as e:
             print(f"Title generation error: {e}", flush=True)
         try:
-            self._refresh_conversation_dropdown()
+            self._ai_history_popover.refresh_dropdown()
         except Exception as e:
             print(f"Dropdown refresh error: {e}", flush=True)
 
@@ -2898,33 +2847,33 @@ class ClipboardPanel(Gtk.Box):
         is_shift = (event.state & Gdk.ModifierType.SHIFT_MASK) != 0
         is_ctrl = (event.state & Gdk.ModifierType.CONTROL_MASK) != 0
 
-        if self._ai_cmd_popover is not None and self._ai_cmd_popover.get_visible():
+        if self._ai_cmd_popover is not None and self._ai_cmd_popover.is_visible():
             if keyname in ("Up", "KP_Up"):
-                current = self._ai_cmd_listbox.get_selected_row()
+                current = self._ai_cmd_popover.listbox.get_selected_row()
                 if current:
                     above = current.get_prev_sibling()
                     if above:
-                        self._ai_cmd_listbox.select_row(above)
+                        self._ai_cmd_popover.listbox.select_row(above)
                 return True
             if keyname in ("Down", "KP_Down"):
-                current = self._ai_cmd_listbox.get_selected_row()
+                current = self._ai_cmd_popover.listbox.get_selected_row()
                 if current:
                     below = current.get_next_sibling()
                     if below:
-                        self._ai_cmd_listbox.select_row(below)
+                        self._ai_cmd_popover.listbox.select_row(below)
                 else:
-                    first = self._ai_cmd_listbox.get_row_at_index(0)
+                    first = self._ai_cmd_popover.listbox.get_row_at_index(0)
                     if first:
-                        self._ai_cmd_listbox.select_row(first)
+                        self._ai_cmd_popover.listbox.select_row(first)
                 return True
             if keyname in ("Return", "KP_Enter"):
-                self._confirm_command_completion()
+                self._ai_cmd_popover.confirm_command_completion()
                 return True
             if keyname == "Tab":
-                self._confirm_command_completion()
+                self._ai_cmd_popover.confirm_command_completion()
                 return True
             if keyname == "Escape":
-                self._dismiss_command_popover()
+                self._ai_cmd_popover.dismiss()
                 return True
             return False
 
@@ -3123,193 +3072,6 @@ class ClipboardPanel(Gtk.Box):
                         return
         context.finish(False, False, time)
 
-    # ── Slash command autocomplete popover ────────────────────────────────────────
-
-    def _init_ai_command_popover(self):
-        self._ai_cmd_popover = Gtk.Popover.new(self._ai_entry)
-        self._ai_cmd_popover.set_position(Gtk.PositionType.TOP)
-        # modal=True (default) — popover performs GTK grab, all keyboard events
-        # go to the popover. We forward characters to the entry buffer manually.
-        self._ai_cmd_popover.get_style_context().add_class("command-autocomplete-popover")
-
-        cmd_sw = Gtk.ScrolledWindow.new()
-        cmd_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        cmd_sw.set_min_content_height(100)
-        cmd_sw.set_max_content_height(300)
-        # Width set dynamically in _rebuild_command_popover to match _ai_entry
-
-        self._ai_cmd_listbox = Gtk.ListBox.new()
-        self._ai_cmd_listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
-        self._ai_cmd_listbox.set_activate_on_single_click(False)
-        self._ai_cmd_listbox.get_style_context().add_class("command-autocomplete-list")
-        self._ai_cmd_listbox.connect("row-activated", self._on_cmd_row_activated)
-
-        cmd_sw.add(self._ai_cmd_listbox)
-        self._ai_cmd_popover.add(cmd_sw)
-        self._ai_cmd_popover.connect("closed", self._on_cmd_popover_closed)
-        self._ai_cmd_popover.connect("key-press-event", self._on_cmd_popover_key_press)
-
-    def _on_cmd_popover_closed(self, _popover):
-        self._ai_cmd_popover_visible = False
-
-    def _rebuild_command_popover(self, prefix: str):
-        if self._ai_cmd_suppress_rebuild:
-            return
-        search = prefix.lstrip("/")
-        matches = [
-            (cmd, desc) for cmd, desc in self._AI_COMMANDS
-            if cmd.startswith("/" + search)
-        ]
-        if not matches:
-            self._dismiss_command_popover()
-            return
-
-        # Block listbox signals during rebuild to prevent spurious activation
-        self._ai_cmd_listbox.handler_block_by_func(self._on_cmd_row_activated)
-        for row in self._ai_cmd_listbox.get_children():
-            self._ai_cmd_listbox.remove(row)
-
-        for cmd, desc in matches:
-            row = Gtk.ListBoxRow.new()
-            lbl = Gtk.Label.new(f"{cmd}  —  {desc}")
-            lbl.set_xalign(0)
-            lbl.set_margin_start(8)
-            lbl.set_margin_end(8)
-            lbl.set_margin_top(6)
-            lbl.set_margin_bottom(6)
-            row.add(lbl)
-            row._cmd_command = cmd
-            self._ai_cmd_listbox.add(row)
-
-        self._ai_cmd_listbox.show_all()
-        first = self._ai_cmd_listbox.get_row_at_index(0)
-        if first:
-            self._ai_cmd_listbox.select_row(first)
-        self._ai_cmd_listbox.handler_unblock_by_func(self._on_cmd_row_activated)
-
-        if not self._ai_cmd_popover_visible:
-            # Ensure the ScrolledWindow (popover's child) is visible so content renders
-            child = self._ai_cmd_popover.get_child()
-            if child:
-                # Set popover width to match input field width
-                entry_width = self._ai_entry.get_allocated_width()
-                min_width = 180
-                child.set_size_request(max(entry_width, min_width), -1)
-                child.show_all()
-            self._ai_cmd_popover.popup()
-            self._ai_cmd_popover_visible = True
-
-    def _on_cmd_popover_key_press(self, _popover, event):
-        """Popover grabs all keyboard (modal=True). We dispatch:
-        - navigation/action keys → listbox / dismiss
-        - editing keys → direct buffer manipulation
-        - printable chars → buf.insert_at_cursor()
-        - other → consume (noop)
-        """
-        keyname = Gdk.keyval_name(event.keyval)
-        state = event.state
-        is_ctrl = (state & Gdk.ModifierType.CONTROL_MASK) != 0
-        is_alt = (state & Gdk.ModifierType.MOD1_MASK) != 0
-
-        # ── Navigation / action keys ──────────────────────────────────
-        if keyname in ("Up", "KP_Up"):
-            current = self._ai_cmd_listbox.get_selected_row()
-            if current:
-                above = current.get_prev_sibling()
-                if above:
-                    self._ai_cmd_listbox.select_row(above)
-            return True
-
-        if keyname in ("Down", "KP_Down"):
-            current = self._ai_cmd_listbox.get_selected_row()
-            if current:
-                below = current.get_next_sibling()
-                if below:
-                    self._ai_cmd_listbox.select_row(below)
-            else:
-                first = self._ai_cmd_listbox.get_row_at_index(0)
-                if first:
-                    self._ai_cmd_listbox.select_row(first)
-            return True
-
-        if keyname in ("Return", "KP_Enter"):
-            self._confirm_command_completion()
-            return True
-
-        if keyname == "Tab":
-            self._confirm_command_completion()
-            return True
-
-        if keyname == "Escape":
-            self._dismiss_command_popover()
-            return True
-
-        # ── Editing keys ──────────────────────────────────────────────
-        if keyname == "BackSpace":
-            buf = self._ai_entry.get_buffer()
-            if buf.get_selection_bounds():
-                buf.delete_selection(True, True)
-                return True
-            cursor = buf.get_iter_at_mark(buf.get_insert())
-            if cursor.get_offset() > 0:
-                cursor.backward_chars(1)
-                buf.delete(cursor, buf.get_iter_at_mark(buf.get_insert()))
-            return True
-
-        if keyname == "Delete":
-            buf = self._ai_entry.get_buffer()
-            if buf.get_selection_bounds():
-                buf.delete_selection(True, True)
-                return True
-            cursor = buf.get_iter_at_mark(buf.get_insert()).copy()
-            end = buf.get_end_iter()
-            if cursor.get_offset() < end.get_offset():
-                cursor.forward_chars(1)
-                buf.delete(buf.get_iter_at_mark(buf.get_insert()), cursor)
-            return True
-
-        # ── Printable characters ──────────────────────────────────────
-        if not is_ctrl and not is_alt and len(keyname) == 1:
-            buf = self._ai_entry.get_buffer()
-            buf.insert_at_cursor(keyname)
-            return True
-
-        # ── Everything else: consume (Ctrl+C, Home, End, F-keys …) ───
-        return True
-
-    def _dismiss_command_popover(self):
-        if self._ai_cmd_popover_visible:
-            self._ai_cmd_popover.popdown()
-            self._ai_cmd_popover_visible = False
-        # Ensure keyboard focus returns to the entry after dismiss
-        self._ai_entry.grab_focus()
-
-    def _on_cmd_row_activated(self, _listbox, row):
-        if row is not None:
-            self._confirm_command_completion()
-
-    def _confirm_command_completion(self):
-        selected = self._ai_cmd_listbox.get_selected_row()
-        if selected is None:
-            return
-        command = getattr(selected, "_cmd_command", None)
-        if not command:
-            lbl = selected.get_child()
-            raw = lbl.get_text() if isinstance(lbl, Gtk.Label) else ""
-            command = raw.split("  ")[0].strip()
-        if not command:
-            return
-
-        # Suppress rebuild while replacing text to prevent recursive popover trigger
-        self._ai_cmd_suppress_rebuild = True
-        buf = self._ai_entry.get_buffer()
-        buf.set_text(command + " ")
-        end = buf.get_end_iter()
-        buf.place_cursor(end)
-        self._ai_cmd_suppress_rebuild = False
-
-        self._dismiss_command_popover()
-
     def _on_ai_entry_changed(self):
         buf = self._ai_entry.get_buffer()
         start = buf.get_start_iter()
@@ -3317,9 +3079,9 @@ class ClipboardPanel(Gtk.Box):
         text = buf.get_text(start, end, True).strip()
 
         if text.startswith("/") and " " not in text:
-            self._rebuild_command_popover(text)
+            self._ai_cmd_popover.rebuild(text)
         else:
-            self._dismiss_command_popover()
+            self._ai_cmd_popover.dismiss()
 
     # ── Conversation history dropdown methods ─────────────────────────────────────
 
@@ -3481,7 +3243,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_entry.get_buffer().set_text("")
         self._ai_entry.grab_focus()
         self.queue_resize()
-        self._update_history_btn_label(conv)
+        self._ai_history_popover.update_history_btn_label(conv)
         if self._ai_conversation_id:
             for row in self._ai_history_listbox.get_children():
                 if getattr(row, "conversation_id", None) == self._ai_conversation_id:
@@ -3527,287 +3289,6 @@ class ClipboardPanel(Gtk.Box):
             if getattr(self, "_ai_history_popover", None) and self._ai_history_popover.get_visible():
                 self._ai_history_popover.popdown()
             self._switch_to_conversation(target_id)
-
-    def _refresh_conversation_dropdown(self, edit_mode: bool = False):
-        """Repopulate the history dropdown from the conversation store."""
-        if not hasattr(self, "_ai_history_listbox") or not self._ai_history_listbox:
-            return
-            
-        # Clear listbox
-        for child in self._ai_history_listbox.get_children():
-            child.destroy()
-            
-        self._ai_history_switching = True
-
-        summaries = self._get_sorted_conversations()
-
-        for s in summaries:
-            sid = s.get("id", "")
-            raw_title = s.get("title", "(untitled)")
-            cleaned_title = _clean_history_title(raw_title)
-            if len(cleaned_title) > 25:
-                title = cleaned_title[:22] + "..."
-            else:
-                title = cleaned_title
-            count = s.get("message_count", 0)
-            label = f"{title} ({count}条)"
-            
-            row = Gtk.ListBoxRow.new()
-            row.conversation_id = sid
-            
-            # Common label construction
-            lbl = Gtk.Label.new(label)
-            lbl.set_xalign(0)
-            lbl.set_margin_end(8)
-            lbl.set_margin_top(6)
-            lbl.set_margin_bottom(6)
-            lbl.set_ellipsize(Pango.EllipsizeMode.END)
-            lbl.set_max_width_chars(25)
-            
-            if edit_mode:
-                hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
-                check = Gtk.CheckButton.new()
-                check.set_margin_start(6)
-                check.set_margin_top(6)
-                check.set_margin_bottom(6)
-                is_selected = sid in self._ai_history_selected_ids
-                check.set_active(is_selected)
-                check.connect("toggled", lambda c, cid=sid: self._on_edit_check_toggled(c, cid))
-                hbox.pack_start(check, False, False, 0)
-                hbox.pack_start(lbl, True, True, 0)
-                row.add(hbox)
-                row.check_button = check
-            else:
-                lbl.set_margin_start(8)
-                row.add(lbl)
-            
-            self._ai_history_listbox.add(row)
-
-        if summaries:
-            self._ai_history_btn.set_sensitive(True)
-            self._ai_history_btn.set_no_show_all(False)
-            self._ai_history_btn.show()
-            self._update_history_btn_label()
-            
-            # Select the current active item in the listbox
-            if self._ai_conversation_id:
-                for row in self._ai_history_listbox.get_children():
-                    if getattr(row, "conversation_id", None) == self._ai_conversation_id:
-                        self._ai_history_listbox.select_row(row)
-                        break
-        else:
-            self._ai_history_btn.set_sensitive(False)
-            self._ai_history_btn.set_no_show_all(True)
-            self._ai_history_btn.hide()
-
-        self._ai_history_switching = False
-
-    def _update_history_btn_label(self, conv=None):
-        if not self._ai_conversation_id:
-            self._ai_history_btn_label.set_text("历史对话")
-            return
-        if conv:
-            raw_title = conv.title if conv.title else "untitled"
-            cleaned_title = _clean_history_title(raw_title)
-            if len(cleaned_title) > 25:
-                title = cleaned_title[:22] + "..."
-            else:
-                title = cleaned_title
-            count = len(conv.messages) if conv.messages else 0
-            label = f"{title} ({count}条)"
-            self._ai_history_btn_label.set_text(label)
-            return
-
-        active_label = "历史对话"
-        for row in self._ai_history_listbox.get_children():
-            if getattr(row, "conversation_id", None) == self._ai_conversation_id:
-                lbl = row.get_child()
-                if isinstance(lbl, Gtk.Label):
-                    active_label = lbl.get_text()
-                break
-        self._ai_history_btn_label.set_text(active_label)
-
-    def _on_history_btn_clicked(self, btn):
-        if self._ai_history_popover.get_visible():
-            self._ai_history_popover.popdown()
-        else:
-            self._refresh_conversation_dropdown()
-            self._ai_history_popover.show_all()
-            self._ai_history_edit_toolbar.hide()  # only show edit toolbar after clicking "编辑"
-            self._ai_history_popover.popup()
-            if self.on_combo_popup_shown:
-                self.on_combo_popup_shown()
-
-    def _on_popover_closed(self, popover):
-        if self._ai_history_edit_mode:
-            self._exit_edit_mode()
-        if self.on_combo_popup_hidden:
-            self.on_combo_popup_hidden()
-
-    def _on_history_row_activated(self, listbox, row):
-        if not row:
-            return
-        conv_id = getattr(row, "conversation_id", None)
-        if not conv_id:
-            return
-        
-        # In edit mode, toggle checkbox instead of switching conversation
-        if self._ai_history_edit_mode:
-            check = getattr(row, "check_button", None)
-            if check:
-                check.set_active(not check.get_active())
-            return
-        
-        self._ai_history_popover.popdown()
-        
-        if conv_id == self._ai_conversation_id:
-            return
-        if self._ai_streaming:
-            return
-            
-        # 将耗时的切换操作推迟到主循环空闲时执行，使 Popover 能够立刻收起
-        def defer_switch():
-            self._switch_to_conversation(conv_id)
-            return False
-        GLib.idle_add(defer_switch)
-
-    def _on_clear_all_history_clicked(self, _btn):
-        summaries = self._conversation_store.list_conversations()
-        if not summaries:
-            return
-            
-        dialog = Gtk.MessageDialog(
-            transient_for=self.get_toplevel(),
-            modal=True,
-            message_type=Gtk.MessageType.WARNING,
-            buttons=Gtk.ButtonsType.YES_NO,
-            text="确定要清除所有 AI 对话历史吗？",
-        )
-        dialog.format_secondary_text("此操作将永久删除所有历史会话记录（共 %d 条），且无法恢复。" % len(summaries))
-        
-        def on_resp(dlg, resp):
-            dlg.destroy()
-            if resp == Gtk.ResponseType.YES:
-                self._ai_history_popover.popdown()
-                for s in summaries:
-                    sid = s.get("id")
-                    if sid:
-                        self._conversation_store.delete_conversation(sid)
-                self._reset_ai_panel_silent()
-            if self.on_dialog_hidden:
-                self.on_dialog_hidden()
-                
-        dialog.connect("response", on_resp)
-        if self.on_dialog_shown:
-            self.on_dialog_shown()
-        dialog.show_all()
-
-    # ── Edit mode for batch delete ──────────────────────────────────────────────
-
-    def _enter_edit_mode(self):
-        """Switch the history dropdown to edit mode with checkboxes on each row."""
-        self._ai_history_edit_mode = True
-        self._refresh_conversation_dropdown(edit_mode=True)
-        self._ai_history_popover.show_all()  # make new rows visible
-        self._ai_history_normal_toolbar.hide()
-        self._ai_history_edit_toolbar.show_all()
-        self._update_delete_sel_btn_label()
-
-    def _exit_edit_mode(self):
-        """Exit edit mode, clear selection, restore normal dropdown."""
-        self._ai_history_edit_mode = False
-        self._ai_history_selected_ids.clear()
-        self._refresh_conversation_dropdown()
-        self._ai_history_popover.show_all()  # make new rows visible
-        self._ai_history_edit_toolbar.hide()
-        self._ai_history_normal_toolbar.show_all()
-
-    def _on_edit_check_toggled(self, check, conv_id):
-        """Update selection state when a checkbox is toggled in edit mode."""
-        if not conv_id:
-            return
-        if check.get_active():
-            self._ai_history_selected_ids.add(conv_id)
-        else:
-            self._ai_history_selected_ids.discard(conv_id)
-        self._update_delete_sel_btn_label()
-
-    def _update_delete_sel_btn_label(self):
-        """Update the delete-selected button label and sensitivity."""
-        n = len(self._ai_history_selected_ids)
-        self._ai_history_delete_sel_btn.set_label(f"删除选中 ({n})")
-        self._ai_history_delete_sel_btn.set_sensitive(n > 0)
-        # Update select-all button label from listbox rows (no I/O)
-        rows = self._ai_history_listbox.get_children()
-        all_selected = all(
-            getattr(row, "conversation_id", None) in self._ai_history_selected_ids
-            for row in rows if getattr(row, "conversation_id", None)
-        ) if rows else False
-        self._ai_history_select_all_btn.set_label("☑ 全选" if all_selected else "☐ 全选")
-
-    def _on_select_all_clicked(self, _btn=None):
-        """Toggle select all / deselect all conversations."""
-        summaries = self._get_sorted_conversations()
-        ids = [s.get("id") for s in summaries if s.get("id")]
-        if not ids:
-            return
-        # Check if all are already selected
-        all_selected = all(cid in self._ai_history_selected_ids for cid in ids)
-        if all_selected:
-            self._ai_history_selected_ids.clear()
-        else:
-            self._ai_history_selected_ids = set(ids)
-        # Refresh checkbox states in all rows
-        for row in self._ai_history_listbox.get_children():
-            conv_id = getattr(row, "conversation_id", None)
-            check = getattr(row, "check_button", None)
-            if check and conv_id:
-                check.set_active(conv_id in self._ai_history_selected_ids)
-        self._update_delete_sel_btn_label()
-
-    def _on_delete_selected_clicked(self, _btn=None):
-        """Delete all selected conversations after confirmation."""
-        selected = list(self._ai_history_selected_ids)
-        if not selected:
-            return
-        dialog = Gtk.MessageDialog(
-            transient_for=self.get_toplevel(),
-            modal=True,
-            message_type=Gtk.MessageType.WARNING,
-            buttons=Gtk.ButtonsType.YES_NO,
-            text="确定要删除选中的 %d 条对话历史吗？" % len(selected),
-        )
-        dialog.format_secondary_text("此操作将永久删除所选历史会话记录，且无法恢复。")
-
-        def on_resp(dlg, resp):
-            dlg.destroy()
-            if resp == Gtk.ResponseType.YES:
-                self._ai_history_popover.popdown()
-                current_conv = self._ai_conversation_id
-                for conv_id in selected:
-                    self._conversation_store.delete_conversation(conv_id)
-                    if conv_id == current_conv:
-                        current_conv = None
-                self._exit_edit_mode()
-                # If the current conversation was deleted, reset the panel
-                if current_conv is None:
-                    self._reset_ai_panel_silent()
-                else:
-                    self._refresh_conversation_dropdown()
-            if self.on_dialog_hidden:
-                self.on_dialog_hidden()
-
-        dialog.connect("response", on_resp)
-        if self.on_dialog_shown:
-            self.on_dialog_shown()
-        dialog.show_all()
-
-    def is_history_popup_shown(self) -> bool:
-        """Check if the conversation history dropdown is currently active."""
-        return bool(
-            self._ai_history_popover and 
-            self._ai_history_popover.get_visible()
-        )
 
     # ── Synchronous LLM call for background title generation ──────────────────────
 
@@ -3901,7 +3382,7 @@ class ClipboardPanel(Gtk.Box):
         if conv:
             conv.title = title
             self._conversation_store.save_conversation(conv, bump_updated_at=False)
-        self._refresh_conversation_dropdown()
+        self._ai_history_popover.refresh_dropdown()
         if getattr(self, "_ai_pending_title_notification", False):
             self._ai_pending_title_notification = False
             escaped = html.escape(title)
@@ -3946,7 +3427,7 @@ class ClipboardPanel(Gtk.Box):
         
         self._ai_entry.grab_focus()
         self.queue_resize()
-        self._refresh_conversation_dropdown()
+        self._ai_history_popover.refresh_dropdown()
 
     def start_new_conversation(self):
         """保存当前对话（若有内容），确保 AI 看盘面板可见，并启动一个全新的空白对话。"""
@@ -3995,7 +3476,7 @@ class ClipboardPanel(Gtk.Box):
             latest_id = summaries[0].get("id")
             if latest_id:
                 if latest_id == self._ai_conversation_id and self._ai_messages:
-                    self._refresh_conversation_dropdown()
+                    self._ai_history_popover.refresh_dropdown()
                     if self._ai_input_area.get_visible():
                         self._ai_entry.grab_focus()
                 else:

@@ -162,6 +162,7 @@ install_files() {
     cp "$SCRIPT_DIR/llm_client.py"               "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/prompt_dialog.py"            "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/prompts_config_dialog.py"     "$INSTALL_DIR/"
+    cp "$SCRIPT_DIR/ai_popovers.py"              "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/run.sh"                      "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/opencode-switcher-toggle"    "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/opencode-switcher.png"       "$INSTALL_DIR/"
