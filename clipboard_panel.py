@@ -51,6 +51,7 @@ from llm_client import _LLMHttpClient, _LLMHttpError
 from prompt_dialog import show_prompt_dialog
 from prompts_config_dialog import show_prompts_config_dialog
 from ai_popovers import AICommandPopover, HistoryPopover
+from ai_tool_loop import run_llm_react_loop
 
 AI_MESSAGES_SOFT_LIMIT = 200
 AI_MESSAGES_TRIM_TARGET = 100
@@ -1945,153 +1946,36 @@ class ClipboardPanel(Gtk.Box):
     def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, messages: list,
                               req_id: int, temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
                               top_p: float = DEFAULT_TOP_P):
-        """Start the ReAct loop by making sequential LLM calls in the current thread."""
-        self._ai_tool_iteration = 0
-        iteration = 0
-        while iteration < MAX_TOOL_ITERATIONS:
-            should_continue = self._perform_llm_call(
-                base_url, api_key, model_name, messages, req_id,
-                temperature, max_tokens, top_p, iteration
-            )
-            if not should_continue:
-                break
-            iteration += 1
+        """Start the ReAct loop by delegating execution to the run_llm_react_loop orchestrator."""
+        def reset_iteration_state():
+            self._ai_assistant_buffer = ""
+            self._ai_response_div_added = False
+            self._ai_assistant_html_base = ""
 
-    def _perform_llm_call(self, base_url: str, api_key: str, model_name: str, messages: list,
-                          req_id: int, temperature: float, max_tokens: int, top_p: float,
-                          iteration: int) -> bool:
-        """One iteration of the ReAct loop: stream LLM response, handle tool_calls.
-
-        Returns True to continue the loop, False to stop.
-        """
-        has_thinking = False
-        thinking_header_added = False
-        response_header_added = False
-        assistant_text = ""
-        reasoning_text = ""  # 累积本轮 reasoning_content，工具调用时必须回传
-        tool_calls_found: list = []
-        # Reset per-iteration buffer and stream div states for the new iteration
-        self._ai_assistant_buffer = ""
-        self._ai_response_div_added = False
-        self._ai_assistant_html_base = ""
-
-        try:
-            cancel_event = getattr(self, "_ai_cancel_event", None)
-            for delta in self._llm_client.stream_chat_completion(
-                base_url, api_key, model_name, messages,
-                timeout=30, cancel_event=cancel_event,
-                temperature=temperature, max_tokens=max_tokens, top_p=top_p,
-                tools=tool_registry.TOOL_DEFINITIONS,
-                tool_choice=tool_registry.TOOL_CHOICE_AUTO,
-            ):
-                if getattr(self, "_ai_request_id", 0) != req_id:
-                    return False
-
-                # Check for tool_calls in delta
-                tc_delta = delta.get("tool_calls")
-                if tc_delta:
-                    tool_calls_found.extend(tc_delta)
-                    continue
-
-                reasoning = delta.get("reasoning_content")
-                content = delta.get("content")
-
-                if reasoning:
-                    if not thinking_header_added:
-                        with self._ai_stream_lock:
-                            self._ai_stream_queue.append('<div class="thinking-header">💭 Thinking Mode:</div>\n')
-                        thinking_header_added = True
-                    with self._ai_stream_lock:
-                        self._ai_stream_queue.append(reasoning)
-                    reasoning_text += reasoning
-                    has_thinking = True
-                elif content:
-                    if not response_header_added:
-                        response_header_added = True
-                        if has_thinking:
-                            with self._ai_stream_lock:
-                                self._ai_stream_queue.append('\n\n<div class="answer-header">💡 Answer:</div>\n')
-                        else:
-                            with self._ai_stream_lock:
-                                self._ai_stream_queue.append('\n\n<div class="assistant-header">🤖 Assistant:</div>\n')
-                    with self._ai_stream_lock:
-                        self._ai_stream_queue.append(content)
-                    assistant_text += content
-
-            # Stream finished — check for tool_calls
-            if tool_calls_found:
-                # Append assistant message with tool_calls to conversation
-                # 思考模式下必须携带 reasoning_content，否则 DeepSeek API 在后续子请求中返回 400
-                tool_call_msg: dict = {
-                    "role": "assistant",
-                    "content": assistant_text,
-                    "tool_calls": tool_calls_found,
-                }
-                if reasoning_text:
-                    tool_call_msg["reasoning_content"] = reasoning_text
-                self._ai_messages.append(tool_call_msg)
-
-                # Flush any streamed content before rendering tool call UI
-                self._flush_stream_queue()
-
-                # Render tool call info to WebView (via idle_add)
-                tc_html = tool_registry.format_tool_calls_for_display(tool_calls_found)
-                GLib.idle_add(self._append_html_to_webview, tc_html)
-
-                # Execute each tool call
-                for tc in tool_calls_found:
-                    if getattr(self, "_ai_request_id", 0) != req_id:
-                        return False
-                    tc_name = tc.get("function", {}).get("name", "")
-                    if tc_name == "ask_user_question":
-                        result = self._handle_ask_user_question(tc)
-                    else:
-                        result = tool_registry.execute_tool_call(tc)
-                    if getattr(self, "_ai_request_id", 0) != req_id:
-                        return False
-                    self._ai_messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", ""),
-                        "name": tc_name,
-                        "content": result,
-                    })
-                    # Render tool result summary to WebView
-                    result_html = tool_registry.format_tool_result_for_display(tc_name, result)
-                    GLib.idle_add(self._append_html_to_webview, result_html)
-
-                # Check iteration limit
-                if iteration + 1 >= MAX_TOOL_ITERATIONS:
-                    err_msg = (
-                        f'\n\n<div class="tool-result"><b>⚠️ 已达到最大工具调用次数'
-                        f'（{MAX_TOOL_ITERATIONS}），请简化请求或重试。</b></div>\n\n'
-                    )
-                    GLib.idle_add(self._append_html_to_webview, err_msg)
-                    self._ai_messages.append({
-                        "role": "assistant",
-                        "content": f"⚠️ 已达到最大工具调用次数（{MAX_TOOL_ITERATIONS}），请简化请求或重试。"
-                    })
-                    # Finalize to end the conversation turn
-                    GLib.idle_add(self._finalize_after_tool_loop, req_id)
-                    return False
-
-                # Continue ReAct loop
-                self._ai_tool_iteration = iteration + 1
-                return True
-            else:
-                # No tool_calls — pure text response, finish
-                GLib.idle_add(self._on_llm_api_finished, req_id)
-                return False
-
-        except _LLMHttpError as e:
-            with self._ai_stream_lock:
-                self._ai_stream_queue.append(f"\n\n❌ [请求失败]:\n{e}")
-            GLib.idle_add(self._on_llm_api_finished, req_id)
-            return False
-        except Exception as e:
-            with self._ai_stream_lock:
-                self._ai_stream_queue.append(f"\n\n❌ [内部错误]:\n{e}")
-            GLib.idle_add(self._on_llm_api_finished, req_id)
-            return False
+        run_llm_react_loop(
+            llm_client=self._llm_client,
+            base_url=base_url,
+            api_key=api_key,
+            model_name=model_name,
+            messages=messages,
+            req_id=req_id,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+            cancel_event=getattr(self, "_ai_cancel_event", None),
+            stream_lock=self._ai_stream_lock,
+            stream_queue=self._ai_stream_queue,
+            get_current_request_id_fn=lambda: getattr(self, "_ai_request_id", 0),
+            append_message_fn=self._ai_messages.append,
+            append_html_to_webview_fn=self._append_html_to_webview,
+            flush_stream_queue_fn=self._flush_stream_queue,
+            append_to_stream_queue_fn=lambda text: self._ai_stream_queue.append(text),
+            handle_ask_user_question_fn=self._handle_ask_user_question,
+            on_llm_api_finished_fn=self._on_llm_api_finished,
+            finalize_after_tool_loop_fn=self._finalize_after_tool_loop,
+            set_tool_iteration_fn=lambda val: setattr(self, "_ai_tool_iteration", val),
+            reset_iteration_state_fn=reset_iteration_state
+        )
 
     def _finalize_after_tool_loop(self, req_id: int):
         """Finalize after tool loop ends (used when tool iteration limit hit)."""
@@ -3245,9 +3129,9 @@ class ClipboardPanel(Gtk.Box):
         self.queue_resize()
         self._ai_history_popover.update_history_btn_label(conv)
         if self._ai_conversation_id:
-            for row in self._ai_history_listbox.get_children():
+            for row in self._ai_history_popover.listbox.get_children():
                 if getattr(row, "conversation_id", None) == self._ai_conversation_id:
-                    self._ai_history_listbox.select_row(row)
+                    self._ai_history_popover.listbox.select_row(row)
                     break
 
     def _get_sorted_conversations(self) -> List[Dict[str, Any]]:
@@ -3289,6 +3173,13 @@ class ClipboardPanel(Gtk.Box):
             if getattr(self, "_ai_history_popover", None) and self._ai_history_popover.get_visible():
                 self._ai_history_popover.popdown()
             self._switch_to_conversation(target_id)
+
+    def is_history_popup_shown(self) -> bool:
+        """Check if the conversation history dropdown is currently active."""
+        return bool(
+            self._ai_history_popover and 
+            self._ai_history_popover.get_visible()
+        )
 
     # ── Synchronous LLM call for background title generation ──────────────────────
 
