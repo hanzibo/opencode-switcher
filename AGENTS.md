@@ -9,15 +9,15 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ./                          # Flat project root (no __init__.py — not a package)
 ├── main.py                 # Entrypoint: flock lock, App(), Gtk.main()
 ├── panel.py                # Search panel UI (~1350 lines), tab switcher, slash commands, CSS providers, evdev keyboard injection
-├── clipboard_panel.py      # Clipboard/LLM panel — largest file (~7100 lines)
-├── clipboard_store.py      # Clipboard store (~1000 lines), heuristic classification, categories, prompts, LLM config, conversations
-├── tool_registry.py        # AI tool definitions + executors — 8 tools, ReAct dispatcher (~1070 lines)
+├── clipboard_panel.py      # Clipboard/LLM panel — largest file (~7713 lines)
+├── clipboard_store.py      # Clipboard store (~1032 lines), heuristic classification, categories, prompts, LLM config, conversations
+├── tool_registry.py        # AI tool definitions + executors — 8 tools, ReAct dispatcher (~1588 lines)
 ├── session_store.py        # SQLite reader + live-session detection via pgrep/proc
 ├── hotkey.py               # X11 pynput + Wayland Unix socket hotkey manager
 ├── launcher.py             # Terminal discovery + session spawner
 ├── utils.py                # is_wayland(), relative_time(), request_window_focus(), cache dirs
 ├── migrate_history.py      # Migration utility (dual-use: standalone + imported by main.py)
-├── inspect_db.py           # DB inspector — missing `__name__` guard (top-level SQL on import)
+├── inspect_db.py           # DB inspector — missing `__name__` guard (now fixed — guard present at line 10)
 ├── dnd_test.py             # Only test file: interactive GTK DnD test (manual, 15s auto-exit)
 ├── codebase_analysis.md    # Stale architecture overview (file sizes predate large clipboard_panel growth)
 ├── katex/                  # KaTeX rendering files (CSS/JS/fonts for math in AI WebView)
@@ -211,7 +211,7 @@ systemd/.desktop → run.sh → main.py (flock lock)
 - **Platform check**: `utils.is_wayland()` (reads `XDG_SESSION_TYPE` / `WAYLAND_DISPLAY`)
 - **Naming**: PascalCase classes, snake_case functions, `_prefix` for private, `UPPER_CASE` for constants
 - **Comments**: `# <space><text>`, Chinese or English. Use `# ponytail:` for intentionally removed code references.
-- **Entry points**: `if __name__ == "__main__":` guard required (current: `inspect_db.py` missing this)
+- **Entry points**: `if __name__ == "__main__":` guard required (was missing in `inspect_db.py` — now present as of commit ca1995d)
 - **No linter/formatter/CI**: Manual discipline required. No `asyncio`. No `assert` for tests (manual only).
 
 ## ANTI-PATTERNS (THIS PROJECT)
@@ -220,13 +220,25 @@ systemd/.desktop → run.sh → main.py (flock lock)
 - **No automated tests**: Zero. `dnd_test.py` is manual-only (15s auto-exit). No `pytest`.
 - **No CI/CD**: No GitHub Actions, Makefile, Dockerfile. `install.sh` is Debian/Ubuntu-only.
 - **`add_provider_for_screen` used in both panels** (panel.py, clipboard_panel.py) — leaks CSS globally per GTK docs (functional tradeoff accepted).
-- **`inspect_db.py` missing `__name__` guard**: Top-level SQL executes on import (currently safe, not imported, but fragile).
+- **`inspect_db.py` had missing `__name__` guard** (now fixed in commit ca1995d — guard present at line 10).
 - **`opencode-switcher-toggle`**: Python code inside shell script via `exec python3 -c "..."` — fragile quoting, no linting.
 - **`run.sh` sources NVM**: Couples tray app runtime to user's shell Node.js env.
 - **`--system-site-packages` venv**: Breaks isolation. Required workaround for PyGObject being a system package.
 - **Hardcoded version** (`VERSION="1.0.0"` in `install.sh`) — no git tags, no version automation.
 - **WebKit2 dependency** (`gir1.2-webkit2-4.1`) is NOT in `install.sh` system deps but required at runtime (AI panel crashes without it).
 - **GNOME extension duplicates Python classification logic** in JavaScript — two codebases to keep in sync.
+
+## COMPLEXITY HOTSPOTS (Large Files)
+
+| File | Lines | Classes | Nature |
+|------|-------|---------|--------|
+| `clipboard_panel.py` | 7713 | 4 (1 Gtk.Box, 3 helpers) | **Monolith** — UI + LLM HTTP client + markdown renderer + dialogs + ReAct loop in one class. `_show_prompts_config_dialog` alone is ~900 lines. |
+| `tool_registry.py` | 1588 | 3 | **Well-structured** — explicit section headers, clean registry pattern (`TOOL_DEFINITIONS` + `TOOL_EXECUTORS`), size due to verbose OpenAI JSON schemas |
+| `panel.py` | 1354 | 1 | **Gatekeeper** — SearchPanel has ~1300 lines, 25+ event handlers. CSS-in-code (~140 lines of template string). |
+| `clipboard_store.py` | 1032 | 12 (7 dataclasses, 5 stores) | **God module** — classification, clipboard storage, categories, conversation persistence, LLM settings, prompts in one file |
+| `extension.js` | 350 | 1 | **Compact** — but duplicates ~150 lines of `classifyText()` from `clipboard_store.py` |
+
+**Top refactoring candidates**: (1) Extract `_LLMHttpClient` from `clipboard_panel.py` (zero UI dependency). (2) Split Prompts Config dialog (~900 lines) into its own file. (3) Extract shared `classify_text()` module for both Python and JS.
 
 ## CRITICAL GTK & PYGObject QUIRKS (Crash Guards)
 
