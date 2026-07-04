@@ -199,17 +199,6 @@ class AIChatPanel(Gtk.Box):
             on_popover_closed=lambda: self.on_combo_popup_hidden() if self.on_combo_popup_hidden else None
         )
 
-        # Copy button
-        self._btn_copy_ai = Gtk.Button.new_with_label("\U0001f4cb \u590d\u5236")
-        self._btn_copy_ai.set_tooltip_text("复制AI分析建议")
-        self._btn_copy_ai.get_style_context().add_class("flat")
-
-        def on_copy_ai_clicked(_btn):
-            text = self._ai_markdown_text
-            if text:
-                _copy_to_clipboard(text)
-        self._btn_copy_ai.connect("clicked", on_copy_ai_clicked)
-        ai_hdr.pack_start(self._btn_copy_ai, False, False, 0)
 
         # Close button
         ai_close = Gtk.Button.new_with_label("\u274c")
