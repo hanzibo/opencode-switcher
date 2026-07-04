@@ -126,6 +126,12 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 window._isStreaming = false;
 
                 let lightboxScale = 1.0;
+                let translateX = 0;
+                let translateY = 0;
+                let isDragging = false;
+                let startX = 0;
+                let startY = 0;
+                let dragDistance = 0;
 
                 document.addEventListener('DOMContentLoaded', function() {{
                     if (typeof renderMathInElement === 'function') {{
@@ -137,19 +143,58 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     }}
 
                     const lightbox = document.getElementById('lightbox');
-                    if (lightbox) {{
+                    const img = document.getElementById('lightbox-img');
+                    if (lightbox && img) {{
+                        // Prevent system default image drag ghost image
+                        img.addEventListener('dragstart', function(e) {{
+                            e.preventDefault();
+                        }});
+
+                        // Wheel Zoom
                         lightbox.addEventListener('wheel', function(e) {{
                             e.preventDefault();
-                            const img = document.getElementById('lightbox-img');
-                            if (!img) return;
                             const zoomStep = 0.08;
                             if (e.deltaY < 0) {{
                                 lightboxScale = Math.min(lightboxScale + zoomStep, 5.0);
                             }} else {{
                                 lightboxScale = Math.max(lightboxScale - zoomStep, 0.5);
                             }}
-                            img.style.transform = `scale(${{lightboxScale}})`;
+                            img.style.transform = `translate(${{translateX}}px, ${{translateY}}px) scale(${{lightboxScale}})`;
                         }}, {{ passive: false }});
+
+                        // Mouse Drag
+                        lightbox.addEventListener('mousedown', function(e) {{
+                            if (e.button !== 0) return; // Only left button
+                            isDragging = true;
+                            startX = e.clientX - translateX;
+                            startY = e.clientY - translateY;
+                            dragDistance = 0;
+                            lightbox.style.cursor = 'grabbing';
+                        }});
+
+                        window.addEventListener('mousemove', function(e) {{
+                            if (!isDragging) return;
+                            const newX = e.clientX - startX;
+                            const newY = e.clientY - startY;
+                            dragDistance += Math.abs(newX - translateX) + Math.abs(newY - translateY);
+                            translateX = newX;
+                            translateY = newY;
+                            img.style.transform = `translate(${{translateX}}px, ${{translateY}}px) scale(${{lightboxScale}})`;
+                        }});
+
+                        window.addEventListener('mouseup', function(e) {{
+                            if (!isDragging) return;
+                            isDragging = false;
+                            lightbox.style.cursor = '';
+                        }});
+
+                        // Click handler to close (only on background clicked)
+                        lightbox.addEventListener('click', function(e) {{
+                            if (dragDistance > 8) return;
+                            if (e.target === lightbox) {{
+                                closeLightbox();
+                            }}
+                        }});
                     }}
                 }});
 
@@ -176,7 +221,9 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     if (!lightbox || !img) return;
                     img.src = src;
                     lightboxScale = 1.0;
-                    img.style.transform = 'scale(1)';
+                    translateX = 0;
+                    translateY = 0;
+                    img.style.transform = 'translate(0px, 0px) scale(1)';
                     lightbox.style.display = 'flex';
                     lightbox.offsetHeight;
                     lightbox.classList.add('active');
@@ -583,7 +630,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
         </head>
         <body class="{theme_name}">
             <div id="content">{initial_html}</div>
-            <div id="lightbox" class="lightbox-overlay" onclick="closeLightbox()">
+            <div id="lightbox" class="lightbox-overlay">
                 <img id="lightbox-img" class="lightbox-img">
             </div>
             <script>
