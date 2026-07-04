@@ -209,12 +209,12 @@ def _unescape_math(html_text: str, placeholders: List[str]) -> str:
 
 def _escape_tool_results(text: str) -> Tuple[str, List[str]]:
     """Scan the text for tool result box HTML chunks and escape them using placeholders."""
-    # Matches the outer tool-result-box up to the marker comment
-    pattern = re.compile(r'(<div class="tool-result-box">.*?<!-- tool-result-marker -->)', re.DOTALL)
+    # Matches the outer tool-result-box up to the marker comment, anchored to start/end of line
+    pattern = re.compile(r'(?:^|\n)(<div class="tool-result-box">.*?<!-- tool-result-marker -->)(?=\n|$)', re.DOTALL)
     placeholders = []
 
     def repl(match):
-        placeholder = f"<!--TOOL_RESULT_PLACEHOLDER_{len(placeholders)}-->"
+        placeholder = f"\n<!--TOOL_RESULT_PLACEHOLDER_{len(placeholders)}-->"
         placeholders.append(match.group(1))
         return placeholder
 
