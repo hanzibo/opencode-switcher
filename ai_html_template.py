@@ -150,6 +150,15 @@ def get_html_template(theme_name: str, initial_html: str = "",
                             e.preventDefault();
                         }});
 
+                        // Double click to reset zoom & translation
+                        img.addEventListener('dblclick', function(e) {{
+                            e.stopPropagation();
+                            lightboxScale = 1.0;
+                            translateX = 0;
+                            translateY = 0;
+                            img.style.transform = 'translate(0px, 0px) scale(1)';
+                        }});
+
                         // Wheel Zoom
                         lightbox.addEventListener('wheel', function(e) {{
                             e.preventDefault();
