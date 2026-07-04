@@ -479,7 +479,7 @@ class HistoryPopover(Gtk.Popover):
         if summaries:
             self.history_btn.set_sensitive(True)
             self.history_btn.set_no_show_all(False)
-            self.history_btn.show()
+            self.history_btn.show_all()
             self.update_history_btn_label()
             
             current_conv_id = self.get_current_conv_id_fn()

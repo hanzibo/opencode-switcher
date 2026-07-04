@@ -1979,12 +1979,10 @@ class AIChatPanel(Gtk.Box):
         self._ai_entry.get_buffer().set_text("")
         self._ai_entry.grab_focus()
         self.queue_resize()
-        self._ai_history_popover.update_history_btn_label(conv)
-        if self._ai_conversation_id:
-            for row in self._ai_history_popover.listbox.get_children():
-                if getattr(row, "conversation_id", None) == self._ai_conversation_id:
-                    self._ai_history_popover.listbox.select_row(row)
-                    break
+        try:
+            self._ai_history_popover.refresh_dropdown()
+        except Exception as e:
+            print(f"Failed to refresh dropdown in switch: {e}", flush=True)
 
     def _get_sorted_conversations(self) -> List[Dict[str, Any]]:
         """Return all conversations sorted by updated_at descending (newest first)."""
