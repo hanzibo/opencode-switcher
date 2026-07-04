@@ -1599,7 +1599,7 @@ def _make_collapsible_preview(content: str, label: str, max_chars: int = 500,
         f'<pre class="tool-result-content" style="display: none;">\n'
         f'{inner}\n'
         f'</pre>\n'
-        f'</div>'
+        f'</div><!-- tool-result-marker -->'
     )
 
 
@@ -1621,7 +1621,7 @@ def render_collapsible_tool_result(name: str, content: str) -> str:
         f'<pre class="tool-result-content" style="display: none;">\n'
         f'{safe_display}\n'
         f'</pre>\n'
-        f'</div>'
+        f'</div><!-- tool-result-marker -->'
     )
 
 
