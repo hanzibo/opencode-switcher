@@ -1538,25 +1538,25 @@ def _make_collapsible_preview(content: str, label: str, max_chars: int = 500,
         content: The text content to preview.
         label: Display label for the collapsed state (e.g. "内容预览（120 字符）").
         max_chars: Truncation limit before the fold.
-        use_pre: If True, wrap content in a <pre> tag.
+        use_pre: Ignored, as container is now pre tag.
 
     Returns:
         HTML string of the collapsible box.
     """
     truncated = len(content) > max_chars
     preview = content[:max_chars]
+    if truncated:
+        preview += f"\n\n...（已截断，共 {len(content)} 字符）"
     inner = html.escape(preview)
-    if use_pre:
-        inner = f'<pre style="margin:0; white-space:pre-wrap; word-break:break-all; font-size:12px;">{inner}</pre>'
     return (
-        f'<div class="tool-result-box">'
-        f'<div class="tool-result-header">'
-        f'<span>📄 {html.escape(label)}</span>'
-        f'<span class="tool-result-toggle" onclick="toggleToolResult(this)">展开</span>'
-        f'</div>'
-        f'<div class="tool-result-content" style="display: none;">\n'
+        f'<div class="tool-result-box">\n'
+        f'<div class="tool-result-header">\n'
+        f'<span>📄 {html.escape(label)}</span>\n'
+        f'<span class="tool-result-toggle" onclick="toggleToolResult(this)">展开</span>\n'
+        f'</div>\n'
+        f'<pre class="tool-result-content" style="display: none;">\n'
         f'{inner}\n'
-        f'</div>'
+        f'</pre>\n'
         f'</div>'
     )
 
@@ -1571,14 +1571,14 @@ def render_collapsible_tool_result(name: str, content: str) -> str:
     safe_display = html.escape(display)
 
     return (
-        f'<div class="tool-result-box">'
-        f'<div class="tool-result-header">'
-        f'<span>📎 工具结果 ({safe_name})</span>'
-        f'<span class="tool-result-toggle" onclick="toggleToolResult(this)">展开</span>'
-        f'</div>'
-        f'<div class="tool-result-content" style="display: none;">\n'
+        f'<div class="tool-result-box">\n'
+        f'<div class="tool-result-header">\n'
+        f'<span>📎 工具结果 ({safe_name})</span>\n'
+        f'<span class="tool-result-toggle" onclick="toggleToolResult(this)">展开</span>\n'
+        f'</div>\n'
+        f'<pre class="tool-result-content" style="display: none;">\n'
         f'{safe_display}\n'
-        f'</div>'
+        f'</pre>\n'
         f'</div>'
     )
 

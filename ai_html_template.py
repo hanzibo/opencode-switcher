@@ -366,6 +366,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 }}
                 .tool-result-content {{
                     padding: 8px 10px;
+                    margin: 0;
                     font-size: 13px;
                     font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
                     white-space: pre-wrap;
