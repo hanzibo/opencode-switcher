@@ -129,9 +129,11 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 let translateX = 0;
                 let translateY = 0;
                 let isDragging = false;
-                let startX = 0;
-                let startY = 0;
+
+                let startX = 0, startY = 0;
+                let currentX = 0, currentY = 0;
                 let dragDistance = 0;
+                let rafId = null;
 
                 document.addEventListener('DOMContentLoaded', function() {{
                     if (typeof renderMathInElement === 'function') {{
@@ -144,6 +146,14 @@ def get_html_template(theme_name: str, initial_html: str = "",
 
                     const lightbox = document.getElementById('lightbox');
                     const img = document.getElementById('lightbox-img');
+
+                    function updateTransform() {{
+                        translateX = currentX;
+                        translateY = currentY;
+                        img.style.transform = `translate(${{translateX}}px, ${{translateY}}px) scale(${{lightboxScale}})`;
+                        rafId = null;
+                    }}
+
                     if (lightbox && img) {{
                         // Prevent system default image drag ghost image
                         img.addEventListener('dragstart', function(e) {{
@@ -153,6 +163,10 @@ def get_html_template(theme_name: str, initial_html: str = "",
                         // Double click to reset zoom & translation
                         img.addEventListener('dblclick', function(e) {{
                             e.stopPropagation();
+                            if (rafId) {{
+                                cancelAnimationFrame(rafId);
+                                rafId = null;
+                            }}
                             lightboxScale = 1.0;
                             translateX = 0;
                             translateY = 0;
@@ -179,22 +193,25 @@ def get_html_template(theme_name: str, initial_html: str = "",
                             startY = e.clientY - translateY;
                             dragDistance = 0;
                             lightbox.style.cursor = 'grabbing';
+                            img.classList.add('dragging');
                         }});
 
                         window.addEventListener('mousemove', function(e) {{
                             if (!isDragging) return;
-                            const newX = e.clientX - startX;
-                            const newY = e.clientY - startY;
-                            dragDistance += Math.abs(newX - translateX) + Math.abs(newY - translateY);
-                            translateX = newX;
-                            translateY = newY;
-                            img.style.transform = `translate(${{translateX}}px, ${{translateY}}px) scale(${{lightboxScale}})`;
+                            currentX = e.clientX - startX;
+                            currentY = e.clientY - startY;
+                            dragDistance += Math.abs(currentX - translateX) + Math.abs(currentY - translateY);
+                            
+                            if (!rafId) {{
+                                rafId = requestAnimationFrame(updateTransform);
+                            }}
                         }});
 
                         window.addEventListener('mouseup', function(e) {{
                             if (!isDragging) return;
                             isDragging = false;
                             lightbox.style.cursor = '';
+                            img.classList.remove('dragging');
                         }});
 
                         // Click handler to close (only on background clicked)
@@ -229,6 +246,11 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     const img = document.getElementById('lightbox-img');
                     if (!lightbox || !img) return;
                     img.src = src;
+                    if (rafId) {{
+                        cancelAnimationFrame(rafId);
+                        rafId = null;
+                    }}
+                    img.classList.remove('dragging');
                     lightboxScale = 1.0;
                     translateX = 0;
                     translateY = 0;
@@ -239,6 +261,10 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 }}
                 function closeLightbox() {{
                     const lightbox = document.getElementById('lightbox');
+                    const img = document.getElementById('lightbox-img');
+                    if (img) {{
+                        img.classList.remove('dragging');
+                    }}
                     if (!lightbox) return;
                     lightbox.classList.remove('active');
                     setTimeout(() => {{
@@ -480,6 +506,9 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 }}
                 .lightbox-overlay.active .lightbox-img {{
                     transform: scale(1);
+                }}
+                .lightbox-img.dragging {{
+                    transition: none !important;
                 }}
             </style>
             <script>
