@@ -9,7 +9,8 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ./                          # Flat root — no __init__.py, not a package
 ├── main.py                 # Entrypoint: flock lock, App(), Gtk.main() (~281 lines)
 ├── panel.py                # Search panel (~1354 lines) — tab switcher, slash cmds, CSS, evdev injection
-├── clipboard_panel.py      # AI+clipboard panel (~4062 lines) — refactored from 7713-line monolith
+├── clipboard_panel.py      # Clipboard panel container (~2059 lines) — assembles subcomponents + event routing
+├── ai_chat_panel.py        # AI assistant sidebar (~2256 lines) — WebView, LLM dialog, ReAct tool calls
 ├── clipboard_store.py      # Store: classification, categories, prompts, LLM config, conversations (~1032 lines, 12 classes)
 ├── tool_registry.py        # 8 AI tools, ReAct dispatcher (~1588 lines, 45 helper functions)
 ├── session_store.py        # SQLite reader + live-session detection (~202 lines)
@@ -47,7 +48,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ### Tribal Knowledge
 | Path | Contents |
 |------|----------|
-| `.hzb-agents/experience/` | 79 per-feature postmortems — pitfalls, solutions, reasoning |
+| `.hzb-agents/experience/` | 80 per-feature postmortems — pitfalls, solutions, reasoning |
 | `.omo/plans/` | 36 structured work plans from past development |
 | `.omo/evidence/` | Verification artifacts |
 
@@ -101,7 +102,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 - Prompts support `${index:prompt=default}` placeholders
 - `${&}` embeds clipboard content at that position
 - `\${&}` → literal `${&}` (escape via backslash)
-- `TEMPLATE_REGEX` in `dynamic_copy_dialog.py` and `clipboard_panel.py`
+- `TEMPLATE_REGEX` in `dynamic_copy_dialog.py`, `clipboard_panel.py`, and `ai_chat_panel.py`
 
 ### AI Assistant (WebKit2 WebView)
 - Multi-turn with LLM (OpenAI-compatible API). Markdown + code highlighting (pygments CodeHilite) + KaTeX math
@@ -166,7 +167,7 @@ systemd/.desktop → run.sh → main.py (flock lock)
 
 ## CONVENTIONS
 
-- **Strings**: double quotes (2250:187 vs single). Docstrings: `"""`
+- **Strings**: double quotes (2833:368 vs single). Docstrings: `"""`
 - **Imports**: stdlib → third-party → local. `gi.require_version()` BEFORE `from gi.repository import ...`
 - **Types**: `from typing import Tuple, Dict, List, Optional` — NOT Python 3.9+ lowercase generics
 - **Thread safety**: `GLib.idle_add(callback, *args)` for background→UI updates. No `asyncio`.
@@ -195,14 +196,15 @@ systemd/.desktop → run.sh → main.py (flock lock)
 
 | File | Lines | Nature |
 |------|-------|--------|
-| `clipboard_panel.py` | 4062 | **Still large** — was 7713 before extracting 11 modules (ai_text_utils, llm_client, ai_tool_loop, ai_popovers, ai_html_template, prompt_dialog, prompts_config_dialog, dynamic_copy_dialog, sort_dialog, sort_cats_dialog, recycle_bin_dialog). Import-heavy weave of GTK + LLM + WebKit + ReAct. |
-| `prompts_config_dialog.py` | 910 | Largest extracted piece — 910-line single dialog class. |
+| `ai_chat_panel.py` | 2256 | Extracted from clipboard_panel.py — AIChatPanel UI, WebView, LLM orchestration |
+| `clipboard_panel.py` | 2059 | Large — was 7713 before extracting 11 modules + ai_chat_panel.py |
 | `tool_registry.py` | 1588 | Well-structured — verbose OpenAI JSON schemas account for size. Defines 8 tool schemas + executors. |
 | `panel.py` | 1354 | Gatekeeper — ~1300 lines, 25+ event handlers. CSS-in-code (~140 lines template string). |
 | `clipboard_store.py` | 1032 | God module — 12 classes (7 dataclasses, 5 stores): classification, clipboard storage, categories, conversation persistence, LLM settings, prompts. |
+| `prompts_config_dialog.py` | 910 | Largest extracted piece — 910-line single dialog class. |
 | `gnome-extension/extension.js` | 350 | Compact but duplicates ~150 lines of classification logic. |
 
-**Remaining refactoring candidates**: (1) Extract `ClipboardPanel` class from `clipboard_panel.py` (still ~4000 lines with GTK UI + WebView + dialog orchestration). (2) Extract shared `classify_text()` module for Python and JS. (3) Prompts config dialog is standalone but 910 lines.
+**Remaining refactoring candidates**: (1) `ClipboardPanel` still co-located with `clipboard_panel.py` (2059 lines) — worth extracting to own module. (2) Extract shared `classify_text()` module for Python and JS. (3) Prompts config dialog is standalone but 910 lines.
 
 ## CRITICAL GTK & PYGObject QUIRKS (Crash Guards)
 
