@@ -1175,7 +1175,7 @@ class ClipboardPanel(Gtk.Box):
         # Check action type
         act_type = getattr(prompt_obj, "action_type", "web")
         if act_type == "api":
-            self._ai_chat_panel._ask_llm_api(final_query, prompt_obj)
+            self._ai_chat_panel.ask_llm_api(final_query, prompt_obj)
             return
 
         if len(final_query) > 2000:
@@ -1226,9 +1226,9 @@ class ClipboardPanel(Gtk.Box):
                     open(image_path, "rb").read()
                 ).hexdigest()[:16]
                 def show_with_pending(h, image_path, data_uri):
-                    self._ai_chat_panel._set_pending_image(h, image_path, data_uri)
+                    self._ai_chat_panel.set_pending_image(h, image_path, data_uri)
                     self._ai_chat_panel.show_panel()
-                    self._ai_chat_panel._ai_entry.grab_focus()
+                    self._ai_chat_panel.grab_entry_focus()
                 GLib.idle_add(show_with_pending, h, image_path, data_uri)
             except Exception:
                 pass
@@ -1236,9 +1236,9 @@ class ClipboardPanel(Gtk.Box):
         threading.Thread(target=do_background_send, daemon=True).start()
 
     def _set_pending_image_and_show_panel(self, h, image_path, data_uri):
-        self._ai_chat_panel._set_pending_image(h, image_path, data_uri)
+        self._ai_chat_panel.set_pending_image(h, image_path, data_uri)
         self._ai_chat_panel.show_panel()
-        self._ai_chat_panel._ai_entry.grab_focus()
+        self._ai_chat_panel.grab_entry_focus()
 
     def _open_google_search(self, query: str):
         import urllib.parse
