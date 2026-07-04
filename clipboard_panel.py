@@ -170,16 +170,16 @@ class ClipboardPanel(Gtk.Box):
         self._in_category_button = False
 
         self.on_copy_clipboard: Optional[Callable[[str], None]] = None
-        self.on_hide_request: Optional[Callable[[], None]] = None
-        self.on_dialog_shown: Optional[Callable[[], None]] = None
-        self.on_dialog_hidden: Optional[Callable[[], None]] = None
-        self.on_ai_copy_started: Optional[Callable[[], None]] = None
-        self.on_ai_copy_finished: Optional[Callable[[], None]] = None
-        self.on_menu_shown: Optional[Callable[[], None]] = None
-        self.on_menu_hidden: Optional[Callable[[], None]] = None
-        self.on_clipboard_to_ai_request: Optional[Callable[[], None]] = None
-        self.on_combo_popup_shown: Optional[Callable[[], None]] = None
-        self.on_combo_popup_hidden: Optional[Callable[[], None]] = None
+        self._on_hide_request: Optional[Callable[[], None]] = None
+        self._on_dialog_shown: Optional[Callable[[], None]] = None
+        self._on_dialog_hidden: Optional[Callable[[], None]] = None
+        self._on_ai_copy_started: Optional[Callable[[], None]] = None
+        self._on_ai_copy_finished: Optional[Callable[[], None]] = None
+        self._on_menu_shown: Optional[Callable[[], None]] = None
+        self._on_menu_hidden: Optional[Callable[[], None]] = None
+        self._on_clipboard_to_ai_request: Optional[Callable[[], None]] = None
+        self._on_combo_popup_shown: Optional[Callable[[], None]] = None
+        self._on_combo_popup_hidden: Optional[Callable[[], None]] = None
         self._editing_rename_row = None
         self._editing_rename_entry = None
         self._editing_rename_old_name = None
@@ -1885,6 +1885,106 @@ class ClipboardPanel(Gtk.Box):
             on_dialog_shown=self.on_dialog_shown,
             on_dialog_hidden=self.on_dialog_hidden
         )
+
+    @property
+    def on_dialog_shown(self):
+        return self._on_dialog_shown
+
+    @on_dialog_shown.setter
+    def on_dialog_shown(self, value):
+        self._on_dialog_shown = value
+        if hasattr(self, "_ai_chat_panel") and self._ai_chat_panel:
+            self._ai_chat_panel.on_dialog_shown = value
+
+    @property
+    def on_dialog_hidden(self):
+        return self._on_dialog_hidden
+
+    @on_dialog_hidden.setter
+    def on_dialog_hidden(self, value):
+        self._on_dialog_hidden = value
+        if hasattr(self, "_ai_chat_panel") and self._ai_chat_panel:
+            self._ai_chat_panel.on_dialog_hidden = value
+
+    @property
+    def on_ai_copy_started(self):
+        return self._on_ai_copy_started
+
+    @on_ai_copy_started.setter
+    def on_ai_copy_started(self, value):
+        self._on_ai_copy_started = value
+        if hasattr(self, "_ai_chat_panel") and self._ai_chat_panel:
+            self._ai_chat_panel.on_ai_copy_started = value
+
+    @property
+    def on_ai_copy_finished(self):
+        return self._on_ai_copy_finished
+
+    @on_ai_copy_finished.setter
+    def on_ai_copy_finished(self, value):
+        self._on_ai_copy_finished = value
+        if hasattr(self, "_ai_chat_panel") and self._ai_chat_panel:
+            self._ai_chat_panel.on_ai_copy_finished = value
+
+    @property
+    def on_menu_shown(self):
+        return self._on_menu_shown
+
+    @on_menu_shown.setter
+    def on_menu_shown(self, value):
+        self._on_menu_shown = value
+        if hasattr(self, "_ai_chat_panel") and self._ai_chat_panel:
+            self._ai_chat_panel.on_menu_shown = value
+
+    @property
+    def on_menu_hidden(self):
+        return self._on_menu_hidden
+
+    @on_menu_hidden.setter
+    def on_menu_hidden(self, value):
+        self._on_menu_hidden = value
+        if hasattr(self, "_ai_chat_panel") and self._ai_chat_panel:
+            self._ai_chat_panel.on_menu_hidden = value
+
+    @property
+    def on_combo_popup_shown(self):
+        return self._on_combo_popup_shown
+
+    @on_combo_popup_shown.setter
+    def on_combo_popup_shown(self, value):
+        self._on_combo_popup_shown = value
+        if hasattr(self, "_ai_chat_panel") and self._ai_chat_panel:
+            self._ai_chat_panel.on_combo_popup_shown = value
+
+    @property
+    def on_combo_popup_hidden(self):
+        return self._on_combo_popup_hidden
+
+    @on_combo_popup_hidden.setter
+    def on_combo_popup_hidden(self, value):
+        self._on_combo_popup_hidden = value
+        if hasattr(self, "_ai_chat_panel") and self._ai_chat_panel:
+            self._ai_chat_panel.on_combo_popup_hidden = value
+
+    @property
+    def on_clipboard_to_ai_request(self):
+        return self._on_clipboard_to_ai_request
+
+    @on_clipboard_to_ai_request.setter
+    def on_clipboard_to_ai_request(self, value):
+        self._on_clipboard_to_ai_request = value
+        if hasattr(self, "_ai_chat_panel") and self._ai_chat_panel:
+            self._ai_chat_panel.on_clipboard_to_ai_request = value
+
+    @property
+    def on_hide_request(self):
+        return self._on_hide_request
+
+    @on_hide_request.setter
+    def on_hide_request(self, value):
+        self._on_hide_request = value
+        if hasattr(self, "_ai_chat_panel") and self._ai_chat_panel:
+            self._ai_chat_panel.on_hide_request = value
 
 
 
