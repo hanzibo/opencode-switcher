@@ -12,7 +12,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ├── clipboard_panel.py      # Clipboard panel container (~2059 lines) — assembles subcomponents + event routing
 ├── ai_chat_panel.py        # AI assistant sidebar (~2256 lines) — WebView, LLM dialog, ReAct tool calls
 ├── clipboard_store.py      # Store: classification, categories, prompts, LLM config, conversations (~1032 lines, 12 classes)
-├── tool_registry.py        # 8 AI tools, ReAct dispatcher (~1588 lines, 45 helper functions)
+├── tool_registry.py        # 8 AI tools, ReAct dispatcher (~1630 lines, 45 helper functions)
 ├── session_store.py        # SQLite reader + live-session detection (~202 lines)
 ├── launcher.py             # Terminal auto-detection + session spawner (~128 lines)
 ├── hotkey.py               # pynput (X11) + Unix socket (Wayland) — only 87 lines
@@ -20,7 +20,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ├── llm_client.py           # LLM HTTP client + _ToolCallAccumulator (~296 lines)
 ├── ai_tool_loop.py         # ReAct tool calling loop (~199 lines), imports tool_registry
 ├── ai_html_template.py     # WebView HTML + KaTeX inline embedding (~502 lines)
-├── ai_text_utils.py        # Pure markdown/math/vision helpers, zero GTK dep (~474 lines)
+├── ai_text_utils.py        # Pure markdown/math/vision helpers, zero GTK dep (~506 lines)
 ├── ai_popovers.py          # AI command autocomplete + history popovers (~522 lines)
 ├── prompts_config_dialog.py # Prompts/LLM-config dialog (~910 lines, largest extracted piece)
 ├── prompt_dialog.py        # Create/edit prompt dialog (~77 lines)
@@ -48,7 +48,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ### Tribal Knowledge
 | Path | Contents |
 |------|----------|
-| `.hzb-agents/experience/` | 80 per-feature postmortems — pitfalls, solutions, reasoning |
+| `.hzb-agents/experience/` | 81 per-feature postmortems — pitfalls, solutions, reasoning |
 | `.omo/plans/` | 36 structured work plans from past development |
 | `.omo/evidence/` | Verification artifacts |
 
