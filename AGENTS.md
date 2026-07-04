@@ -48,7 +48,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ### Tribal Knowledge
 | Path | Contents |
 |------|----------|
-| `.hzb-agents/experience/` | 82 per-feature postmortems — pitfalls, solutions, reasoning |
+| `.hzb-agents/experience/` | 83 per-feature postmortems — pitfalls, solutions, reasoning |
 | `.omo/plans/` | 36 structured work plans from past development |
 | `.omo/evidence/` | Verification artifacts |
 
