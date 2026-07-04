@@ -130,6 +130,15 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                         "type": "integer",
                         "description": "最多返回字符数（默认 5000，最大 50000）",
                         "default": 5000
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "起始行号（1-indexed，包含，可选，默认为 1）",
+                        "default": 1
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "结束行号（1-indexed，包含，可选，默认读取至文件末尾）"
                     }
                 },
                 "required": ["path"]
@@ -536,8 +545,8 @@ def execute_list_directory(path: str, include_hidden: bool = False) -> str:
     return result
 
 
-def execute_read_file(path: str, max_chars: int = 5000) -> str:
-    """Read a text file's content. Accepts absolute paths only."""
+def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1, end_line: Optional[int] = None) -> str:
+    """Read a text file's content. Accepts absolute paths only, with optional line range selection."""
     resolved = _resolve_safe_path(path)
     if resolved is None:
         return f"错误：文件不存在或路径无效「{path}」"
@@ -545,6 +554,12 @@ def execute_read_file(path: str, max_chars: int = 5000) -> str:
         return f"错误：路径不是文件「{resolved}」"
 
     max_chars = max(500, min(50000, max_chars))
+
+    if start_line < 1:
+        start_line = 1
+
+    if end_line is not None and end_line < start_line:
+        return f"错误：结束行号「{end_line}」不能小于起始行号「{start_line}」"
 
     try:
         with open(resolved, "rb") as f:
@@ -559,16 +574,37 @@ def execute_read_file(path: str, max_chars: int = 5000) -> str:
 
     try:
         with open(resolved, "r", encoding="utf-8") as f:
-            content = f.read(max_chars)
-            if f.read(1):
-                content += f"\n\n...（内容已截断）"
-            return content
+            lines = f.readlines()
     except UnicodeDecodeError:
         return f"错误：文件「{resolved}」不是有效的 UTF-8 文本文件。"
     except PermissionError:
         return f"错误：无权读取文件「{resolved}」"
     except OSError as e:
         return f"错误：读取文件时出错「{resolved}」: {e}"
+
+    total_lines = len(lines)
+    start_idx = start_line - 1
+    if start_idx >= total_lines:
+        return f"提示：文件「{resolved}」共有 {total_lines} 行，起始行号「{start_line}」超出了文件范围。"
+
+    end_idx = total_lines if end_line is None else min(end_line, total_lines)
+    sliced_lines = lines[start_idx:end_idx]
+
+    content = "".join(sliced_lines)
+    truncated_by_chars = False
+
+    if len(content) > max_chars:
+        content = content[:max_chars]
+        truncated_by_chars = True
+
+    if truncated_by_chars:
+        content += f"\n\n...（内容因超出 max_chars={max_chars} 字符而被截断）"
+    elif end_line is not None and end_line < total_lines:
+        content += f"\n\n...（已截断，仅显示第 {start_line} 至 {end_line} 行，文件共 {total_lines} 行）"
+    elif start_line > 1:
+        content += f"\n\n...（已截断，仅显示第 {start_line} 行至文件末尾，文件共 {total_lines} 行）"
+
+    return content
 
 
 # ── Time Query ─────────────────────────────────────────────────────────────
@@ -1474,8 +1510,14 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             parts.append(f'<div class="tool-call-info">📁 <b>列出目录：</b>{safe_path}</div>')
         elif name == "read_file":
             path = args.get("path", "")
+            start = args.get("start_line", 1)
+            end = args.get("end_line")
             safe_path = html.escape(path)
-            parts.append(f'<div class="tool-call-info">📝 <b>读取文件：</b>{safe_path}</div>')
+            if start > 1 or end is not None:
+                range_str = f"第 {start} 行至 {end if end is not None else '末尾'}"
+                parts.append(f'<div class="tool-call-info">📝 <b>读取文件：</b>{safe_path} ({range_str})</div>')
+            else:
+                parts.append(f'<div class="tool-call-info">📝 <b>读取文件：</b>{safe_path}</div>')
         elif name == "get_current_time":
             tz = args.get("timezone", "")
             if tz:
