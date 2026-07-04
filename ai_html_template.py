@@ -151,6 +151,29 @@ def get_html_template(theme_name: str, initial_html: str = "",
                         _scrollToBottom();
                     }}
                 }}
+
+                function showLightbox(src) {{
+                    const lightbox = document.getElementById('lightbox');
+                    const img = document.getElementById('lightbox-img');
+                    if (!lightbox || !img) return;
+                    img.src = src;
+                    lightbox.style.display = 'flex';
+                    lightbox.offsetHeight;
+                    lightbox.classList.add('active');
+                }}
+                function closeLightbox() {{
+                    const lightbox = document.getElementById('lightbox');
+                    if (!lightbox) return;
+                    lightbox.classList.remove('active');
+                    setTimeout(() => {{
+                        lightbox.style.display = 'none';
+                    }}, 200);
+                }}
+                document.addEventListener('keydown', function(e) {{
+                    if (e.key === 'Escape') {{
+                        closeLightbox();
+                    }}
+                }});
             </script>
             <style>
                 body {{
@@ -336,6 +359,52 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     white-space: pre-wrap;
                     word-break: break-all;
                 }}
+                .chat-image {{
+                    max-width: 100%;
+                    max-height: 220px;
+                    border-radius: 8px;
+                    border: 1px solid {pre_border};
+                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                    cursor: zoom-in;
+                    transition: all 0.2s ease;
+                    margin: 6px 0;
+                    display: block;
+                }}
+                .chat-image:hover {{
+                    transform: scale(1.015);
+                    border-color: {toggle_color};
+                    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+                }}
+                .lightbox-overlay {{
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    background: rgba(10, 11, 16, 0.95);
+                    display: none;
+                    justify-content: center;
+                    align-items: center;
+                    z-index: 9999;
+                    cursor: zoom-out;
+                    opacity: 0;
+                    transition: opacity 0.2s ease;
+                }}
+                .lightbox-overlay.active {{
+                    opacity: 1;
+                }}
+                .lightbox-img {{
+                    max-width: 90%;
+                    max-height: 90%;
+                    object-fit: contain;
+                    border-radius: 6px;
+                    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+                    transform: scale(0.95);
+                    transition: transform 0.2s ease;
+                }}
+                .lightbox-overlay.active .lightbox-img {{
+                    transform: scale(1);
+                }}
             </style>
             <script>
                 function _renderMath(element) {{
@@ -494,6 +563,9 @@ def get_html_template(theme_name: str, initial_html: str = "",
         </head>
         <body class="{theme_name}">
             <div id="content">{initial_html}</div>
+            <div id="lightbox" class="lightbox-overlay" onclick="closeLightbox()">
+                <img id="lightbox-img" class="lightbox-img">
+            </div>
             <script>
                 _scrollToBottom();
             </script>

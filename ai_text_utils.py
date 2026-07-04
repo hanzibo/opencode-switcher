@@ -95,7 +95,7 @@ def _vision_content_to_markdown(content: list) -> str:
             src = _resolve_vision_image_src([p])
             if src:
                 md_parts.append(
-                    f'<img src="{src}" style="max-width:400px;border-radius:6px;">'
+                    f'<img src="{src}" class="chat-image" onclick="showLightbox(this.src)">'
                 )
     md_text = "\n".join(md_parts)
     return _close_unclosed_code_blocks(md_text)

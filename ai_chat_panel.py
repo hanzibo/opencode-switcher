@@ -613,7 +613,7 @@ class AIChatPanel(Gtk.Box):
             img_src = _resolve_vision_image_src(content)
             rendered_text = _close_unclosed_code_blocks(text_part)
             if img_src:
-                rendered_text += f'\n\n<img src="{img_src}" style="max-width:400px;border-radius:6px;">'
+                rendered_text += f'\n\n<img src="{img_src}" class="chat-image" onclick="showLightbox(this.src)">'
         else:
             rendered_text = _close_unclosed_code_blocks(content)
         user_msg_idx = len(self._ai_messages) - 1
