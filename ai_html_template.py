@@ -125,6 +125,8 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 ];
                 window._isStreaming = false;
 
+                let lightboxScale = 1.0;
+
                 document.addEventListener('DOMContentLoaded', function() {{
                     if (typeof renderMathInElement === 'function') {{
                         renderMathInElement(document.body, {{
@@ -132,6 +134,22 @@ def get_html_template(theme_name: str, initial_html: str = "",
                             throwOnError: false,
                             errorColor: 'transparent'
                         }});
+                    }}
+
+                    const lightbox = document.getElementById('lightbox');
+                    if (lightbox) {{
+                        lightbox.addEventListener('wheel', function(e) {{
+                            e.preventDefault();
+                            const img = document.getElementById('lightbox-img');
+                            if (!img) return;
+                            const zoomStep = 0.08;
+                            if (e.deltaY < 0) {{
+                                lightboxScale = Math.min(lightboxScale + zoomStep, 5.0);
+                            }} else {{
+                                lightboxScale = Math.max(lightboxScale - zoomStep, 0.5);
+                            }}
+                            img.style.transform = `scale(${{lightboxScale}})`;
+                        }}, {{ passive: false }});
                     }}
                 }});
 
@@ -157,6 +175,8 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     const img = document.getElementById('lightbox-img');
                     if (!lightbox || !img) return;
                     img.src = src;
+                    lightboxScale = 1.0;
+                    img.style.transform = 'scale(1)';
                     lightbox.style.display = 'flex';
                     lightbox.offsetHeight;
                     lightbox.classList.add('active');
