@@ -193,9 +193,9 @@ class AIChatPanel(Gtk.Box):
             get_sorted_conversations_fn=self._get_sorted_conversations,
             on_conversation_selected=self._switch_to_conversation,
             on_clear_all_deleted_reset_fn=self._reset_ai_panel_silent,
-            on_dialog_shown=self.on_dialog_shown,
-            on_dialog_hidden=self.on_dialog_hidden,
-            on_popover_shown=self.on_combo_popup_shown,
+            on_dialog_shown=lambda: self.on_dialog_shown() if self.on_dialog_shown else None,
+            on_dialog_hidden=lambda: self.on_dialog_hidden() if self.on_dialog_hidden else None,
+            on_popover_shown=lambda: self.on_combo_popup_shown() if self.on_combo_popup_shown else None,
             on_popover_closed=lambda: self.on_combo_popup_hidden() if self.on_combo_popup_hidden else None
         )
 
@@ -716,7 +716,7 @@ class AIChatPanel(Gtk.Box):
             daemon=True
         ).start()
 
-    def _ask_llm_api(self, prompt_text: str, prompt_obj: Optional[CustomPrompt] = None):
+    def ask_llm_api(self, prompt_text: str, prompt_obj: Optional[CustomPrompt] = None):
         # Show the AI panel
         self.separator.set_no_show_all(False)
         self.separator.show()
@@ -1713,11 +1713,11 @@ class AIChatPanel(Gtk.Box):
                     f.write(image_data)
             data_uri = _image_to_data_uri(img_path)
             if data_uri:
-                GLib.idle_add(self._set_pending_image, h, img_path, data_uri)
+                GLib.idle_add(self.set_pending_image, h, img_path, data_uri)
         except Exception:
             pass
 
-    def _set_pending_image(self, img_hash: str, img_path: str, data_uri: str):
+    def set_pending_image(self, img_hash: str, img_path: str, data_uri: str):
         self._ai_pending_image_hash = img_hash
         self._ai_pending_image_path = img_path
         self._ai_pending_image_data_uri = data_uri
@@ -1800,7 +1800,7 @@ class AIChatPanel(Gtk.Box):
                         f.write(image_data)
                 data_uri = _image_to_data_uri(img_path)
                 if data_uri:
-                    GLib.idle_add(self._set_pending_image, h, img_path, data_uri)
+                    GLib.idle_add(self.set_pending_image, h, img_path, data_uri)
             except Exception:
                 pass
 
@@ -2243,8 +2243,14 @@ class AIChatPanel(Gtk.Box):
     def reset_state(self):
         self._reset_ai_panel_silent()
 
+    def grab_entry_focus(self):
+        self._ai_entry.grab_focus()
+
     def set_theme(self, name):
         self._theme = name
         pygments_css = self._get_pygments_css(name)
-        html = get_html_template(name, "", pygments_css)
+        html_content = ""
+        if self._ai_markdown_text:
+            html_content = _markdown_to_html_safe(self._ai_markdown_text)
+        html = get_html_template(name, html_content, pygments_css)
         self._ai_webview.load_html(html, "file:///")
