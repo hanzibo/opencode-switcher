@@ -2018,11 +2018,10 @@ class AIChatPanel(Gtk.Box):
                         model_name: str, timeout: int = 15,
                         temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
                         top_p: float = DEFAULT_TOP_P) -> Optional[str]:
-        result = self._llm_client.sync_chat_completion(
+        return self._llm_client.sync_chat_completion(
             base_url, api_key, model_name, messages, timeout=timeout,
             temperature=temperature, max_tokens=max_tokens, top_p=top_p,
-        )
-        return result.get("content")
+        ).get("content")
 
     def _call_llm_and_set_title(self, prompt: str, conv_id: str,
                                  base_url: str, api_key: str, model_name: str,

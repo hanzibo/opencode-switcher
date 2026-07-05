@@ -24,7 +24,6 @@ import uuid
 from html.parser import HTMLParser
 from typing import Any, Dict, Final, List, Optional, Callable, Tuple
 
-import copy
 import requests
 
 from llm_client import _LLMHttpClient, _LLMHttpError
@@ -827,7 +826,7 @@ TOOL_CHOICE_AUTO = "auto"
 
 def _get_llm_config() -> "LLMModelConfig":
     """Read the default LLM model config for sub-agent use."""
-    from clipboard_store import LLMSettingsStore
+    from clipboard_store import LLMSettingsStore, LLMModelConfig
     store = LLMSettingsStore()
     default = next((m for m in store.models if m.is_default), None)
     if default is None and store.models:
