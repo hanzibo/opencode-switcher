@@ -10,16 +10,16 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ├── main.py                 # Entrypoint: flock lock, App(), Gtk.main() (~281 lines)
 ├── panel.py                # Search panel (~1354 lines) — tab switcher, slash cmds, CSS, evdev injection
 ├── clipboard_panel.py      # Clipboard panel container (~2059 lines) — assembles subcomponents + event routing
-├── ai_chat_panel.py        # AI assistant sidebar (~2256 lines) — WebView, LLM dialog, ReAct tool calls
-├── clipboard_store.py      # Store: classification, categories, prompts, LLM config, conversations (~1032 lines, 12 classes)
-├── tool_registry.py        # 8 AI tools, ReAct dispatcher (~1630 lines, 45 helper functions)
+├── ai_chat_panel.py        # AI assistant sidebar (~2303 lines) — WebView, LLM dialog, ReAct tool calls
+├── clipboard_store.py      # Store: classification, categories, prompts, LLM config, conversations (~1032 lines, 12 classes, 7 dataclasses)
+├── tool_registry.py        # 11 AI tools, ReAct dispatcher, HTML formatting (~1662 lines, 45+ helpers)
 ├── session_store.py        # SQLite reader + live-session detection (~202 lines)
 ├── launcher.py             # Terminal auto-detection + session spawner (~128 lines)
 ├── hotkey.py               # pynput (X11) + Unix socket (Wayland) — only 87 lines
 ├── utils.py                # is_wayland(), relative_time(), request_window_focus(), dirs (~48 lines)
 ├── llm_client.py           # LLM HTTP client + _ToolCallAccumulator (~296 lines)
 ├── ai_tool_loop.py         # ReAct tool calling loop (~199 lines), imports tool_registry
-├── ai_html_template.py     # WebView HTML + KaTeX inline embedding (~502 lines)
+├── ai_html_template.py     # WebView HTML + KaTeX inline embedding (~680 lines)
 ├── ai_text_utils.py        # Pure markdown/math/vision helpers, zero GTK dep (~506 lines)
 ├── ai_popovers.py          # AI command autocomplete + history popovers (~522 lines)
 ├── prompts_config_dialog.py # Prompts/LLM-config dialog (~910 lines, largest extracted piece)
@@ -37,6 +37,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 │   ├── extension.js        # 350 lines — clipboard + focus + classification (duplicated from clipboard_store.py)
 │   ├── metadata.json
 │   └── AGENTS.md           # GNOME extension-specific agent instructions
+├── clipboard_store/        # Empty (__pycache__ only) — possible package migration target
 ├── docs/usage.md           # Chinese-language usage guide
 ├── run.sh                  # Prod launcher: log rotation, nvm, JSC_useJIT=false
 ├── install.sh              # Install/uninstall/status: systemd, venv, GNOME ext (VERSION="1.0.0" hardcoded)
@@ -48,7 +49,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ### Tribal Knowledge
 | Path | Contents |
 |------|----------|
-| `.hzb-agents/experience/` | 84 per-feature postmortems — pitfalls, solutions, reasoning |
+| `.hzb-agents/experience/` | 85 per-feature postmortems — pitfalls, solutions, reasoning |
 | `.omo/plans/` | 36 structured work plans from past development |
 | `.omo/evidence/` | Verification artifacts |
 
@@ -67,7 +68,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 
 **System deps** (beyond pip): `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard xclip xdotool gir1.2-webkit2-4.1` — webkit2gtk is NOT in install.sh but required at runtime (AI panel crashes without it).
 
-**Commit convention**: `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `style(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`, `tool-registry`, `session-store`).
+**Commit convention**: `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `optimize(area):`, `perf(area):`, `style(area):`, `docs(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`, `tool-registry`, `session-store`, `experience` for postmortems). Most commits cluster around `ai-panel` and `tool-registry`.
 
 ## KEY FEATURES
 
@@ -102,7 +103,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 - Prompts support `${index:prompt=default}` placeholders
 - `${&}` embeds clipboard content at that position
 - `\${&}` → literal `${&}` (escape via backslash)
-- `TEMPLATE_REGEX` in `dynamic_copy_dialog.py`, `clipboard_panel.py`, and `ai_chat_panel.py`
+- `TEMPLATE_REGEX` in `dynamic_copy_dialog.py`, `clipboard_panel.py`, and `ai_chat_panel.py` (duplicated)
 
 ### AI Assistant (WebKit2 WebView)
 - Multi-turn with LLM (OpenAI-compatible API). Markdown + code highlighting (pygments CodeHilite) + KaTeX math
@@ -110,13 +111,19 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 - Multi-model: alias, base_url, api_key, model_name
 - Conversations: `~/.cache/opencode-switcher/conversations/` (JSON files)
 - WebKit settings: WebGL/HTML5 DBs/localStorage disabled (memory optimization)
+- `/cd <path>` command switches the AI panel's active bash working directory
 
 ### AI Tool Calling (ReAct Loop)
-- **Architecture**: `llm_client.py` (`_LLMHttpClient`, `_ToolCallAccumulator` for SSE delta accumulation) → `ai_tool_loop.py` (`run_llm_react_loop` — max 25 iterations) → `tool_registry.py` (8 tool executors)
+- **Architecture**: `llm_client.py` (`_LLMHttpClient`, `_ToolCallAccumulator` for SSE delta accumulation) → `ai_tool_loop.py` (`run_llm_react_loop` — max 25 iterations) → `tool_registry.py` (11 tool executors)
 - LLM streams → if `finish_reason: "tool_calls"`, accumulate deltas → execute synchronously via `tool_registry.execute_tool_call()` → feed result back as `role: "tool"` → repeat
-- 8 tools: `web_search` / `web_fetch` (Obscura browser), `list_directory` / `read_file` / `grep_search` / `glob_find` / `file_info` (safe-path guarded), `get_current_time`
-- Tool results rendered as collapsible HTML sections in WebView
+- **11 tools**: `web_search` / `web_fetch` (Obscura browser), `list_directory` / `read_file` (supports line range) / `grep_search` / `glob_find` / `file_info` (safe-path guarded), `get_current_time`, `ask_user_question`, `write_file` (safe-path sandboxed), `bash` (persistent bash session, supports `restart` and `timeout` params)
+- Tool results rendered as collapsible `<pre>` sections in WebView (changed from `<div>` to prevent markdown parser block splitting)
 - `TOOL_CHOICE_AUTO` configurable per request
+
+### AI Image Display
+- Inline images in chat rendered as clickable thumbnails
+- Lightbox overlay with zoom (mouse wheel), pan (click-drag), reset on double-click, close on Esc/click-outside
+- Uses `requestAnimationFrame` for decoupling mousemove from browser frame ticks, disables transitions during drag
 
 ## PLATFORM DUAL-MODE
 
@@ -174,7 +181,7 @@ systemd/.desktop → run.sh → main.py (flock lock)
 - **Platform check**: `utils.is_wayland()` reads `XDG_SESSION_TYPE` / `WAYLAND_DISPLAY`
 - **Naming**: PascalCase classes, snake_case functions, `_prefix` for private, `UPPER_CASE` constants
 - **Comments**: `# <space><text>`, Chinese or English. `# ponytail:` marks intentionally removed code.
-- **Entry points**: `if __name__ == "__main__":` guard required (was once missing in `inspect_db.py` — fixed at commit ca1995d, guard present at line 10)
+- **Entry points**: `if __name__ == "__main__":` guard required. Present in `main.py`, `dnd_test.py`, `inspect_db.py`, `migrate_history.py`.
 - **No linter/formatter/CI**: Manual discipline. No `asyncio`. No `assert` for tests.
 
 ## ANTI-PATTERNS (THIS PROJECT)
@@ -182,7 +189,7 @@ systemd/.desktop → run.sh → main.py (flock lock)
 - **No package structure**: Zero `__init__.py`. Modules flat in root.
 - **No automated tests**: `dnd_test.py` is manual-only. No `pytest`.
 - **No CI/CD**: No GitHub Actions, Makefile, Dockerfile. `install.sh` is Debian/Ubuntu-only.
-- **`add_provider_for_screen`** in both panels (panel.py, clipboard_panel.py) — leaks CSS globally per GTK docs (accepted tradeoff).
+- **`add_provider_for_screen`** in both panels (`panel.py:102`, `clipboard_panel.py:205`) — leaks CSS globally per GTK docs (accepted tradeoff).
 - **`opencode-switcher-toggle`**: Python code inside shell script via `exec python3 -c "..."` — fragile quoting.
 - **`run.sh` sources NVM**: Couples tray app runtime to user's shell Node.js env.
 - **`--system-site-packages` venv**: Breaks isolation. Required for system PyGObject.
@@ -190,21 +197,22 @@ systemd/.desktop → run.sh → main.py (flock lock)
 - **WebKit2 dependency** not in `install.sh` but required at runtime — AI panel crashes without it.
 - **GNOME extension duplicates Python classification** — ~150 lines of heuristic scoring in both Python and JS.
 - **Shared clipboard_history.json** — written by both Python and JS, no locking → potential corruption.
+- **`TEMPLATE_REGEX` duplicated** in `dynamic_copy_dialog.py`, `clipboard_panel.py`, `ai_chat_panel.py` — must keep in sync.
 - `codebase_analysis.md` — stale architecture overview (predates refactoring; line counts are wrong).
 
 ## COMPLEXITY HOTSPOTS
 
 | File | Lines | Nature |
 |------|-------|--------|
-| `ai_chat_panel.py` | 2256 | Extracted from clipboard_panel.py — AIChatPanel UI, WebView, LLM orchestration |
+| `ai_chat_panel.py` | 2303 | Extracted from clipboard_panel.py — AIChatPanel UI, WebView, LLM orchestration |
 | `clipboard_panel.py` | 2059 | Large — was 7713 before extracting 11 modules + ai_chat_panel.py |
-| `tool_registry.py` | 1588 | Well-structured — verbose OpenAI JSON schemas account for size. Defines 8 tool schemas + executors. |
+| `tool_registry.py` | 1662 | 11 tools + BashSession class + HTML formatting — verbose OpenAI JSON schemas account for size |
 | `panel.py` | 1354 | Gatekeeper — ~1300 lines, 25+ event handlers. CSS-in-code (~140 lines template string). |
 | `clipboard_store.py` | 1032 | God module — 12 classes (7 dataclasses, 5 stores): classification, clipboard storage, categories, conversation persistence, LLM settings, prompts. |
 | `prompts_config_dialog.py` | 910 | Largest extracted piece — 910-line single dialog class. |
 | `gnome-extension/extension.js` | 350 | Compact but duplicates ~150 lines of classification logic. |
 
-**Remaining refactoring candidates**: (1) `ClipboardPanel` still co-located with `clipboard_panel.py` (2059 lines) — worth extracting to own module. (2) Extract shared `classify_text()` module for Python and JS. (3) Prompts config dialog is standalone but 910 lines.
+**Remaining refactoring candidates**: (1) `ClipboardPanel` still co-located with `clipboard_panel.py` (2059 lines) — worth extracting to own module. (2) Extract shared `classify_text()` module for Python and JS. (3) Prompts config dialog is standalone but 910 lines. (4) `clipboard_store/` dir exists with only `__pycache__/` — possible package migration target.
 
 ## CRITICAL GTK & PYGObject QUIRKS (Crash Guards)
 
