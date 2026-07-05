@@ -12,7 +12,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ├── clipboard_panel.py      # Clipboard panel container (~2059 lines) — assembles subcomponents + event routing
 ├── ai_chat_panel.py        # AI assistant sidebar (~2303 lines) — WebView, LLM dialog, ReAct tool calls
 ├── clipboard_store.py      # Store: classification, categories, prompts, LLM config, conversations (~1032 lines, 12 classes, 7 dataclasses)
-├── tool_registry.py        # 19 AI tools, ReAct dispatcher, HTML formatting (~2750 lines, 64 functions)
+├── tool_registry.py        # 19 AI tools, ReAct dispatcher, HTML formatting (~3043 lines, 59 functions)
 ├── session_store.py        # SQLite reader + live-session detection (~202 lines)
 ├── launcher.py             # Terminal auto-detection + session spawner (~128 lines)
 ├── hotkey.py               # pynput (X11) + Unix socket (Wayland) — only 87 lines

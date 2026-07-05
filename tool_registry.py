@@ -336,17 +336,13 @@ def execute_todo_list(id: Optional[str] = None,
         todos_to_show = todos
 
     # Sort
-    reverse = False
-    sort_key = sort_by
     if sort_by == "priority":
         priority_order = {"high": 0, "medium": 1, "low": 2}
         todos_to_show = sorted(todos_to_show, key=lambda t: priority_order.get(t.get("priority", "medium"), 1))
-        sort_key = None
     elif sort_by == "updated_at":
-        reverse = True
-
-    if sort_key and sort_by != "priority":
-        todos_to_show = sorted(todos_to_show, key=lambda t: t.get(sort_key, ""), reverse=reverse)
+        todos_to_show = sorted(todos_to_show, key=lambda t: t.get(sort_by, ""), reverse=True)
+    else:
+        todos_to_show = sorted(todos_to_show, key=lambda t: t.get(sort_by, ""))
 
     # Statistics
     total = len(todos)
@@ -398,7 +394,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-             "name": "web_fetch",
+            "name": "web_fetch",
             "description": "获取指定 URL 的页面内容并转换为纯文本。用于阅读文章、文档、新闻等具体页面。支持缓存（5分钟）和超时配置。",
             "parameters": {
                 "type": "object",
@@ -667,7 +663,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-             "name": "todo_create",
+            "name": "todo_create",
             "description": "创建新任务。返回任务的唯一 ID。任务创建后默认为 pending 状态。如果指定了 blocked_by（依赖任务列表），则状态自动设为 blocked，直到所有依赖任务完成。",
             "parameters": {
                 "type": "object",
@@ -707,7 +703,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-             "name": "todo_update",
+            "name": "todo_update",
             "description": "更新任务的状态或字段。最常用操作：标记任务为 in_progress 或 completed。"
                        "当标记为 completed 时，自动检查并解除依赖该任务的其他 blocked 任务。",
             "parameters": {
@@ -752,7 +748,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-             "name": "todo_list",
+            "name": "todo_list",
             "description": "列出任务摘要或查询单个任务详情。不指定 id 时返回所有任务摘要（含状态、优先级、依赖）。指定 id 时返回该任务的完整信息（含描述）。可选 status_filter 仅列出特定状态的任务。返回统计信息（完成数/进行中/待处理/阻塞）。",
             "parameters": {
                 "type": "object",
@@ -1995,9 +1991,10 @@ _OBSCURA_EVAL_TPL = """JSON.stringify(
     }))
 )"""
 
-# Web fetch response cache (5 min TTL)
+# Web fetch response cache (5 min TTL, LRU eviction at 50 entries)
 _FETCH_CACHE: Dict[str, Tuple[float, str]] = {}
 _FETCH_CACHE_TTL = 300
+_FETCH_CACHE_MAX = 50
 
 
 def _get_cached_fetch(url: str) -> Optional[str]:
@@ -2005,11 +2002,14 @@ def _get_cached_fetch(url: str) -> Optional[str]:
     entry = _FETCH_CACHE.get(url)
     if entry is not None and time.monotonic() - entry[0] < _FETCH_CACHE_TTL:
         return entry[1]
+    _FETCH_CACHE.pop(url, None)
     return None
 
 
 def _set_cached_fetch(url: str, content: str):
-    """Store fetch result in cache."""
+    """Store fetch result in cache, evict LRU when over capacity."""
+    while len(_FETCH_CACHE) >= _FETCH_CACHE_MAX:
+        _FETCH_CACHE.pop(next(iter(_FETCH_CACHE)), None)
     _FETCH_CACHE[url] = (time.monotonic(), content)
 
 
@@ -2098,7 +2098,8 @@ def execute_web_search(query: str, max_results: int = 5) -> str:
     max_results = max(1, min(10, max_results))
     # Fast path: direct DuckDuckGo HTTP (0.5-2s)
     result = _execute_duckduckgo_search(query, max_results)
-    if "被拦截" not in result and "搜索失败" not in result:
+    # If DuckDuckGo returned actual results (not CAPTCHA/error), use them
+    if not result.startswith(("DuckDuckGo", "搜索失败")):
         return result
     # Fallback: Obscura headless browser (~2.5s, handles CAPTCHA)
     result = _execute_obscura_search(query, max_results)
@@ -2299,6 +2300,7 @@ def _check_interactive(command: str) -> Optional[str]:
 def _save_truncated_output(output: str, command: str) -> str:
     """Save truncated output to a temp file, return a user-facing message."""
     tmp_dir = tempfile.gettempdir()
+    _clean_old_temp_files("bash_out_", tmp_dir)
     cmd_hash = hash(command) & 0xFFFFFFFF
     prefix = f"bash_out_{cmd_hash:08x}_"
     try:
@@ -2310,6 +2312,19 @@ def _save_truncated_output(output: str, command: str) -> str:
             return f"\n完整输出已保存至: {f.name}"
     except OSError:
         return ""
+
+
+def _clean_old_temp_files(prefix: str, tmp_dir: str, max_age: int = 86400):
+    """Remove temp files older than max_age seconds from tmp_dir."""
+    now = time.time()
+    for entry in os.listdir(tmp_dir):
+        if entry.startswith(prefix):
+            path = os.path.join(tmp_dir, entry)
+            try:
+                if now - os.path.getmtime(path) > max_age:
+                    os.remove(path)
+            except OSError:
+                pass
 
 
 class _BashSession:
@@ -2573,7 +2588,7 @@ def execute_bash(command: str, restart: bool = False, timeout: int = _BASH_TIMEO
             parts.append(output)
         return "\n".join(parts)
 
-    status_icon = "✅" if exit_code == 0 else "❌"
+    status_icon = "✅" if exit_code == 0 else "⚠️" if exit_code == -1 else "❌"
     parts = [f"{status_icon} 命令执行完成（退出码：{exit_code}）"]
     if output:
         parts.append("")
