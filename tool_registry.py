@@ -371,7 +371,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_directory",
-            "description": "列出指定目录的内容。仅接受绝对路径。返回文件和子目录列表，每条显示类型标记（[DIR] 目录、[FILE] 文件、[LINK] 符号链接）。",
+            "description": "列出指定目录的内容。仅接受绝对路径。返回文件和子目录列表，每条显示类型标记、大小和修改时间（[DIR] 目录、[FILE] 文件、[LINK] 符号链接）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1008,16 +1008,26 @@ def execute_list_directory(path: str, include_hidden: bool = False) -> str:
             continue
         full = os.path.join(resolved, name)
         try:
+            st = os.lstat(full)
             if os.path.islink(full):
-                marker = "[LINK]"
+                marker = "LINK"
+                target = os.readlink(full)
+                name_display = f"{name} → {target}"
             elif os.path.isdir(full):
-                marker = "[DIR]"
+                marker = "DIR"
+                name_display = name
             else:
-                marker = "[FILE]"
+                marker = "FILE"
+                name_display = name
+            size = _format_file_size(st.st_size) if not stat.S_ISDIR(st.st_mode) else "—"
+            mtime = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%m-%d %H:%M")
         except OSError:
-            marker = "[?]"
-        marker = marker.ljust(6)
-        filtered.append(f"{marker}  {name}")
+            marker = "?"
+            size = "?"
+            mtime = "?"
+            name_display = name
+
+        filtered.append(f"[{marker:4s}] {size:>8s}  {mtime}  {name_display}")
 
     if not filtered:
         return f"目录「{resolved}」为空。"
@@ -1027,8 +1037,7 @@ def execute_list_directory(path: str, include_hidden: bool = False) -> str:
         filtered = filtered[:_MAX_DIRECTORY_LISTING]
         filtered.append(f"\n...（已截断，仅显示前 {_MAX_DIRECTORY_LISTING} 项，共 {total} 项）")
 
-    result = f"📁 目录列表: {resolved}\n\n" + "\n".join(filtered)
-    return result
+    return f"📁 目录列表: {resolved}\n\n" + "\n".join(filtered)
 
 
 def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1, end_line: Optional[int] = None) -> str:
@@ -1274,6 +1283,7 @@ def execute_get_current_time(timezone: str = "") -> str:
 
     return (
         f"当前时间：{now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"ISO 8601：{now.isoformat()}\n"
         f"星期：{weekday}\n"
         f"时区：{tz_name} ({offset_str})\n"
         f"时间戳：{ts}"
@@ -1531,18 +1541,16 @@ def execute_file_info(path: str) -> str:
     except (ImportError, KeyError):
         owner = str(st.st_uid)
         group = str(st.st_gid)
-    except Exception:
-        owner = str(st.st_uid)
-        group = str(st.st_gid)
 
     if os.path.isdir(resolved) and not is_symlink:
         size_str = "—（目录）"
     else:
         size_str = _format_file_size(st.st_size)
 
-    mtime = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-    atime = datetime.datetime.fromtimestamp(st.st_atime).strftime("%Y-%m-%d %H:%M:%S")
-    ctime = datetime.datetime.fromtimestamp(st.st_ctime).strftime("%Y-%m-%d %H:%M:%S")
+    local_tz = datetime.datetime.now().astimezone().tzinfo
+    mtime = datetime.datetime.fromtimestamp(st.st_mtime, tz=local_tz).strftime("%Y-%m-%d %H:%M:%S")
+    atime = datetime.datetime.fromtimestamp(st.st_atime, tz=local_tz).strftime("%Y-%m-%d %H:%M:%S")
+    ctime = datetime.datetime.fromtimestamp(st.st_ctime, tz=local_tz).strftime("%Y-%m-%d %H:%M:%S")
 
     lines = [
         f"📋 文件信息: {resolved}",
@@ -1550,11 +1558,9 @@ def execute_file_info(path: str) -> str:
         f"  大小: {size_str}",
         f"  权限: {perm_octal} ({perm_str})",
         f"  所有者: {owner}:{group}",
-        f"  修改时间 (mtime): {mtime}",
-        f"  访问时间 (atime): {atime}",
-        f"  创建/状态变更 (ctime): {ctime}",
-        f"  Inode: {st.st_ino}",
-        f"  硬链接数: {st.st_nlink}",
+        f"  修改时间: {mtime}",
+        f"  访问时间: {atime}",
+        f"  创建时间: {ctime}",
     ]
 
     return "\n".join(lines)
@@ -1563,17 +1569,14 @@ def execute_file_info(path: str) -> str:
 def execute_ask_user_question(question: str) -> str:
     """Ask the user a question and return their response.
 
-    Note: This is a placeholder executor. The actual blocking user interaction
-    is handled by clipboard_panel.py which intercepts this tool before calling
-    execute_tool_call(). This function exists for registration completeness.
+    Note: This is a fallback — the actual blocking user interaction
+    is handled by clipboard_panel.py which intercepts this tool in
+    ai_tool_loop.py before calling execute_tool_call().
 
-    Args:
-        question: The question to ask the user.
-
-    Returns:
-        A placeholder string indicating the question was asked.
+    If this function is reached (interception failed), it returns an error
+    to prevent the agent from receiving a fake success response.
     """
-    return f"请回答: {question}"
+    return "错误：ask_user_question 未被拦截，用户提问已丢失。请使用其他方式获取所需信息。"
 
 
 # ── Write File ──────────────────────────────────────────────────────────────
