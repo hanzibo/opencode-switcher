@@ -114,7 +114,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ### AI Tool Calling (ReAct Loop)
 - **Architecture**: `llm_client.py` (`_LLMHttpClient`, `_ToolCallAccumulator` for SSE delta accumulation) → `ai_tool_loop.py` (`run_llm_react_loop` — max 25 iterations) → `tool_registry.py` (11 tool executors)
 - LLM streams → if `finish_reason: "tool_calls"`, accumulate deltas → execute synchronously via `tool_registry.execute_tool_call()` → feed result back as `role: "tool"` → repeat
-- **11 tools**: `web_search` / `web_fetch` (Obscura browser), `list_directory` / `read_file` (supports line range) / `grep_search` / `glob_find` / `file_info` (safe-path guarded), `get_current_time`, `ask_user_question`, `write_file` (safe-path sandboxed), `bash` (persistent bash session, supports `restart` and `timeout` params)
+- **11 tools**: `web_search` / `web_fetch` (Obscura browser), `list_directory` / `read_file` (supports line range) / `grep_search` / `glob_find` / `file_info` (safe-path guarded), `get_current_time`, `ask_user_question`, `write_file`, `bash` (persistent bash session, supports `restart` and `timeout` params)
 - Tool results rendered as collapsible `<pre>` sections in WebView (changed from `<div>` to prevent markdown parser block splitting)
 - `TOOL_CHOICE_AUTO` configurable per request
 

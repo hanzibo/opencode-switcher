@@ -151,7 +151,6 @@ class ClipboardPanel(Gtk.Box):
         ("/rollback", "回滚到任意轮"),
         ("/title", "设置/生成标题"),
         ("/model", "切换模型"),
-        ("/sandbox", "设置 write_file 沙箱路径"),
     ]
 
     def __init__(self, clip_store, cat_store):

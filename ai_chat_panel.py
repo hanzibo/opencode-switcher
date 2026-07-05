@@ -69,7 +69,6 @@ class AIChatPanel(Gtk.Box):
         ("/rollback", "回滚到任意轮"),
         ("/title", "设置/生成标题"),
         ("/model", "切换模型"),
-        ("/sandbox", "设置 write_file 沙箱路径"),
         ("/cd", "切换 bash 工作路径"),
     ]
 
@@ -1181,31 +1180,6 @@ class AIChatPanel(Gtk.Box):
         if text.startswith("/model "):
             buf.set_text("")
             self._switch_model_by_alias(text[len("/model "):].strip())
-            return
-        if text == "/sandbox":
-            buf.set_text("")
-            from tool_registry import set_write_sandbox, _WRITE_SANDBOX_ROOT, _WRITE_SANDBOX_ENABLED
-            status = "on" if _WRITE_SANDBOX_ENABLED else "off"
-            msg = (
-                f'<div style="color: #818cf8; padding: 8px 12px; margin: 4px 0; '
-                f'border: 1px solid #818cf8; border-radius: 6px; font-size: 13px;">'
-                f'📋 当前沙箱状态: <strong>{status}</strong>'
-                f'<br/><span style="font-size: 11px; opacity: 0.6;">'
-                f'/sandbox &lt;path&gt;  — 设置沙箱路径<br/>'
-                f'/sandbox off      — 关闭沙箱（谨慎）<br/>'
-                f'/sandbox reset    — 恢复默认</span></div>'
-            )
-            self.append_html_to_webview(msg)
-            return
-        if text.startswith("/sandbox "):
-            buf.set_text("")
-            from tool_registry import set_write_sandbox
-            arg = text[len("/sandbox "):].strip()
-            result = set_write_sandbox(arg)
-            self.append_html_to_webview(
-                f'<div style="padding: 8px 12px; margin: 4px 0; '
-                f'font-size: 13px;">{result}</div>'
-            )
             return
         if text == "/cd":
             buf.set_text("")

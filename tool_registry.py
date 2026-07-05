@@ -695,8 +695,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "delete_file",
-            "description": "删除文件或空目录。可设置 recursive=True 递归删除非空目录（相当于 rm -r）。"
-                           "仅允许删除沙箱范围内的文件（默认：项目根目录）。",
+            "description": "删除文件或空目录。可设置 recursive=True 递归删除非空目录（相当于 rm -r）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -718,8 +717,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "rename_file",
-            "description": "重命名或移动文件/目录。源路径必须存在，目标路径不能已存在（除非设置 force=True）。"
-                           "目标路径受沙箱限制（默认：项目根目录）。",
+            "description": "重命名或移动文件/目录。源路径必须存在，目标路径不能已存在（除非设置 force=True）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -866,54 +864,12 @@ def _resolve_safe_path(path: str) -> Optional[str]:
     return resolved
 
 
-# ── Write Sandbox ─────────────────────────────────────────────────────────
-# Controls where write_file is allowed to create/modify files.
-# Defaults to the project root directory (where this script lives).
-_WRITE_SANDBOX_ROOT: Optional[str] = os.path.realpath(
-    os.path.dirname(os.path.abspath(__file__))
-)
-_WRITE_SANDBOX_ENABLED = True
-
-
-def set_write_sandbox(path: Optional[str] = None) -> str:
-    """Configure the write_file sandbox.
-
-    Args:
-        path: Absolute path to use as the sandbox root.
-              Pass None or "off" to disable sandbox (allow any absolute path).
-              Pass "reset" to restore default.
-
-    Returns:
-        Status message describing the new sandbox state.
-    """
-    global _WRITE_SANDBOX_ROOT, _WRITE_SANDBOX_ENABLED
-
-    if path is None or path == "off":
-        _WRITE_SANDBOX_ENABLED = False
-        return "🔓 沙箱已关闭，write_file 可写入任何绝对路径。"
-
-    if path == "reset":
-        _WRITE_SANDBOX_ROOT = os.path.realpath(
-            os.path.dirname(os.path.abspath(__file__))
-        )
-        _WRITE_SANDBOX_ENABLED = True
-        return f"🔒 沙箱已重置为默认路径: {_WRITE_SANDBOX_ROOT}"
-
-    resolved = os.path.realpath(os.path.expanduser(path))
-    if not os.path.isdir(resolved):
-        return f"错误：路径不存在或不是目录「{path}」"
-    _WRITE_SANDBOX_ROOT = resolved
-    _WRITE_SANDBOX_ENABLED = True
-    return f"🔒 沙箱路径已设置为: {resolved}"
-
 
 def _resolve_write_path(path: str, force: bool = False) -> Optional[str]:
     """Resolve a path for write operations.
 
     Unlike _resolve_safe_path, this does NOT require the file to exist.
     Requires absolute paths to prevent directory traversal attacks.
-    If the sandbox is enabled, verifies the resolved path stays within
-    the sandbox root (see set_write_sandbox()).
     If the file already exists, force must be True to allow overwriting.
 
     Returns the resolved absolute path if valid, None otherwise.
@@ -921,10 +877,6 @@ def _resolve_write_path(path: str, force: bool = False) -> Optional[str]:
     if not path or not isinstance(path, str) or not os.path.isabs(path):
         return None
     resolved = os.path.realpath(path)
-    if _WRITE_SANDBOX_ENABLED:
-        root = os.path.realpath(_WRITE_SANDBOX_ROOT)
-        if not resolved.startswith(root + os.sep) and resolved != root:
-            return None
     parent = os.path.dirname(resolved)
     if not os.path.isdir(parent):
         return None
@@ -1129,18 +1081,12 @@ def execute_edit_file(path: str, old_string: str, new_string: str, replace_all: 
 def execute_delete_file(path: str, recursive: bool = False) -> str:
     """Delete a file or empty directory.
 
-    Uses _resolve_safe_path for safety validation. Respects the write sandbox.
+    Uses _resolve_safe_path for safety validation.
     For non-empty directories, set recursive=True to delete recursively.
     """
     resolved = _resolve_safe_path(path)
     if resolved is None:
         return f"错误：文件或目录不存在「{path}」"
-
-    # Respect the write sandbox — don't allow deletion outside sandbox
-    if _WRITE_SANDBOX_ENABLED:
-        root = os.path.realpath(_WRITE_SANDBOX_ROOT)
-        if not resolved.startswith(root + os.sep) and resolved != root:
-            return f"错误：路径「{path}」不在沙箱范围内，不允许删除。"
 
     try:
         if os.path.isdir(resolved):
@@ -1162,7 +1108,7 @@ def execute_rename_file(source: str, destination: str, force: bool = False) -> s
     """Rename or move a file/directory.
 
     Source must exist (checked via _resolve_safe_path).
-    Destination is checked via _resolve_write_path (respects sandbox).
+    Destination is checked via _resolve_write_path.
     If destination already exists, set force=True to overwrite.
     """
     resolved_src = _resolve_safe_path(source)
@@ -1173,7 +1119,7 @@ def execute_rename_file(source: str, destination: str, force: bool = False) -> s
     if resolved_dst is None:
         if os.path.exists(os.path.realpath(destination)) and not force:
             return f"错误：目标路径已存在。如需覆盖请设置 force=True。"
-        return f"错误：目标路径无效或不在沙箱范围内「{destination}」"
+        return f"错误：目标路径无效「{destination}」"
 
     try:
         os.rename(resolved_src, resolved_dst)
