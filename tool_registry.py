@@ -2212,6 +2212,7 @@ def execute_sub_agent(task: str, max_turns: int = 10) -> str:
                     timeout=_SUBAGENT_TIMEOUT_PER_TURN,
                     tools=sub_tools,
                     tool_choice=TOOL_CHOICE_AUTO,
+                    max_tokens=config.max_tokens,
                 )
             except _LLMHttpError as e:
                 return f"子代理 LLM 请求失败：{e}"
