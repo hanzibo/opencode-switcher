@@ -19,6 +19,7 @@ import time
 import urllib.parse
 import re
 import html
+import uuid
 from html.parser import HTMLParser
 from typing import Any, Dict, Final, List, Optional, Callable, Tuple
 
@@ -80,6 +81,225 @@ def _check_file_stale(path: str) -> Optional[str]:
         # False positive (cloud sync, antivirus), update mtime
         state["mtime"] = current_mtime
     return None
+
+
+# ── Todo Storage (persistent task management) ───────────────────────────────
+
+_TODO_DIR: Final[str] = os.path.expanduser("~/.config/opencode-switcher")
+_TODO_PATH: Final[str] = os.path.join(_TODO_DIR, "todos.json")
+
+
+def _load_todos() -> Dict[str, Any]:
+    """Load all todos from disk. Returns {"version": 1, "todos": [...], "next_id": int}."""
+    default = {"version": 1, "todos": [], "next_id": 1}
+    if not os.path.isfile(_TODO_PATH):
+        return default
+    try:
+        with open(_TODO_PATH, "r", encoding="utf-8") as f:
+            data: Dict[str, Any] = json.load(f)
+        if "todos" not in data:
+            return default
+        return data
+    except (json.JSONDecodeError, TypeError, KeyError):
+        return default
+
+
+def _save_todos(data: Dict[str, Any]) -> None:
+    """Save todos to disk."""
+    os.makedirs(_TODO_DIR, exist_ok=True)
+    with open(_TODO_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def _find_todo(todos: List[Dict[str, Any]], todo_id: str) -> Optional[Dict[str, Any]]:
+    """Find a todo by ID in the list."""
+    for t in todos:
+        if t["id"] == todo_id:
+            return t
+    return None
+
+
+def _check_cycle(todos: List[Dict[str, Any]], todo_id: str, blocked_by: List[str],
+                 seen: Optional[set] = None) -> bool:
+    """Detect circular dependencies. Returns True if cycle found."""
+    if seen is None:
+        seen = set()
+    if todo_id in seen:
+        return True
+    seen.add(todo_id)
+    for dep_id in blocked_by:
+        dep = _find_todo(todos, dep_id)
+        if dep is None:
+            continue
+        # Check if dep is blocked_by (or transitively) back to todo_id
+        if _check_cycle(todos, dep_id, dep.get("blocked_by", []), seen.copy()):
+            return True
+    return False
+
+
+def _update_dependents(todos: List[Dict[str, Any]], completed_id: str) -> None:
+    """When a task completes, check if any tasks blocked by it become unblocked.
+    A blocked task becomes pending only when ALL its blocked_by tasks are completed.
+    """
+    completed_ids = {t["id"] for t in todos if t["status"] == "completed"}
+    completed_ids.add(completed_id)
+
+    for t in todos:
+        if t.get("status") == "blocked":
+            blocked_by = t.get("blocked_by", [])
+            if blocked_by and all(dep in completed_ids for dep in blocked_by):
+                t["status"] = "pending"
+                t["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def execute_todo_create(title: str, description: str = "",
+                        priority: str = "medium",
+                        blocked_by: Optional[List[str]] = None) -> str:
+    """Create a new todo item."""
+    if not title.strip():
+        return "错误：任务标题不能为空。"
+
+    data = _load_todos()
+    todos = data["todos"]
+
+    if blocked_by:
+        for dep_id in blocked_by:
+            if _find_todo(todos, dep_id) is None:
+                return f"错误：依赖任务「{dep_id}」不存在。"
+
+        todo_id = "todo_" + uuid.uuid4().hex[:8]
+        if _check_cycle(todos, todo_id, blocked_by):
+            return "错误：检测到循环依赖，请检查 blocked_by 设置。"
+
+    todo_id = "todo_" + uuid.uuid4().hex[:8]
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    initial_status = "blocked" if blocked_by else "pending"
+
+    new_todo: Dict[str, Any] = {
+        "id": todo_id,
+        "title": title,
+        "description": description,
+        "status": initial_status,
+        "priority": priority,
+        "blocked_by": blocked_by or [],
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    todos.append(new_todo)
+    data["next_id"] += 1
+    _save_todos(data)
+
+    status_emoji = {"pending": "⚪", "blocked": "🔴", "in_progress": "🟡", "completed": "🟢", "failed": "⚫", "cancelled": "⭕"}
+    emoji = status_emoji.get(initial_status, "⚪")
+    return f"{emoji} 已创建任务「{title}」（ID: {todo_id}，状态: {initial_status}）"
+
+
+def execute_todo_update(id: str, status: Optional[str] = None,
+                        title: Optional[str] = None,
+                        description: Optional[str] = None,
+                        priority: Optional[str] = None,
+                        add_blocked_by: Optional[List[str]] = None) -> str:
+    """Update an existing todo item."""
+    data = _load_todos()
+    todos = data["todos"]
+    todo = _find_todo(todos, id)
+
+    if todo is None:
+        return f"错误：未找到 ID 为「{id}」的任务。"
+
+    if title is not None:
+        todo["title"] = title
+    if description is not None:
+        todo["description"] = description
+    if priority is not None:
+        todo["priority"] = priority
+
+    if add_blocked_by:
+        for dep_id in add_blocked_by:
+            if _find_todo(todos, dep_id) is None:
+                return f"错误：依赖任务「{dep_id}」不存在。"
+        # Cycle check: would adding these blocked_by create a cycle?
+        new_blocked_by = todo.get("blocked_by", []) + add_blocked_by
+        if _check_cycle(todos, id, new_blocked_by):
+            return "错误：检测到循环依赖，请检查 add_blocked_by 设置。"
+        todo["blocked_by"] = new_blocked_by
+        # If currently pending/in_progress, re-evaluate status
+        if todo["status"] in ("pending", "in_progress"):
+            todo["status"] = "blocked"
+
+    if status is not None:
+        valid_statuses = ("pending", "in_progress", "completed", "failed", "cancelled")
+        if status not in valid_statuses:
+            return f"错误：无效的状态「{status}」。有效值：{', '.join(valid_statuses)}"
+        todo["status"] = status
+
+        # If completed, unlock dependents
+        if status == "completed":
+            _update_dependents(todos, id)
+
+    todo["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _save_todos(data)
+
+    status_emoji = {"pending": "⚪", "blocked": "🔴", "in_progress": "🟡", "completed": "🟢", "failed": "⚫", "cancelled": "⭕"}
+    emoji = status_emoji.get(todo.get("status", "pending"), "⚪")
+    return f"{emoji} 已更新任务「{todo['title']}」状态为 {todo['status']}"
+
+
+def execute_todo_list(id: Optional[str] = None,
+                      status_filter: Optional[str] = None) -> str:
+    """List or query todo items."""
+    data = _load_todos()
+    todos = data["todos"]
+
+    if not todos:
+        return "📋 暂无任务。"
+
+    # Single task detail mode
+    if id is not None:
+        todo = _find_todo(todos, id)
+        if todo is None:
+            return f"错误：未找到 ID 为「{id}」的任务。"
+        status_emoji = {"pending": "⚪", "blocked": "🔴", "in_progress": "🟡", "completed": "🟢", "failed": "⚫", "cancelled": "⭕"}
+        emoji = status_emoji.get(todo.get("status", "pending"), "⚪")
+        blocked_by_str = ", ".join(todo.get("blocked_by", [])) or "无"
+        desc = todo.get("description", "")
+        desc_block = f"描述:\n{desc}\n---\n" if desc else ""
+        return (
+            f"📋 任务详情\n"
+            f"---\n"
+            f"ID:          {todo['id']}\n"
+            f"标题:        {todo['title']}\n"
+            f"状态:        {emoji} {todo['status']}\n"
+            f"优先级:      {todo.get('priority', 'medium')}\n"
+            f"依赖:        {blocked_by_str}\n"
+            f"创建时间:    {todo.get('created_at', '')}\n"
+            f"更新时间:    {todo.get('updated_at', '')}\n"
+            f"---\n"
+            f"{desc_block}"
+        )
+
+    # List mode
+    status_emoji = {"pending": "⚪", "blocked": "🔴", "in_progress": "🟡", "completed": "🟢", "failed": "⚫", "cancelled": "⭕"}
+
+    if status_filter:
+        filtered = [t for t in todos if t.get("status") == status_filter]
+        if not filtered:
+            return f"📋 没有状态为「{status_filter}」的任务。"
+        todos_to_show = filtered
+    else:
+        todos_to_show = todos
+
+    lines = [f"📋 任务清单（共 {len(todos_to_show)} 项）\n"]
+    for t in todos_to_show:
+        emoji = status_emoji.get(t.get("status", "pending"), "⚪")
+        blocked = ""
+        if t.get("blocked_by"):
+            blocked = f" ⚠ 依赖: {', '.join(t['blocked_by'])}"
+        lines.append(f"{emoji} [{t['status']}]  {t['title']}（ID: {t['id']}）{blocked}")
+
+    return "\n".join(lines)
 
 
 # ── Tool Definitions (OpenAI function calling schema) ──────────────────────
@@ -346,6 +566,100 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     }
                 },
                 "required": ["path", "old_string", "new_string"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "todo_create",
+            "description": "创建新任务。返回任务的唯一 ID。任务创建后默认为 pending 状态。如果指定了 blocked_by（依赖任务列表），则状态自动设为 blocked，直到所有依赖任务完成。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "任务标题，简短描述任务内容（建议 ≤60 字）"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "任务详细描述，包含需求、验收标准、实现思路等"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                        "description": "优先级（默认 medium）",
+                        "default": "medium"
+                    },
+                    "blocked_by": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "依赖的任务 ID 列表。未完成时，此任务自动标记为 blocked。"
+                    }
+                },
+                "required": ["title"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "todo_update",
+            "description": "更新任务的状态或字段。最常用操作：标记任务为 in_progress 或 completed。"
+                       "当标记为 completed 时，自动检查并解除依赖该任务的其他 blocked 任务。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "任务 ID"
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "completed", "failed", "cancelled"],
+                        "description": "新状态。pending→in_progress→completed 为主流程。"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "更新任务标题"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "更新任务描述"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                        "description": "更新优先级"
+                    },
+                    "add_blocked_by": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "添加依赖的任务 ID 列表。会自动检测循环依赖。"
+                    }
+                },
+                "required": ["id"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "todo_list",
+            "description": "列出任务摘要或查询单个任务详情。不指定 id 时返回所有任务摘要（含状态、优先级、依赖）。指定 id 时返回该任务的完整信息（含描述）。可选 status_filter 仅列出特定状态的任务。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "可选。指定后返回该任务的完整详情（含 description）。省略则返回所有任务摘要。"
+                    },
+                    "status_filter": {
+                        "type": "string",
+                        "enum": ["pending", "in_progress", "completed", "failed", "cancelled", "blocked"],
+                        "description": "可选。仅列出指定状态的任务。只在列表模式（id 为空时）有效。"
+                    }
+                }
             }
         }
     },
@@ -1631,6 +1945,9 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "ask_user_question": execute_ask_user_question,
     "write_file": execute_write_file,
     "edit_file": execute_edit_file,
+    "todo_create": execute_todo_create,
+    "todo_update": execute_todo_update,
+    "todo_list": execute_todo_list,
     "bash": execute_bash,
 }
 
@@ -1749,6 +2066,32 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
                 f'<div class="tool-call-info">✏️ <b>编辑文件（{plural}匹配）：</b>{safe_epath}</div>'
                 + _make_collapsible_preview(eold, old_label, max_chars=200)
             )
+        elif name == "todo_create":
+            ttitle = args.get("title", "")
+            tpriority = args.get("priority", "medium")
+            safe_title = html.escape(ttitle)
+            parts.append(
+                f'<div class="tool-call-info">✅ <b>创建任务：</b>{safe_title}'
+                f'<span style="color:#888;font-size:11px;margin-left:8px;">优先级: {tpriority}</span></div>'
+            )
+        elif name == "todo_update":
+            tid = args.get("id", "")
+            tstatus = args.get("status", "")
+            safe_id = html.escape(tid)
+            parts.append(
+                f'<div class="tool-call-info">🔄 <b>更新任务：</b>{safe_id}'
+                + (f' → {tstatus}' if tstatus else '')
+                + '</div>'
+            )
+        elif name == "todo_list":
+            tid = args.get("id", "")
+            sfilter = args.get("status_filter", "")
+            if tid:
+                parts.append(f'<div class="tool-call-info">📋 <b>查询任务：</b>{html.escape(tid)}</div>')
+            elif sfilter:
+                parts.append(f'<div class="tool-call-info">📋 <b>任务清单：</b>仅 {sfilter}</div>')
+            else:
+                parts.append('<div class="tool-call-info">📋 <b>任务清单：</b>全部</div>')
         elif name == "bash":
             cmd = args.get("command", "")
             cmd_timeout = args.get("timeout", 60)
