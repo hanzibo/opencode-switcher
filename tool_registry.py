@@ -24,7 +24,10 @@ import uuid
 from html.parser import HTMLParser
 from typing import Any, Dict, Final, List, Optional, Callable, Tuple
 
+import copy
 import requests
+
+from llm_client import _LLMHttpClient, _LLMHttpError
 
 
 _IGNORE_DIRS: Final = {"node_modules", "venv", ".venv", "env", "__pycache__", "build", "dist", "target", "cache", ".cache"}
@@ -45,6 +48,22 @@ def _get_ignore_dirs() -> set:
         except Exception:
             pass
     return ignore_dirs
+
+
+# ── Sub-Agent Constants ──────────────────────────────────────────
+
+_SUBAGENT_BLOCKED_TOOLS: Final[frozenset] = frozenset([
+    "ask_user_question",
+    "sub_agent",
+])
+
+_SUBAGENT_SYSTEM_PROMPT = """You are a sub-agent of the OpenCode Switcher AI assistant.
+You have been assigned an independent task to complete on your own.
+
+You have full tool access: read/write/edit files, search code, execute bash commands, web search, etc.
+You CANNOT ask the user questions — use available tools to find any information you need.
+
+After completing the task, return a summary of the final result. Your output will be returned to the parent agent."""
 
 
 # ── Read State Tracking (for edit_file staleness check) ─────────────────────
@@ -774,9 +793,56 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "sub_agent",
+            "description": "创建一个独立子代理来完成指定任务。子代理拥有独立的上下文窗口和工具集（bash 会话、文件状态等），"
+                           "与当前对话完全隔离。当任务可以独立完成且不会影响当前上下文时使用。"
+                           "任务完成后返回最终结果摘要。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "子代理要完成的任务描述。应包含明确的目标和可验证的交付物。"
+                    },
+                    "max_turns": {
+                        "type": "integer",
+                        "description": "子代理最大工具调用轮数（1-15，默认 10）",
+                        "default": 10
+                    }
+                },
+                "required": ["task"]
+            }
+        }
+    },
 ]
 
 TOOL_CHOICE_AUTO = "auto"
+
+
+# ── Sub-Agent Helpers ────────────────────────────────────────────
+
+
+def _get_llm_config() -> "LLMModelConfig":
+    """Read the default LLM model config for sub-agent use."""
+    from clipboard_store import LLMSettingsStore
+    store = LLMSettingsStore()
+    default = next((m for m in store.models if m.is_default), None)
+    if default is None and store.models:
+        default = store.models[0]
+    if default is None:
+        raise RuntimeError("没有可用的 LLM 模型配置。请在 AI 设置中配置模型。")
+    return default
+
+
+def _build_subagent_tools() -> list:
+    """Build filtered tool definitions list for sub-agent use."""
+    return [
+        t for t in TOOL_DEFINITIONS
+        if t.get("function", {}).get("name") not in _SUBAGENT_BLOCKED_TOOLS
+    ]
 
 
 # ── Utility: strip HTML tags ───────────────────────────────────────────────
@@ -2082,6 +2148,118 @@ def execute_send_notification(
         return f"错误：发送通知时发生异常 — {e}"
 
 
+# ── Sub-Agent Tool ─────────────────────────────────────────────────────────
+
+_MAX_SUBAGENT_TURNS = 15
+_SUBAGENT_TIMEOUT_PER_TURN = 60
+
+
+def execute_sub_agent(task: str, max_turns: int = 10) -> str:
+    """Spawn an isolated sub-agent to complete a task independently.
+
+    The sub-agent gets its own bash session, a clean file-read state,
+    and a fresh LLM context. All parent state is restored after completion.
+
+    Args:
+        task: Description of the task for the sub-agent.
+        max_turns: Maximum tool-calling iterations (1-15, default 10).
+
+    Returns:
+        The sub-agent's final text response, or an error message.
+    """
+    global _bash_cwd, _bash_session
+    saved_bash_cwd = _bash_cwd
+    saved_read_state = dict(_READ_FILE_STATE)
+    saved_bash_session = _bash_session
+
+    try:
+        config = _get_llm_config()
+    except RuntimeError as e:
+        return f"错误：{e}"
+    if not config.api_key:
+        return "错误：未配置 LLM API key。请在 AI 设置中配置。"
+    if not config.base_url:
+        return "错误：未配置 LLM base URL。请在 AI 设置中配置。"
+
+    sub_tools = _build_subagent_tools()
+
+    try:
+        _bash_session = _BashSession()
+        _bash_session.start()
+    except Exception as e:
+        return f"错误：无法创建子 bash 会话 — {e}"
+
+    _bash_cwd = _BASH_DEFAULT_CWD
+    _READ_FILE_STATE.clear()
+
+    clamped_turns = max(1, min(max_turns, _MAX_SUBAGENT_TURNS))
+    messages = [
+        {"role": "system", "content": _SUBAGENT_SYSTEM_PROMPT},
+        {"role": "user", "content": task},
+    ]
+
+    try:
+        llm = _LLMHttpClient()
+        final_text = ""
+
+        for turn in range(clamped_turns):
+            try:
+                response = llm.sync_chat_completion(
+                    base_url=config.base_url,
+                    api_key=config.api_key,
+                    model_name=config.model_name,
+                    messages=messages,
+                    timeout=_SUBAGENT_TIMEOUT_PER_TURN,
+                    tools=sub_tools,
+                    tool_choice=TOOL_CHOICE_AUTO,
+                )
+            except _LLMHttpError as e:
+                return f"子代理 LLM 请求失败：{e}"
+            except Exception as e:
+                return f"子代理 LLM 请求异常：{e}"
+
+            content = response.get("content") or ""
+            tool_calls = response.get("tool_calls")
+
+            if not tool_calls:
+                final_text = content
+                break
+
+            assistant_msg = {"role": "assistant", "content": content or None}
+            assistant_msg["tool_calls"] = tool_calls
+            messages.append(assistant_msg)
+
+            for tc in tool_calls:
+                tc_name = tc.get("function", {}).get("name", "")
+                try:
+                    result = execute_tool_call(tc)
+                except Exception as e:
+                    result = f"执行工具「{tc_name}」时异常：{e}"
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "name": tc_name,
+                    "content": result,
+                })
+
+        if final_text:
+            return final_text
+        return "(子代理已完成任务，但未返回文本结果)"
+
+    finally:
+        try:
+            if _bash_session is not None:
+                _bash_session.stop()
+        except Exception:
+            pass
+
+        _bash_cwd = saved_bash_cwd
+        _bash_session = saved_bash_session
+        _READ_FILE_STATE.clear()
+        _READ_FILE_STATE.update(saved_read_state)
+
+
 # ── Tool Executor Registry ─────────────────────────────────────────────────
 
 TOOL_EXECUTORS: Dict[str, Callable] = {
@@ -2103,6 +2281,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "delete_file": execute_delete_file,
     "rename_file": execute_rename_file,
     "send_notification": execute_send_notification,
+    "sub_agent": execute_sub_agent,
 }
 
 
@@ -2269,6 +2448,14 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             parts.append(
                 f'<div class="tool-call-info">🔔 <b>发送通知：</b>{safe_nsum}'
                 f'<span style="color:#888;font-size:11px;margin-left:8px;">紧急度: {nurgency}</span></div>'
+            )
+        elif name == "sub_agent":
+            stask = args.get("task", "")
+            safe_task = html.escape(stask[:120])
+            max_t = args.get("max_turns", 10)
+            parts.append(
+                f'<div class="tool-call-info">🔄 <b>子代理任务：</b>{safe_task}'
+                f'<span style="color:#888;font-size:11px;margin-left:8px;">最多 {max_t} 轮</span></div>'
             )
         elif name == "bash":
             cmd = args.get("command", "")
