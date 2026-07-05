@@ -2191,6 +2191,58 @@ _BASH_SHELL = "/bin/bash"
 _BASH_DEFAULT_CWD = os.path.dirname(os.path.abspath(__file__))
 _bash_cwd = _BASH_DEFAULT_CWD
 
+# Interactive commands that would hang in a non-TTY pipe session
+_ALWAYS_INTERACTIVE: Final[frozenset] = frozenset({
+    "vi", "vim", "nvim", "nano", "emacs", "vimdiff",
+    "less", "more", "most",
+    "top", "htop", "btop", "iftop", "iotop",
+})
+
+_DUAL_MODE: Final[frozenset] = frozenset({
+    "python", "python3", "ipython",
+    "node", "irb",
+    "bash", "zsh", "sh", "dash", "fish",
+})
+
+
+def _check_interactive(command: str) -> Optional[str]:
+    """Return error message if command starts with an interactive program."""
+    if not command or not command.strip():
+        return None
+    parts = command.strip().split(maxsplit=1)
+    first_word = parts[0].strip()
+    has_args = len(parts) > 1 and parts[1].strip()
+
+    if first_word in _ALWAYS_INTERACTIVE:
+        return (
+            f"错误：不支持交互式命令「{first_word}」。\n"
+            f"   该命令需要 TTY 终端，无法在后台管道模式下执行。"
+        )
+
+    if first_word in _DUAL_MODE and not has_args:
+        return (
+            f"错误：裸启动「{first_word}」会进入交互模式。\n"
+            f"   如需执行脚本，请提供参数，例如: {first_word} script.py"
+        )
+
+    return None
+
+
+def _save_truncated_output(output: str, command: str) -> str:
+    """Save truncated output to a temp file, return a user-facing message."""
+    tmp_dir = tempfile.gettempdir()
+    cmd_hash = hash(command) & 0xFFFFFFFF
+    prefix = f"bash_out_{cmd_hash:08x}_"
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='w', dir=tmp_dir, prefix=prefix, suffix='.txt',
+            delete=False, encoding='utf-8',
+        ) as f:
+            f.write(output)
+            return f"\n完整输出已保存至: {f.name}"
+    except OSError:
+        return ""
+
 
 class _BashSession:
     """Persistent bash session that maintains state across command executions.
@@ -2304,17 +2356,23 @@ class _BashSession:
             self._timed_out = True
             self._kill_process_group()
             output = output_buf.decode("utf-8", errors="replace").strip()
+            full_len = len(output)
             if len(output) > _MAX_BASH_OUTPUT_CHARS:
-                output = output[:_MAX_BASH_OUTPUT_CHARS] + "\n...（输出已截断）"
+                truncated = output[:_MAX_BASH_OUTPUT_CHARS]
+                saved_msg = _save_truncated_output(output, command)
+                output = truncated + f"\n...（输出已截断，共 {full_len} 字符）{saved_msg}"
             return {
-                "output": f"命令执行超时（{timeout}秒），session 已强制终止。请设置 restart=True 重启。\n最后输出：{output[:500]}",
+                "output": f"命令执行超时（{timeout}秒），session 已终止。\n最后输出：{output[:600]}",
                 "exit_code": -1,
                 "timed_out": True,
             }
 
         output = output_buf.decode("utf-8", errors="replace").strip()
+        full_len = len(output)
         if len(output) > _MAX_BASH_OUTPUT_CHARS:
-            output = output[:_MAX_BASH_OUTPUT_CHARS] + f"\n...（输出已截断，共 {len(output)} 字符）"
+            truncated = output[:_MAX_BASH_OUTPUT_CHARS]
+            saved_msg = _save_truncated_output(output, command)
+            output = truncated + f"\n...（输出已截断，共 {full_len} 字符）{saved_msg}"
 
         return {"output": output, "exit_code": exit_code, "timed_out": False}
 
@@ -2395,6 +2453,14 @@ def execute_bash(command: str, restart: bool = False, timeout: int = _BASH_TIMEO
     """
     global _bash_session
 
+    if not command or not command.strip():
+        return "错误：命令不能为空。"
+
+    # Interactive command check
+    interactive_err = _check_interactive(command)
+    if interactive_err is not None:
+        return interactive_err
+
     if restart:
         if _bash_session is not None:
             _bash_session.stop()
@@ -2403,28 +2469,44 @@ def execute_bash(command: str, restart: bool = False, timeout: int = _BASH_TIMEO
         if not command or not command.strip():
             return "🔄 Bash session 已重启。"
 
-    if not command or not command.strip():
-        return "错误：命令不能为空。"
-
     timeout = max(1, min(120, timeout))
 
     if _bash_session is None:
         _bash_session = _BashSession()
         _bash_session.start()
 
+    timed_out = False
     try:
         result = _bash_session.execute(command, timeout=timeout)
-    except RuntimeError as e:
-        return f"错误：{e}"
+    except RuntimeError:
+        # Session in timed-out state from prior call — auto-restart and retry once
+        if _bash_session is not None:
+            _bash_session.stop()
+        _bash_session = _BashSession()
+        _bash_session.start()
+        try:
+            result = _bash_session.execute(command, timeout=timeout)
+        except RuntimeError as e:
+            return f"错误：{e}"
 
     output = result.get("output", "")
     exit_code = result.get("exit_code", -1)
     timed_out = result.get("timed_out", False)
 
-    status_icon = "✅" if exit_code == 0 else "❌" if exit_code != -1 else "⚠️"
-    status_text = f"{status_icon} 命令执行完成（退出码：{exit_code}）"
+    if timed_out:
+        # Auto-restart: old session is dead, create fresh one
+        if _bash_session is not None:
+            _bash_session.stop()
+            _bash_session = _BashSession()
+            _bash_session.start()
+        parts = ["⚠️ 命令执行超时，已自动重启 bash session"]
+        if output:
+            parts.append("")
+            parts.append(output)
+        return "\n".join(parts)
 
-    parts = [status_text]
+    status_icon = "✅" if exit_code == 0 else "❌"
+    parts = [f"{status_icon} 命令执行完成（退出码：{exit_code}）"]
     if output:
         parts.append("")
         parts.append(output)
