@@ -18,6 +18,7 @@ import subprocess
 import time
 import urllib.parse
 import re
+import shutil
 import html
 import uuid
 from html.parser import HTMLParser
@@ -690,6 +691,56 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_file",
+            "description": "删除文件或空目录。可设置 recursive=True 递归删除非空目录（相当于 rm -r）。"
+                           "仅允许删除沙箱范围内的文件（默认：项目根目录）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "要删除的文件或目录的绝对路径"
+                    },
+                    "recursive": {
+                        "type": "boolean",
+                        "description": "是否递归删除目录。对非空目录必须设为 true（默认 false）",
+                        "default": False
+                    }
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rename_file",
+            "description": "重命名或移动文件/目录。源路径必须存在，目标路径不能已存在（除非设置 force=True）。"
+                           "目标路径受沙箱限制（默认：项目根目录）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "源文件或目录的绝对路径"
+                    },
+                    "destination": {
+                        "type": "string",
+                        "description": "目标路径的绝对路径"
+                    },
+                    "force": {
+                        "type": "boolean",
+                        "description": "是否覆盖已存在的目标路径（默认 false）",
+                        "default": False
+                    }
+                },
+                "required": ["source", "destination"]
+            }
+        }
+    },
 ]
 
 TOOL_CHOICE_AUTO = "auto"
@@ -1070,6 +1121,67 @@ def execute_edit_file(path: str, old_string: str, new_string: str, replace_all: 
     }
 
     return f"已成功对文件「{path}」应用 {actual_changes} 处编辑。"
+
+
+# ── Delete / Rename ─────────────────────────────────────────────────────────
+
+
+def execute_delete_file(path: str, recursive: bool = False) -> str:
+    """Delete a file or empty directory.
+
+    Uses _resolve_safe_path for safety validation. Respects the write sandbox.
+    For non-empty directories, set recursive=True to delete recursively.
+    """
+    resolved = _resolve_safe_path(path)
+    if resolved is None:
+        return f"错误：文件或目录不存在「{path}」"
+
+    # Respect the write sandbox — don't allow deletion outside sandbox
+    if _WRITE_SANDBOX_ENABLED:
+        root = os.path.realpath(_WRITE_SANDBOX_ROOT)
+        if not resolved.startswith(root + os.sep) and resolved != root:
+            return f"错误：路径「{path}」不在沙箱范围内，不允许删除。"
+
+    try:
+        if os.path.isdir(resolved):
+            if recursive:
+                shutil.rmtree(resolved)
+                return f"已成功递归删除目录「{path}」"
+            else:
+                os.rmdir(resolved)
+                return f"已成功删除空目录「{path}」"
+        else:
+            os.remove(resolved)
+            _READ_FILE_STATE.pop(os.path.realpath(resolved), None)
+            return f"已成功删除文件「{path}」"
+    except OSError as e:
+        return f"错误：删除「{path}」时出错: {e}"
+
+
+def execute_rename_file(source: str, destination: str, force: bool = False) -> str:
+    """Rename or move a file/directory.
+
+    Source must exist (checked via _resolve_safe_path).
+    Destination is checked via _resolve_write_path (respects sandbox).
+    If destination already exists, set force=True to overwrite.
+    """
+    resolved_src = _resolve_safe_path(source)
+    if resolved_src is None:
+        return f"错误：源文件或目录不存在「{source}」"
+
+    resolved_dst = _resolve_write_path(destination, force=force)
+    if resolved_dst is None:
+        if os.path.exists(os.path.realpath(destination)) and not force:
+            return f"错误：目标路径已存在。如需覆盖请设置 force=True。"
+        return f"错误：目标路径无效或不在沙箱范围内「{destination}」"
+
+    try:
+        os.rename(resolved_src, resolved_dst)
+        # Invalidate any cached read state for the old path
+        _READ_FILE_STATE.pop(os.path.realpath(resolved_src), None)
+        return f"已成功将「{source}」重命名为「{destination}」"
+    except OSError as e:
+        return f"错误：重命名「{source}」→「{destination}」时出错: {e}"
 
 
 # ── Time Query ─────────────────────────────────────────────────────────────
@@ -1949,6 +2061,8 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "todo_update": execute_todo_update,
     "todo_list": execute_todo_list,
     "bash": execute_bash,
+    "delete_file": execute_delete_file,
+    "rename_file": execute_rename_file,
 }
 
 
