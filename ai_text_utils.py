@@ -450,10 +450,18 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
     if not messages:
         return ""
     parts = []
+
+    def _render_reasoning(reasoning: str) -> str:
+        if not reasoning or not reasoning.strip():
+            return ""
+        escaped = html.escape(reasoning)
+        return f'\n\n<div class="thinking-header">💭 Thinking Mode:</div>\n\n{escaped}\n\n---\n\n'
+
     for i, m in enumerate(messages):
         role = m.get("role", "")
         content = m.get("content", "")
         tool_calls = m.get("tool_calls")
+        reasoning_content = m.get("reasoning_content", "")
 
         if role == "tool":
             tool_name = m.get("name", "unknown")
@@ -462,6 +470,11 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
             continue
 
         if role == "assistant" and tool_calls:
+            # Render reasoning if present (skip if content already has thinking header from streaming)
+            if reasoning_content:
+                has_thinking_in_content = isinstance(content, str) and 'thinking-header' in content
+                if not has_thinking_in_content:
+                    parts.append(_render_reasoning(reasoning_content))
             # Show tool call info
             tc_html = tool_registry.format_tool_calls_for_display(tool_calls)
             if tc_html:
@@ -478,7 +491,7 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
             parts.append('\n\n---\n\n')
             continue
 
-        if not content:
+        if not content and not reasoning_content:
             continue
 
         if isinstance(content, list):
@@ -492,6 +505,9 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
             parts.append(f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_content}\n\n<copy-marker data-msg-index="{i}" class="user-copy-marker"></copy-marker>\n\n---\n\n')
         elif role == "assistant":
             content_str = content if isinstance(content, str) else _vision_content_to_text(content)
+            # Render reasoning if present (skip if content already has thinking header from streaming)
+            if reasoning_content and 'thinking-header' not in content_str:
+                parts.append(_render_reasoning(reasoning_content))
             if content_str.strip():
                 # Content already has role headers embedded from streaming phase;
                 # avoid adding another .assistant-header wrapper to prevent duplication.

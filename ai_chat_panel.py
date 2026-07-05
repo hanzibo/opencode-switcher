@@ -120,6 +120,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_tool_iteration = 0
         self._ai_render_timeout_id = 0
         self._ai_ask_user_state = None
+        self._ai_current_reasoning_text = ""
         self._ai_pending_title_notification = False
 
         # Callback hooks
@@ -787,8 +788,10 @@ class AIChatPanel(Gtk.Box):
         """Start the ReAct loop by delegating execution to the run_llm_react_loop orchestrator."""
         def reset_iteration_state():
             self._ai_assistant_buffer = ""
+            self._ai_current_assistant_text = ""
             self._ai_response_div_added = False
             self._ai_assistant_html_base = ""
+            self._ai_current_reasoning_text = ""
 
         run_llm_react_loop(
             llm_client=self._llm_client,
@@ -812,7 +815,8 @@ class AIChatPanel(Gtk.Box):
             on_llm_api_finished_fn=self._on_llm_api_finished,
             finalize_after_tool_loop_fn=self._finalize_after_tool_loop,
             set_tool_iteration_fn=lambda val: setattr(self, "_ai_tool_iteration", val),
-            reset_iteration_state_fn=reset_iteration_state
+            reset_iteration_state_fn=reset_iteration_state,
+            set_reasoning_text_fn=lambda text: setattr(self, "_ai_current_reasoning_text", text),
         )
 
     def _finalize_after_tool_loop(self, req_id: int):
@@ -1017,12 +1021,18 @@ class AIChatPanel(Gtk.Box):
 
         self._flush_stream_queue()
 
-        # Append assistant text response to messages
+        # Append assistant text response to messages, preserving reasoning_content
+        assistant_msg = {"role": "assistant", "content": self._ai_assistant_buffer}
+        reasoning = getattr(self, "_ai_current_reasoning_text", "")
+        if reasoning:
+            assistant_msg["reasoning_content"] = reasoning
+        self._ai_current_reasoning_text = ""
+
         if self._ai_messages and self._ai_messages[-1].get("role") == "user":
-            self._ai_messages.append({"role": "assistant", "content": self._ai_assistant_buffer})
+            self._ai_messages.append(assistant_msg)
         elif self._ai_messages and self._ai_assistant_buffer:
             # If last is tool role (happens after tool call loop → final text), append normally
-            self._ai_messages.append({"role": "assistant", "content": self._ai_assistant_buffer})
+            self._ai_messages.append(assistant_msg)
         self._ai_assistant_buffer = ""
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False

@@ -28,6 +28,7 @@ def run_llm_react_loop(
     finalize_after_tool_loop_fn,
     set_tool_iteration_fn,
     reset_iteration_state_fn,
+    set_reasoning_text_fn=None,
 ):
     set_tool_iteration_fn(0)
     iteration = 0
@@ -54,7 +55,8 @@ def run_llm_react_loop(
             on_llm_api_finished_fn=on_llm_api_finished_fn,
             finalize_after_tool_loop_fn=finalize_after_tool_loop_fn,
             reset_iteration_state_fn=reset_iteration_state_fn,
-            iteration=iteration
+            iteration=iteration,
+            set_reasoning_text_fn=set_reasoning_text_fn,
         )
         if not should_continue:
             break
@@ -84,6 +86,7 @@ def _perform_llm_call(
     finalize_after_tool_loop_fn,
     reset_iteration_state_fn,
     iteration: int,
+    set_reasoning_text_fn=None,
 ) -> bool:
     has_thinking = False
     thinking_header_added = False
@@ -121,6 +124,8 @@ def _perform_llm_call(
                 with stream_lock:
                     append_to_stream_queue_fn(reasoning)
                 reasoning_text += reasoning
+                if set_reasoning_text_fn is not None:
+                    set_reasoning_text_fn(reasoning_text)
                 has_thinking = True
             elif content:
                 if not response_header_added:
