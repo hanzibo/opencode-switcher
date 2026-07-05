@@ -4,3 +4,4 @@ python-xlib>=0.33
 markdown
 pygments
 requests>=2.31
+trafilatura>=2.0.0

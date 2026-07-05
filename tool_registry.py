@@ -398,8 +398,8 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "web_fetch",
-            "description": "获取指定 URL 的页面内容并转换为纯文本。用于阅读文章、文档、新闻等具体页面。",
+             "name": "web_fetch",
+            "description": "获取指定 URL 的页面内容并转换为纯文本。用于阅读文章、文档、新闻等具体页面。支持缓存（5分钟）和超时配置。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -409,8 +409,13 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     },
                     "max_chars": {
                         "type": "integer",
-                        "description": "最多返回字符数（默认 5000）",
+                        "description": "最多返回字符数（默认 5000，范围 500-20000）",
                         "default": 5000
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "请求超时秒数（默认 20，范围 5-60）。对慢页面或大文件可适当增大。",
+                        "default": 20
                     }
                 },
                 "required": ["url"]
@@ -1990,6 +1995,23 @@ _OBSCURA_EVAL_TPL = """JSON.stringify(
     }))
 )"""
 
+# Web fetch response cache (5 min TTL)
+_FETCH_CACHE: Dict[str, Tuple[float, str]] = {}
+_FETCH_CACHE_TTL = 300
+
+
+def _get_cached_fetch(url: str) -> Optional[str]:
+    """Return cached fetch result if not expired."""
+    entry = _FETCH_CACHE.get(url)
+    if entry is not None and time.monotonic() - entry[0] < _FETCH_CACHE_TTL:
+        return entry[1]
+    return None
+
+
+def _set_cached_fetch(url: str, content: str):
+    """Store fetch result in cache."""
+    _FETCH_CACHE[url] = (time.monotonic(), content)
+
 
 def _format_search_results(results: List[Dict[str, str]], query: str) -> str:
     if not results:
@@ -2071,13 +2093,18 @@ def _execute_duckduckgo_search(query: str, max_results: int) -> str:
 
 
 def execute_web_search(query: str, max_results: int = 5) -> str:
-    """Execute a web search. Uses Obscura (headless browser) as primary path,
-    falls back to direct DuckDuckGo HTTP endpoint."""
+    """Execute a web search. Uses direct DuckDuckGo HTTP as primary path (fast),
+    falls back to Obscura headless browser if DuckDuckGo is blocked."""
     max_results = max(1, min(10, max_results))
+    # Fast path: direct DuckDuckGo HTTP (0.5-2s)
+    result = _execute_duckduckgo_search(query, max_results)
+    if "被拦截" not in result and "搜索失败" not in result:
+        return result
+    # Fallback: Obscura headless browser (~2.5s, handles CAPTCHA)
     result = _execute_obscura_search(query, max_results)
     if result is not None:
         return result
-    return _execute_duckduckgo_search(query, max_results)
+    return f"搜索失败：所有搜索路径均不可用。"
 
 
 _SUSPICIOUS_PATTERNS = re.compile(
@@ -2102,7 +2129,32 @@ def _is_cjk(ch: str) -> bool:
     )
 
 
-def _try_requests_fetch(url: str, max_chars: int) -> Optional[str]:
+# ── Web Fetch ────────────────────────────────────────────────────────────────
+
+
+def _extract_with_trafilatura(html_text: str) -> Optional[str]:
+    """Extract main content from HTML using Trafilatura.
+    Returns cleaned text, or None if extraction fails/unavailable."""
+    try:
+        import trafilatura
+    except ImportError:
+        return None
+    try:
+        result = trafilatura.extract(
+            html_text,
+            output_format='markdown',
+            include_comments=False,
+            include_tables=True,
+            no_fallback=False,
+        )
+        if result and result.strip():
+            return result.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _try_requests_fetch(url: str, max_chars: int, timeout: int = 20) -> Optional[str]:
     """Try fetching a page via plain HTTP requests. Returns None on failure
     or if the result looks suspicious (too short, garbled, JS-required page)."""
     headers = {
@@ -2113,14 +2165,20 @@ def _try_requests_fetch(url: str, max_chars: int) -> Optional[str]:
         )
     }
     try:
-        resp = requests.get(url, headers=headers, timeout=20)
+        resp = requests.get(url, headers=headers, timeout=timeout)
         resp.raise_for_status()
     except requests.RequestException:
         return None
 
-    text = strip_html(resp.text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    text = text.strip()
+    # Primary path: Trafilatura main-content extraction (clean, no chrome)
+    trafilatura_text = _extract_with_trafilatura(resp.text)
+    if trafilatura_text:
+        text = trafilatura_text
+    else:
+        # Fallback: strip_html (more content but includes page chrome)
+        text = strip_html(resp.text)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        text = text.strip()
 
     # Suspicious: too short (JS-rendered page got only shell HTML)
     if len(text) < 200:
@@ -2142,14 +2200,15 @@ def _try_requests_fetch(url: str, max_chars: int) -> Optional[str]:
 
 
 
-def _try_obscura_fetch(url: str, max_chars: int) -> str:
+def _try_obscura_fetch(url: str, max_chars: int, timeout: int = 20) -> str:
     """Fetch a page via Obscura headless browser with --dump markdown."""
     if not os.path.isfile(_OBSCURA_BIN):
         return f"获取页面失败：Obscura 不可用"
+    obs_timeout = max(10, timeout)
     try:
         result = subprocess.run(
-            [_OBSCURA_BIN, "fetch", url, "--dump", "markdown", "--quiet", "--timeout", "20"],
-            capture_output=True, text=True, timeout=30,
+            [_OBSCURA_BIN, "fetch", url, "--dump", "markdown", "--quiet", "--timeout", str(obs_timeout)],
+            capture_output=True, text=True, timeout=obs_timeout + 10,
         )
         if result.returncode != 0:
             return f"获取页面失败：Obscura 返回错误码 {result.returncode}"
@@ -2165,22 +2224,31 @@ def _try_obscura_fetch(url: str, max_chars: int) -> str:
     return text
 
 
-def execute_web_fetch(url: str, max_chars: int = 5000) -> str:
+def execute_web_fetch(url: str, max_chars: int = 5000, timeout: int = 20) -> str:
     """Fetch a page's content as plain text.
 
     Tries plain HTTP requests (fast, zero overhead) first. If the result
     is suspicious — too short (JS-rendered shell), contains JS-required /
     captcha patterns, or garbled non-ASCII — falls back to Obscura headless
     browser (--dump markdown) which executes JavaScript and renders the
-    real page content.
+    real page content. Caches results for 5 minutes.
     """
     max_chars = max(500, min(20000, max_chars))
+    timeout = max(5, min(60, timeout))
 
-    result = _try_requests_fetch(url, max_chars)
+    # Check cache first
+    cached = _get_cached_fetch(url)
+    if cached is not None:
+        return cached
+
+    result = _try_requests_fetch(url, max_chars, timeout)
     if result is not None:
+        _set_cached_fetch(url, result)
         return result
 
-    return _try_obscura_fetch(url, max_chars)
+    result = _try_obscura_fetch(url, max_chars, timeout)
+    _set_cached_fetch(url, result)
+    return result
 
 
 # ── Bash Tool ───────────────────────────────────────────────────────────────
