@@ -442,13 +442,13 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "grep_search",
-            "description": "在目录中按正则表达式或关键词全文搜索文件内容。支持按文件通配模式过滤（如 *.py、*.{ts,js}）。自动跳过隐藏目录和二进制文件。仅接受绝对路径。",
+            "description": "在目录中按正则表达式或关键词全文搜索文件内容。支持大小写控制、纯文本搜索和上下文行。自动跳过隐藏目录和二进制文件。优先使用 ripgrep（如已安装），否则回退至内置搜索。仅接受绝对路径。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "搜索的正则表达式或关键词（支持 Python re 语法）"
+                        "description": "搜索的正则表达式或关键词（支持 Python re 语法）。如 literal=true 则视为纯文本。"
                     },
                     "path": {
                         "type": "string",
@@ -463,6 +463,21 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                         "type": "integer",
                         "description": "最多返回的匹配行数（1-200，默认 30）",
                         "default": 30
+                    },
+                    "ignore_case": {
+                        "type": "boolean",
+                        "description": "忽略大小写搜索（默认 false）",
+                        "default": False
+                    },
+                    "literal": {
+                        "type": "boolean",
+                        "description": "将 pattern 视为纯文本而非正则表达式（默认 false，搜索函数名等字符串时有用）",
+                        "default": False
+                    },
+                    "context": {
+                        "type": "integer",
+                        "description": "匹配行前后各显示的上下文行数（0-10，默认 0）",
+                        "default": 0
                     }
                 },
                 "required": ["pattern", "path"]
@@ -473,7 +488,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "glob_find",
-            "description": "按通配模式递归查找文件。仅接受绝对路径。自动跳过隐藏目录（以 . 开头）。返回匹配文件的绝对路径列表。",
+            "description": "按通配模式递归查找文件。仅接受绝对路径。自动跳过隐藏目录和常见忽略目录。返回每行包含类型标记、大小和修改时间的列式列表。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -489,6 +504,11 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                         "type": "integer",
                         "description": "最多返回的文件数（1-500，默认 100）",
                         "default": 100
+                    },
+                    "exclude": {
+                        "type": "string",
+                        "description": "要排除的通配模式，如「*__pycache__*」「*.min.js」。留空不额外排除。",
+                        "default": ""
                     }
                 },
                 "required": ["pattern", "path"]
@@ -1102,6 +1122,21 @@ def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1, end
     elif start_line > 1:
         content += f"\n\n...（已截断，仅显示第 {start_line} 行至文件末尾，文件共 {total_lines} 行）"
 
+    # Prepend file metadata header when reading from the start
+    if start_line == 1:
+        try:
+            full_content_for_header = "".join(lines)
+            line_ending = "CRLF" if "\r\n" in full_content_for_header else "LF"
+            file_size_str = _format_file_size(os.path.getsize(resolved))
+            header = (
+                f"--- {os.path.basename(resolved)} ({file_size_str}, {total_lines} 行, utf-8, {line_ending})\n"
+                f"--- {resolved}\n"
+                + ("-" * 44) + "\n\n"
+            )
+            content = header + content
+        except OSError:
+            pass
+
     # Save read state for edit_file staleness check (full reads only)
     if is_full_read:
         try:
@@ -1310,31 +1345,112 @@ def _glob_match(filename: str, pattern: str) -> bool:
 _MAX_LINES_PER_FILE = 50
 
 
-def execute_grep_search(pattern: str, path: str, include: str = "",
-                        max_results: int = 30) -> str:
-    """Search file contents by regex/keyword in a directory tree.
+def _grep_with_ripgrep(pattern: str, resolved: str, max_results: int,
+                       include: str = "", ignore_case: bool = False,
+                       literal: bool = False, context: int = 0) -> str:
+    import subprocess as _sp
+    import json as _json
 
-    Args:
-        pattern: Regex or keyword to search for (Python re syntax).
-        path: Absolute path of the root directory to search.
-        include: Glob pattern to filter files (e.g. "*.py", "*.{ts,js}").
-                 Empty string means all text files.
-        max_results: Maximum number of matching lines to return (1-200).
+    max_lines_per_file = _MAX_LINES_PER_FILE
 
-    Returns:
-        Formatted string with matches per file.
-    """
-    resolved = _resolve_safe_path(path)
-    if resolved is None:
-        return f"错误：目录不存在或路径无效「{path}」"
-    if not os.path.isdir(resolved):
-        return f"错误：路径不是目录「{resolved}」"
+    cmd = ["rg", "--json", "--line-number", "--no-heading", "--color=never",
+           "--hidden", "--max-columns", "500", "--max-count",
+           str(max_lines_per_file)]
+    if ignore_case:
+        cmd.append("--ignore-case")
+    if literal:
+        cmd.append("--fixed-strings")
+    if include:
+        cmd.extend(["--glob", include])
+    if context > 0:
+        cmd.extend(["-C", str(min(context, 10))])
+    cmd.extend(["--", pattern, str(resolved)])
 
-    max_results = max(1, min(_MAX_GREP_RESULTS, max_results))
+    try:
+        proc = _sp.run(cmd, capture_output=True, text=True, timeout=30)
+    except _sp.TimeoutExpired:
+        return f"错误：ripgrep 搜索超时（30s），请缩小搜索范围。"
+    except OSError as e:
+        return f"错误：ripgrep 执行失败: {e}"
+
+    if proc.returncode not in (0, 1):
+        stderr = proc.stderr.strip()
+        if stderr:
+            return f"错误：ripgrep 搜索出错: {stderr}"
+
+    file_matches_map: Dict[str, List[str]] = {}
+    file_total: Dict[str, int] = {}
+    last_file = ""
+
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = _json.loads(line)
+        except _json.JSONDecodeError:
+            continue
+
+        if event.get("type") == "begin":
+            data = event.get("data", {})
+            last_file = (data.get("path", {}).get("text", "") or "")
+        elif event.get("type") == "match":
+            data = event.get("data", {})
+            fpath = data.get("path", {}).get("text", "") or last_file
+            lineno = data.get("line_number", 0)
+            text = data.get("lines", {}).get("text", "").rstrip("\n\r")
+            if len(text) > 500:
+                text = text[:500] + "..."
+            if fpath not in file_matches_map:
+                file_matches_map[fpath] = []
+                file_total[fpath] = 0
+            if file_total[fpath] < max_lines_per_file:
+                file_matches_map[fpath].append(f"    L{lineno}: {text}")
+                file_total[fpath] += 1
+            elif file_total[fpath] == max_lines_per_file:
+                file_matches_map[fpath].append(
+                    f"    ...（该文件匹配超过 {max_lines_per_file} 行，已截断）")
+                file_total[fpath] += 1
+        elif event.get("type") == "context":
+            data = event.get("data", {})
+            fpath = data.get("path", {}).get("text", "") or last_file
+            lineno = data.get("line_number", 0)
+            text = data.get("lines", {}).get("text", "").rstrip("\n\r")
+            if fpath in file_matches_map:
+                file_matches_map[fpath].append(f"    -{lineno}- {text}")
+
+    if not file_matches_map:
+        return f"在目录「{resolved}」中没有找到匹配「{pattern}」的内容。"
+
+    all_files = sorted(file_matches_map.keys())
+    total_matches = sum(file_total.values())
+    lines_out: List[str] = []
+    for fpath in all_files:
+        relpath = os.path.relpath(fpath, resolved)
+        lines_out.append(f"📄 {relpath}")
+        lines_out.extend(file_matches_map[fpath])
+
+    result = (f"🔍 搜索「{pattern}」在 {resolved}\n"
+              f"共 {len(all_files)} 个文件，{total_matches} 行匹配\n\n" +
+              "\n".join(lines_out))
+
+    if total_matches >= max_results:
+        result += f"\n\n...（已达到最大显示行数 {max_results}，可能还有更多匹配）"
+
+    return result
+
+
+def _grep_with_python(pattern: str, resolved: str, max_results: int,
+                      include: str = "", ignore_case: bool = False,
+                      literal: bool = False, context: int = 0) -> str:
     max_lines_per_file = _MAX_LINES_PER_FILE
 
     try:
-        compiled = re.compile(pattern)
+        if literal:
+            compiled = re.compile(re.escape(pattern))
+        elif ignore_case:
+            compiled = re.compile(pattern, re.IGNORECASE)
+        else:
+            compiled = re.compile(pattern)
     except re.error as e:
         return f"错误：无效的正则表达式「{pattern}」: {e}"
 
@@ -1344,7 +1460,6 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
 
     ignore_dirs = _get_ignore_dirs()
     for root, dirs, files in os.walk(resolved, topdown=True):
-        # Skip hidden directories and build/dependency directories
         dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ignore_dirs]
 
         if total_matches >= max_results:
@@ -1368,31 +1483,40 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
                 with open(fpath, "rb") as f:
                     header = f.read(8192)
                 if b"\x00" in header:
-                    continue  # skip binary
+                    continue
                 with open(fpath, "r", encoding="utf-8", errors="replace") as f:
-                    for lineno, line in enumerate(f, 1):
-                        if len(file_matches) >= max_lines_per_file:
-                            file_matches.append(f"    ...（该文件匹配超过 {max_lines_per_file} 行，已截断）")
-                            break
-                        if compiled.search(line):
-                            stripped = line.rstrip("\n\r")
-                            if len(stripped) > 500:
-                                stripped = stripped[:500] + "..."
-                            file_matches.append(f"    L{lineno}: {stripped}")
+                    all_lines = f.readlines()
             except (PermissionError, OSError):
                 continue
+
+            for idx, line in enumerate(all_lines):
+                if len(file_matches) >= max_lines_per_file:
+                    file_matches.append(
+                        f"    ...（该文件匹配超过 {max_lines_per_file} 行，已截断）")
+                    break
+                if compiled.search(line):
+                    stripped = line.rstrip("\n\r")
+                    if len(stripped) > 500:
+                        stripped = stripped[:500] + "..."
+                    stripped = line.rstrip("\n\r")
+                    if len(stripped) > 500:
+                        stripped = stripped[:500] + "..."
+                    file_matches.append(f"    L{idx + 1}: {stripped}")
 
             if file_matches:
                 relpath = os.path.relpath(fpath, resolved)
                 matches.append(f"📄 {relpath}")
                 matches.extend(file_matches)
-                total_matches += sum(1 for m in file_matches if not m.startswith("    ..."))
+                total_matches += sum(1 for m in file_matches
+                                     if not m.startswith("    ..."))
                 file_count += 1
 
     if not matches:
         return f"在目录「{resolved}」中没有找到匹配「{pattern}」的内容。"
 
-    result = f"🔍 搜索「{pattern}」在 {resolved}\n共 {file_count} 个文件，{total_matches} 行匹配\n\n" + "\n".join(matches)
+    result = (f"🔍 搜索「{pattern}」在 {resolved}\n"
+              f"共 {file_count} 个文件，{total_matches} 行匹配\n\n" +
+              "\n".join(matches))
 
     if total_matches >= max_results:
         result += f"\n\n...（已达到最大显示行数 {max_results}，可能还有更多匹配）"
@@ -1400,21 +1524,62 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
     return result
 
 
+def execute_grep_search(pattern: str, path: str, include: str = "",
+                        max_results: int = 30, ignore_case: bool = False,
+                        literal: bool = False, context: int = 0) -> str:
+    """Search file contents by regex/keyword in a directory tree.
+
+    Auto-detects ripgrep for fast search; falls back to pure-Python impl.
+
+    Args:
+        pattern: Regex or keyword to search for.
+        path: Absolute path of the root directory to search.
+        include: Glob pattern to filter files (e.g. "*.py", "*.{ts,js}").
+        max_results: Maximum number of matching lines to return (1-200).
+        ignore_case: Case-insensitive search (default: False).
+        literal: Treat pattern as literal string (default: False).
+        context: Lines of context before/after each match (0-10, default: 0).
+
+    Returns:
+        Formatted string with matches per file.
+    """
+    resolved = _resolve_safe_path(path)
+    if resolved is None:
+        return f"错误：目录不存在或路径无效「{path}」"
+    if not os.path.isdir(resolved):
+        return f"错误：路径不是目录「{resolved}」"
+
+    max_results = max(1, min(_MAX_GREP_RESULTS, max_results))
+
+    import shutil as _shutil
+    if _shutil.which("rg"):
+        return _grep_with_ripgrep(
+            pattern, resolved, max_results,
+            include=include, ignore_case=ignore_case,
+            literal=literal, context=context)
+    return _grep_with_python(
+        pattern, resolved, max_results,
+        include=include, ignore_case=ignore_case,
+        literal=literal, context=context)
+
+
 # ── Glob Find ───────────────────────────────────────────────────────────────
 
 _MAX_GLOB_RESULTS = 500
 
 
-def execute_glob_find(pattern: str, path: str, max_results: int = 100) -> str:
+def execute_glob_find(pattern: str, path: str, max_results: int = 100,
+                      exclude: str = "") -> str:
     """Recursively find files matching a glob pattern, skipping blacklisted directories.
 
     Args:
         pattern: Glob pattern such as "**/*.py", "config*.json".
         path: Absolute path of the root directory to search.
         max_results: Maximum number of files to return (1-500).
+        exclude: Glob pattern for files to exclude (e.g. "*__pycache__*").
 
     Returns:
-        Formatted string with matched file paths.
+        Formatted string with matched file paths, sizes, and modification times.
     """
     resolved = _resolve_safe_path(path)
     if resolved is None:
@@ -1424,7 +1589,7 @@ def execute_glob_find(pattern: str, path: str, max_results: int = 100) -> str:
 
     max_results = max(1, min(_MAX_GLOB_RESULTS, max_results))
 
-    filtered: List[str] = []
+    entries: List[tuple] = []
 
     def _is_match(relpath: str, fname: str, pat: str) -> bool:
         if fnmatch.fnmatch(fname, pat):
@@ -1440,34 +1605,61 @@ def execute_glob_find(pattern: str, path: str, max_results: int = 100) -> str:
     try:
         ignore_dirs = _get_ignore_dirs()
         for root_dir, dirs, files in os.walk(resolved, topdown=True):
-            # Skip hidden directories and build/dependency directories
             dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ignore_dirs]
-            
+
             for fname in files:
                 if fname.startswith("."):
+                    continue
+                if exclude and fnmatch.fnmatch(fname, exclude):
+                    continue
+                if exclude and fnmatch.fnmatch(os.path.join(root_dir, fname), exclude):
                     continue
                 fpath = os.path.join(root_dir, fname)
                 relpath = os.path.relpath(fpath, resolved)
                 if _is_match(relpath, fname, pattern):
-                    filtered.append(os.path.abspath(fpath))
+                    try:
+                        st = os.lstat(fpath)
+                        entries.append((st.st_mtime, relpath, fname, fpath, st))
+                    except OSError:
+                        entries.append((0, relpath, fname, fpath, None))
     except (PermissionError, OSError) as e:
         return f"错误：搜索文件时出错「{resolved}」: {e}"
 
-    # Sort results for deterministic output
-    filtered.sort()
-
-    if not filtered:
+    if not entries:
         return f"在目录「{resolved}」中没有找到匹配「{pattern}」的文件。"
 
-    total = len(filtered)
-    if total > max_results:
-        filtered = filtered[:max_results]
+    # Sort by mtime descending (most recently modified first)
+    entries.sort(key=lambda e: e[0], reverse=True)
 
-    result = f"📂 搜索模式「{pattern}」在 {resolved}\n共 {total} 个匹配" + (f"（显示前 {max_results} 个）" if total > max_results else "") + "\n\n"
-    result += "\n".join(filtered)
+    total = len(entries)
+    if total > max_results:
+        entries = entries[:max_results]
+
+    lines: List[str] = []
+    for _, relpath, fname, fpath, st in entries:
+        if st is not None:
+            if stat.S_ISDIR(st.st_mode):
+                marker = "DIR"
+                size = "—"
+            elif os.path.islink(fpath):
+                marker = "LINK"
+                size = _format_file_size(st.st_size)
+            else:
+                marker = "FILE"
+                size = _format_file_size(st.st_size)
+            mtime = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%m-%d %H:%M")
+        else:
+            marker = "?"
+            size = "?"
+            mtime = "?"
+
+        lines.append(f"[{marker:4s}] {size:>8s}  {mtime}  {relpath}")
+
+    result = f"📂 搜索模式「{pattern}」在 {resolved}\n共 {total} 个匹配" + (f"（显示前 {len(entries)} 个）" if total > max_results else "") + "\n\n"
+    result += "\n".join(lines)
 
     if total > max_results:
-        result += f"\n\n...（已截断，仅显示前 {max_results} 个，共 {total} 个）"
+        result += f"\n\n...（已截断，仅显示前 {len(entries)} 个，共 {total} 个）"
 
     return result
 
