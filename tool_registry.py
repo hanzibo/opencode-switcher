@@ -738,6 +738,42 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_notification",
+            "description": "发送桌面通知给用户。当后台任务完成、长时间操作结束、或需要异步提醒用户时使用。支持设置标题、正文、紧急程度和显示时长。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "通知标题（简短总结，例如「编译完成」「任务完成」「有新的AI消息」）"
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "通知正文（详细信息，可选）"
+                    },
+                    "urgency": {
+                        "type": "string",
+                        "enum": ["low", "normal", "critical"],
+                        "description": "紧急程度：low（低）/ normal（普通）/ critical（紧急），默认 normal",
+                        "default": "normal"
+                    },
+                    "expire_time": {
+                        "type": "integer",
+                        "description": "显示时长（毫秒），默认 5000ms。注意部分通知服务（GNOME Shell）可能忽略此参数。",
+                        "default": 5000
+                    },
+                    "icon": {
+                        "type": "string",
+                        "description": "图标名称或路径，例如「dialog-information」「dialog-warning」「firefox」等 freedesktop 图标名",
+                    }
+                },
+                "required": ["summary"]
+            }
+        }
+    },
 ]
 
 TOOL_CHOICE_AUTO = "auto"
@@ -1988,6 +2024,64 @@ def execute_bash(command: str, restart: bool = False, timeout: int = _BASH_TIMEO
     return "\n".join(parts)
 
 
+# ── Notification ──────────────────────────────────────────────────────────
+
+def execute_send_notification(
+    summary: str,
+    body: str = "",
+    urgency: str = "normal",
+    expire_time: int = 5000,
+    icon: str = "",
+) -> str:
+    """Send a desktop notification via notify-send.
+
+    Args:
+        summary: Notification title/summary.
+        body: Optional notification body text.
+        urgency: Urgency level — "low", "normal", or "critical".
+        expire_time: Display duration in milliseconds (default 5000).
+        icon: Icon name or path (freedesktop icon name like "dialog-information").
+
+    Returns:
+        Success or error message string.
+    """
+    try:
+        cmd = ["notify-send", "-a", "OpenCode Switcher"]
+
+        if urgency in ("low", "normal", "critical"):
+            cmd.extend(["-u", urgency])
+
+        if expire_time > 0:
+            cmd.extend(["-t", str(expire_time)])
+
+        if icon:
+            cmd.extend(["-i", icon])
+
+        cmd.append(summary)
+        if body:
+            cmd.append(body)
+
+        result = subprocess.run(
+            cmd,
+            timeout=10,
+            capture_output=True,
+            text=True,
+        )
+
+        if result.returncode != 0:
+            err = result.stderr.strip()
+            return f"通知发送失败：{err}" if err else f"通知发送失败（返回码 {result.returncode}）"
+
+        return f"✅ 通知已发送：{summary}"
+
+    except FileNotFoundError:
+        return "错误：系统中未找到 notify-send。请安装 libnotify-bin（Debian/Ubuntu: sudo apt install libnotify-bin）"
+    except subprocess.TimeoutExpired:
+        return "错误：发送通知超时（notify-send 无响应）"
+    except Exception as e:
+        return f"错误：发送通知时发生异常 — {e}"
+
+
 # ── Tool Executor Registry ─────────────────────────────────────────────────
 
 TOOL_EXECUTORS: Dict[str, Callable] = {
@@ -2008,6 +2102,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "bash": execute_bash,
     "delete_file": execute_delete_file,
     "rename_file": execute_rename_file,
+    "send_notification": execute_send_notification,
 }
 
 
@@ -2167,6 +2262,14 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
                 parts.append(f'<div class="tool-call-info">📋 <b>任务清单：</b>仅 {sfilter}</div>')
             else:
                 parts.append('<div class="tool-call-info">📋 <b>任务清单：</b>全部</div>')
+        elif name == "send_notification":
+            nsummary = args.get("summary", "")
+            nurgency = args.get("urgency", "normal")
+            safe_nsum = html.escape(nsummary)
+            parts.append(
+                f'<div class="tool-call-info">🔔 <b>发送通知：</b>{safe_nsum}'
+                f'<span style="color:#888;font-size:11px;margin-left:8px;">紧急度: {nurgency}</span></div>'
+            )
         elif name == "bash":
             cmd = args.get("command", "")
             cmd_timeout = args.get("timeout", 60)
