@@ -8,6 +8,7 @@ Tool Registry — Function Calling 工具定义与执行器
 """
 
 import datetime
+import difflib
 import fnmatch
 import json
 import os
@@ -15,6 +16,7 @@ import pathlib
 import select
 import stat
 import subprocess
+import tempfile
 import time
 import urllib.parse
 import re
@@ -1223,6 +1225,61 @@ def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1, end
     return content
 
 
+# ── Edit File Helpers ────────────────────────────────────────────────────────
+
+
+def _atomic_write(path: str, content: str, line_ending: str = "LF") -> None:
+    """Atomically write content to file via temp file + rename."""
+    resolved = os.path.realpath(path)
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=os.path.dirname(resolved),
+        prefix=f'.{os.path.basename(resolved)}.',
+        suffix='.tmp'
+    )
+    try:
+        with os.fdopen(tmp_fd, 'w', encoding='utf-8',
+                       newline=('\r\n' if line_ending == 'CRLF' else '\n')) as f:
+            f.write(content)
+        os.replace(tmp_path, resolved)
+    except Exception:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _generate_diff(old_content: str, new_content: str, path: str, n: int = 2) -> str:
+    """Generate unified diff preview, max 30 lines."""
+    basename = os.path.basename(path)
+    diff_lines = list(difflib.unified_diff(
+        old_content.splitlines(keepends=True),
+        new_content.splitlines(keepends=True),
+        fromfile=f'a/{basename}',
+        tofile=f'b/{basename}',
+        n=n,
+    ))
+    if not diff_lines:
+        return ""
+    if len(diff_lines) > 30:
+        diff_lines = diff_lines[:30] + [f"... (共 {len(diff_lines) - 30} 行已省略)\n"]
+    return ''.join(diff_lines)
+
+
+def _find_line_numbers(content: str, old_string: str) -> List[int]:
+    """Find all line numbers where old_string appears."""
+    lines = []
+    start = 0
+    while True:
+        idx = content.find(old_string, start)
+        if idx == -1:
+            break
+        line_num = content[:idx].count('\n') + 1
+        lines.append(line_num)
+        start = idx + 1
+    return lines
+
+
 def execute_edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
     """Replace old_string with new_string in file. Requires prior full read_file call."""
     resolved = _resolve_safe_path(path)
@@ -1253,28 +1310,30 @@ def execute_edit_file(path: str, old_string: str, new_string: str, replace_all: 
 
     if old_string not in content:
         return (
-            f"错误：未能在文件「{resolved}」中找到指定的 old_string。\n\n"
+            f"错误：未能在文件「{path}」中找到指定的 old_string。\n\n"
             f"请确保 old_string 与文件内容完全匹配（包括空格和缩进）。\n"
             f"如需查看文件当前内容，请使用 read_file 读取。"
         )
 
     occurrence_count = content.count(old_string)
     if occurrence_count > 1 and not replace_all:
+        line_nums = _find_line_numbers(content, old_string)
+        lines_str = ", ".join(f"第 {n} 行" for n in line_nums)
         return (
-            f"错误：old_string 在文件中出现了 {occurrence_count} 次。"
-            f"请设置 replace_all=True 以替换所有匹配，或提供更精确的 old_string 以唯一匹配。"
+            f"错误：old_string 在文件中出现了 {occurrence_count} 次\n"
+            f"   位置: {lines_str}\n"
+            f"   建议: 设置 replace_all=True 替换全部，或提供更多上下文以唯一匹配"
         )
 
     new_content = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
     actual_changes = occurrence_count if replace_all else 1
 
     try:
-        with open(resolved, "w", encoding="utf-8", newline=("\r\n" if line_ending == "CRLF" else "\n")) as f:
-            f.write(new_content)
+        _atomic_write(resolved, new_content, line_ending)
     except PermissionError:
-        return f"错误：无权写入文件「{resolved}」"
+        return f"错误：无权写入文件「{path}」"
     except OSError as e:
-        return f"错误：写入文件时出错「{resolved}」: {e}"
+        return f"错误：写入文件时出错「{path}」: {e}"
 
     _READ_FILE_STATE[os.path.realpath(resolved)] = {
         "content": new_content,
@@ -1284,7 +1343,9 @@ def execute_edit_file(path: str, old_string: str, new_string: str, replace_all: 
         "line_ending": line_ending,
     }
 
-    return f"已成功对文件「{path}」应用 {actual_changes} 处编辑。"
+    diff = _generate_diff(content, new_content, path)
+    diff_block = f"\n{diff}" if diff else ""
+    return f"✅ 已编辑文件「{path}」\n   变更: {actual_changes} 处替换{diff_block}"
 
 
 # ── Delete / Rename ─────────────────────────────────────────────────────────
