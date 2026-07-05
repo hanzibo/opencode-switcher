@@ -279,17 +279,30 @@ class _LLMHttpClient:
         temperature: float = DEFAULT_TEMPERATURE,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         top_p: float = DEFAULT_TOP_P,
-    ) -> Optional[str]:
+        tools: Optional[list] = None,
+        tool_choice: Optional[str] = None,
+    ) -> dict:
+        """Non-streaming chat completion. Returns the full assistant message dict.
+
+        The returned dict contains at least:
+          - "content": str or None (text response)
+          - "role": "assistant"
+        If the model responds with tool calls, the dict also contains:
+          - "tool_calls": list of ToolCall dicts
+
+        Pass ``tools`` and ``tool_choice`` to enable function calling.
+        """
         url, headers, body = self._build_request(
             base_url, api_key, model_name, messages, stream=False,
             temperature=temperature, max_tokens=max_tokens, top_p=top_p,
+            tools=tools, tool_choice=tool_choice,
         )
 
         try:
             resp = self._session.post(url, json=body, headers=headers, timeout=timeout)
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            return data["choices"][0]["message"]
         except requests.exceptions.RequestException as e:
             raise _LLMHttpError(f"请求异常：{e}")
         except (KeyError, IndexError, json.JSONDecodeError) as e:
