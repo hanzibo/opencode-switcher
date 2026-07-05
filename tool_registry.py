@@ -163,16 +163,15 @@ def execute_todo_create(title: str, description: str = "",
     data = _load_todos()
     todos = data["todos"]
 
+    todo_id = "todo_" + uuid.uuid4().hex[:8]
+
     if blocked_by:
         for dep_id in blocked_by:
             if _find_todo(todos, dep_id) is None:
                 return f"错误：依赖任务「{dep_id}」不存在。"
 
-        todo_id = "todo_" + uuid.uuid4().hex[:8]
         if _check_cycle(todos, todo_id, blocked_by):
             return "错误：检测到循环依赖，请检查 blocked_by 设置。"
-
-    todo_id = "todo_" + uuid.uuid4().hex[:8]
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
     initial_status = "blocked" if blocked_by else "pending"
@@ -1122,7 +1121,7 @@ def execute_rename_file(source: str, destination: str, force: bool = False) -> s
         return f"错误：目标路径无效「{destination}」"
 
     try:
-        os.rename(resolved_src, resolved_dst)
+        shutil.move(resolved_src, resolved_dst)
         # Invalidate any cached read state for the old path
         _READ_FILE_STATE.pop(os.path.realpath(resolved_src), None)
         return f"已成功将「{source}」重命名为「{destination}」"
@@ -2125,6 +2124,22 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             parts.append(
                 f'<div class="tool-call-info">✏️ <b>编辑文件（{plural}匹配）：</b>{safe_epath}</div>'
                 + _make_collapsible_preview(eold, old_label, max_chars=200)
+            )
+        elif name == "delete_file":
+            dpath = args.get("path", "")
+            rec = args.get("recursive", False)
+            safe_dpath = html.escape(dpath)
+            rec_tag = "（递归）" if rec else ""
+            parts.append(
+                f'<div class="tool-call-info">🗑️ <b>删除{rec_tag}：</b>{safe_dpath}</div>'
+            )
+        elif name == "rename_file":
+            rsrc = args.get("source", "")
+            rdst = args.get("destination", "")
+            safe_rsrc = html.escape(rsrc)
+            safe_rdst = html.escape(rdst)
+            parts.append(
+                f'<div class="tool-call-info">📦 <b>重命名：</b>{safe_rsrc} → {safe_rdst}</div>'
             )
         elif name == "todo_create":
             ttitle = args.get("title", "")
