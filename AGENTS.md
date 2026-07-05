@@ -1,7 +1,7 @@
 # OpenCode Switcher — Agent Instructions
 
 Linux GTK3 desktop tray app switching between OpenCode (CLI) sessions via a search panel.
-Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No automated tests (`dnd_test.py` only, manual, 15s auto-exit).
+Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No automated tests.
 
 ## LAYOUT
 
@@ -30,7 +30,6 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ├── recycle_bin_dialog.py   # Recycle bin dialog (~240 lines)
 ├── migrate_history.py      # DB migration (~59 lines, dual-use: standalone + imported by main.py)
 ├── inspect_db.py           # DB inspector — __name__ guard present at line 10
-├── dnd_test.py             # Manual GTK DnD test (~247 lines, 15s auto-exit)
 ├── opencode-switcher-toggle # Shell→Python hybrid: sends "toggle"/"toggle_ai" to Unix socket
 ├── katex/                  # KaTeX CSS/JS/fonts for math in AI WebView
 ├── gnome-extension/        # GNOME Shell extension (Wayland clipboard + focus IPC)
@@ -63,7 +62,6 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 | Install | `./install.sh install` | Copies to `~/.local/share/opencode-switcher/`, enables systemd, installs GNOME ext |
 | Uninstall | `./install.sh uninstall` | Interactive — asks about keeping user data |
 | Status | `./install.sh status` | Checks install dir, desktop entry, service, opencode CLI, GNOME ext |
-| Test | `venv/bin/python3 dnd_test.py` | Manual GTK DnD test, 15s auto-exit |
 | DB inspect | `venv/bin/python3 inspect_db.py` | Lists session table schema + latest rows |
 
 **System deps** (beyond pip): `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard xclip xdotool gir1.2-webkit2-4.1` — webkit2gtk is NOT in install.sh but required at runtime (AI panel crashes without it).
@@ -181,13 +179,13 @@ systemd/.desktop → run.sh → main.py (flock lock)
 - **Platform check**: `utils.is_wayland()` reads `XDG_SESSION_TYPE` / `WAYLAND_DISPLAY`
 - **Naming**: PascalCase classes, snake_case functions, `_prefix` for private, `UPPER_CASE` constants
 - **Comments**: `# <space><text>`, Chinese or English. `# ponytail:` marks intentionally removed code.
-- **Entry points**: `if __name__ == "__main__":` guard required. Present in `main.py`, `dnd_test.py`, `inspect_db.py`, `migrate_history.py`.
+- **Entry points**: `if __name__ == "__main__":` guard required. Present in `main.py`, `inspect_db.py`, `migrate_history.py`.
 - **No linter/formatter/CI**: Manual discipline. No `asyncio`. No `assert` for tests.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
 - **No package structure**: Zero `__init__.py`. Modules flat in root.
-- **No automated tests**: `dnd_test.py` is manual-only. No `pytest`.
+- **No automated tests**: No `pytest`.
 - **No CI/CD**: No GitHub Actions, Makefile, Dockerfile. `install.sh` is Debian/Ubuntu-only.
 - **`add_provider_for_screen`** in both panels (`panel.py:102`, `clipboard_panel.py:205`) — leaks CSS globally per GTK docs (accepted tradeoff).
 - **`opencode-switcher-toggle`**: Python code inside shell script via `exec python3 -c "..."` — fragile quoting.
@@ -198,7 +196,6 @@ systemd/.desktop → run.sh → main.py (flock lock)
 - **GNOME extension duplicates Python classification** — ~150 lines of heuristic scoring in both Python and JS.
 - **Shared clipboard_history.json** — written by both Python and JS, no locking → potential corruption.
 - **`TEMPLATE_REGEX` duplicated** in `dynamic_copy_dialog.py`, `clipboard_panel.py`, `ai_chat_panel.py` — must keep in sync.
-- `codebase_analysis.md` — stale architecture overview (predates refactoring; line counts are wrong).
 
 ## COMPLEXITY HOTSPOTS
 

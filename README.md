@@ -91,7 +91,6 @@ sudo apt install gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-
 │
 ├── migrate_history.py          # 数据库迁移工具
 ├── inspect_db.py               # 数据库检查器
-├── dnd_test.py                 # 手动 GTK 拖拽测试（15 秒自动退出）
 ├── opencode-switcher-toggle    # Unix Socket 触发脚本
 ├── katex/                      # KaTeX CSS/JS/字体（AI WebView 数学渲染）
 ├── gnome-extension/            # GNOME Shell 扩展（Wayland 剪贴板 + 聚焦 IPC）
