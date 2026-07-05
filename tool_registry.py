@@ -31,6 +31,22 @@ from llm_client import _LLMHttpClient, _LLMHttpError
 
 _IGNORE_DIRS: Final = {"node_modules", "venv", ".venv", "env", "__pycache__", "build", "dist", "target", "cache", ".cache"}
 
+# ── Status Emoji Mapping (unified for todo tools) ───────────────────────────
+
+STATUS_EMOJI: Final[Dict[str, str]] = {
+    "pending": "⏳",
+    "blocked": "🔴",
+    "in_progress": "🔄",
+    "completed": "✅",
+    "failed": "❌",
+    "cancelled": "⭕",
+}
+
+
+def _status_emoji(status: str) -> str:
+    """Return emoji for a given task status."""
+    return STATUS_EMOJI.get(status, "❓")
+
 
 def _get_ignore_dirs() -> set:
     config_path = os.path.expanduser("~/.config/opencode-switcher/config.json")
@@ -173,7 +189,9 @@ def _update_dependents(todos: List[Dict[str, Any]], completed_id: str) -> None:
 
 def execute_todo_create(title: str, description: str = "",
                         priority: str = "medium",
-                        blocked_by: Optional[List[str]] = None) -> str:
+                        blocked_by: Optional[List[str]] = None,
+                        active_form: str = "",
+                        verification: str = "") -> str:
     """Create a new todo item."""
     if not title.strip():
         return "错误：任务标题不能为空。"
@@ -198,6 +216,8 @@ def execute_todo_create(title: str, description: str = "",
         "id": todo_id,
         "title": title,
         "description": description,
+        "active_form": active_form,
+        "verification": verification,
         "status": initial_status,
         "priority": priority,
         "blocked_by": blocked_by or [],
@@ -209,8 +229,7 @@ def execute_todo_create(title: str, description: str = "",
     data["next_id"] += 1
     _save_todos(data)
 
-    status_emoji = {"pending": "⚪", "blocked": "🔴", "in_progress": "🟡", "completed": "🟢", "failed": "⚫", "cancelled": "⭕"}
-    emoji = status_emoji.get(initial_status, "⚪")
+    emoji = _status_emoji(initial_status)
     return f"{emoji} 已创建任务「{title}」（ID: {todo_id}，状态: {initial_status}）"
 
 
@@ -218,7 +237,8 @@ def execute_todo_update(id: str, status: Optional[str] = None,
                         title: Optional[str] = None,
                         description: Optional[str] = None,
                         priority: Optional[str] = None,
-                        add_blocked_by: Optional[List[str]] = None) -> str:
+                        add_blocked_by: Optional[List[str]] = None,
+                        active_form: Optional[str] = None) -> str:
     """Update an existing todo item."""
     data = _load_todos()
     todos = data["todos"]
@@ -233,6 +253,8 @@ def execute_todo_update(id: str, status: Optional[str] = None,
         todo["description"] = description
     if priority is not None:
         todo["priority"] = priority
+    if active_form is not None:
+        todo["active_form"] = active_form
 
     if add_blocked_by:
         for dep_id in add_blocked_by:
@@ -260,13 +282,13 @@ def execute_todo_update(id: str, status: Optional[str] = None,
     todo["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     _save_todos(data)
 
-    status_emoji = {"pending": "⚪", "blocked": "🔴", "in_progress": "🟡", "completed": "🟢", "failed": "⚫", "cancelled": "⭕"}
-    emoji = status_emoji.get(todo.get("status", "pending"), "⚪")
+    emoji = _status_emoji(todo.get("status", "pending"))
     return f"{emoji} 已更新任务「{todo['title']}」状态为 {todo['status']}"
 
 
 def execute_todo_list(id: Optional[str] = None,
-                      status_filter: Optional[str] = None) -> str:
+                      status_filter: Optional[str] = None,
+                      sort_by: str = "created_at") -> str:
     """List or query todo items."""
     data = _load_todos()
     todos = data["todos"]
@@ -279,11 +301,14 @@ def execute_todo_list(id: Optional[str] = None,
         todo = _find_todo(todos, id)
         if todo is None:
             return f"错误：未找到 ID 为「{id}」的任务。"
-        status_emoji = {"pending": "⚪", "blocked": "🔴", "in_progress": "🟡", "completed": "🟢", "failed": "⚫", "cancelled": "⭕"}
-        emoji = status_emoji.get(todo.get("status", "pending"), "⚪")
+        emoji = _status_emoji(todo.get("status", "pending"))
         blocked_by_str = ", ".join(todo.get("blocked_by", [])) or "无"
         desc = todo.get("description", "")
         desc_block = f"描述:\n{desc}\n---\n" if desc else ""
+        active_form = todo.get("active_form", "")
+        active_form_block = f"当前动作: {active_form}\n" if active_form else ""
+        verification = todo.get("verification", "")
+        verification_block = f"验证标准: {verification}\n" if verification else ""
         return (
             f"📋 任务详情\n"
             f"---\n"
@@ -292,6 +317,7 @@ def execute_todo_list(id: Optional[str] = None,
             f"状态:        {emoji} {todo['status']}\n"
             f"优先级:      {todo.get('priority', 'medium')}\n"
             f"依赖:        {blocked_by_str}\n"
+            f"{active_form_block}{verification_block}"
             f"创建时间:    {todo.get('created_at', '')}\n"
             f"更新时间:    {todo.get('updated_at', '')}\n"
             f"---\n"
@@ -299,8 +325,6 @@ def execute_todo_list(id: Optional[str] = None,
         )
 
     # List mode
-    status_emoji = {"pending": "⚪", "blocked": "🔴", "in_progress": "🟡", "completed": "🟢", "failed": "⚫", "cancelled": "⭕"}
-
     if status_filter:
         filtered = [t for t in todos if t.get("status") == status_filter]
         if not filtered:
@@ -309,13 +333,37 @@ def execute_todo_list(id: Optional[str] = None,
     else:
         todos_to_show = todos
 
-    lines = [f"📋 任务清单（共 {len(todos_to_show)} 项）\n"]
+    # Sort
+    reverse = False
+    sort_key = sort_by
+    if sort_by == "priority":
+        priority_order = {"high": 0, "medium": 1, "low": 2}
+        todos_to_show = sorted(todos_to_show, key=lambda t: priority_order.get(t.get("priority", "medium"), 1))
+        sort_key = None
+    elif sort_by == "updated_at":
+        reverse = True
+
+    if sort_key and sort_by != "priority":
+        todos_to_show = sorted(todos_to_show, key=lambda t: t.get(sort_key, ""), reverse=reverse)
+
+    # Statistics
+    total = len(todos)
+    completed = sum(1 for t in todos if t.get("status") == "completed")
+    in_progress = sum(1 for t in todos if t.get("status") == "in_progress")
+    pending = sum(1 for t in todos if t.get("status") == "pending")
+    blocked = sum(1 for t in todos if t.get("status") == "blocked")
+
+    lines = [
+        f"📋 任务清单（共 {len(todos_to_show)} 项）",
+        f"   统计: {completed}✅ {in_progress}🔄 {pending}⏳ {blocked}🔴 / {total}总计",
+        ""
+    ]
     for t in todos_to_show:
-        emoji = status_emoji.get(t.get("status", "pending"), "⚪")
-        blocked = ""
+        emoji = _status_emoji(t.get("status", "pending"))
+        blocked_str = ""
         if t.get("blocked_by"):
-            blocked = f" ⚠ 依赖: {', '.join(t['blocked_by'])}"
-        lines.append(f"{emoji} [{t['status']}]  {t['title']}（ID: {t['id']}）{blocked}")
+            blocked_str = f" ⚠ 依赖: {', '.join(t['blocked_by'])}"
+        lines.append(f"{emoji} [{t['status']}]  {t['title']}（ID: {t['id']}）{blocked_str}")
 
     return "\n".join(lines)
 
@@ -553,7 +601,9 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "创建新文件或覆盖已有文件的内容。仅接受绝对路径。默认不覆盖已有文件（需设置 force=True 覆盖）。",
+            "description": "创建新文件或完全覆盖已有文件。仅接受绝对路径。默认不覆盖已有文件（需设置 force=True 覆盖）。"
+                           "对已有文件的局部修改请优先使用 edit_file，它只发送差异部分，更安全且不易误覆盖。"
+                           "当父目录不存在时将自动创建。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -610,7 +660,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "todo_create",
+             "name": "todo_create",
             "description": "创建新任务。返回任务的唯一 ID。任务创建后默认为 pending 状态。如果指定了 blocked_by（依赖任务列表），则状态自动设为 blocked，直到所有依赖任务完成。",
             "parameters": {
                 "type": "object",
@@ -622,6 +672,14 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "description": {
                         "type": "string",
                         "description": "任务详细描述，包含需求、验收标准、实现思路等"
+                    },
+                    "active_form": {
+                        "type": "string",
+                        "description": "当前执行动作描述（例如「正在搜索文档」「正在编写测试」），用于进度展示"
+                    },
+                    "verification": {
+                        "type": "string",
+                        "description": "验证标准（例如「测试全部通过」「代码编译无错误」），明确任务完成的判定条件"
                     },
                     "priority": {
                         "type": "string",
@@ -642,7 +700,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "todo_update",
+             "name": "todo_update",
             "description": "更新任务的状态或字段。最常用操作：标记任务为 in_progress 或 completed。"
                        "当标记为 completed 时，自动检查并解除依赖该任务的其他 blocked 任务。",
             "parameters": {
@@ -665,6 +723,10 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                         "type": "string",
                         "description": "更新任务描述"
                     },
+                    "active_form": {
+                        "type": "string",
+                        "description": "更新当前执行动作描述（例如「正在分析代码」「正在运行测试」）"
+                    },
                     "priority": {
                         "type": "string",
                         "enum": ["high", "medium", "low"],
@@ -683,19 +745,25 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "todo_list",
-            "description": "列出任务摘要或查询单个任务详情。不指定 id 时返回所有任务摘要（含状态、优先级、依赖）。指定 id 时返回该任务的完整信息（含描述）。可选 status_filter 仅列出特定状态的任务。",
+             "name": "todo_list",
+            "description": "列出任务摘要或查询单个任务详情。不指定 id 时返回所有任务摘要（含状态、优先级、依赖）。指定 id 时返回该任务的完整信息（含描述）。可选 status_filter 仅列出特定状态的任务。返回统计信息（完成数/进行中/待处理/阻塞）。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "id": {
                         "type": "string",
-                        "description": "可选。指定后返回该任务的完整详情（含 description）。省略则返回所有任务摘要。"
+                        "description": "可选。指定后返回该任务的完整详情（含 description、active_form、verification）。省略则返回所有任务摘要。"
                     },
                     "status_filter": {
                         "type": "string",
                         "enum": ["pending", "in_progress", "completed", "failed", "cancelled", "blocked"],
                         "description": "可选。仅列出指定状态的任务。只在列表模式（id 为空时）有效。"
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "enum": ["created_at", "updated_at", "priority"],
+                        "description": "可选。排序方式：created_at（默认，按创建时间）、updated_at（最近更新优先）、priority（高优先级在前）。",
+                        "default": "created_at"
                     }
                 }
             }
@@ -1235,15 +1303,19 @@ def execute_delete_file(path: str, recursive: bool = False) -> str:
     try:
         if os.path.isdir(resolved):
             if recursive:
+                item_count = sum(1 for _ in os.scandir(resolved))
                 shutil.rmtree(resolved)
-                return f"已成功递归删除目录「{path}」"
+                return f"✅ 已递归删除目录: {path}（含 {item_count} 个子项）"
             else:
                 os.rmdir(resolved)
-                return f"已成功删除空目录「{path}」"
+                return f"✅ 已删除空目录: {path}"
         else:
+            size_str = _format_file_size(os.path.getsize(resolved))
             os.remove(resolved)
             _READ_FILE_STATE.pop(os.path.realpath(resolved), None)
-            return f"已成功删除文件「{path}」"
+            return f"✅ 已删除文件: {path}（{size_str}）"
+    except PermissionError:
+        return f"错误：无权删除「{path}」"
     except OSError as e:
         return f"错误：删除「{path}」时出错: {e}"
 
@@ -1259,6 +1331,9 @@ def execute_rename_file(source: str, destination: str, force: bool = False) -> s
     if resolved_src is None:
         return f"错误：源文件或目录不存在「{source}」"
 
+    is_file = os.path.isfile(resolved_src)
+    src_size = _format_file_size(os.path.getsize(resolved_src)) if is_file else None
+
     resolved_dst = _resolve_write_path(destination, force=force)
     if resolved_dst is None:
         if os.path.exists(os.path.realpath(destination)) and not force:
@@ -1269,7 +1344,10 @@ def execute_rename_file(source: str, destination: str, force: bool = False) -> s
         shutil.move(resolved_src, resolved_dst)
         # Invalidate any cached read state for the old path
         _READ_FILE_STATE.pop(os.path.realpath(resolved_src), None)
-        return f"已成功将「{source}」重命名为「{destination}」"
+        parts = [f"✅ 已重命名: {source} → {destination}"]
+        if src_size:
+            parts.append(f"  大小: {src_size}")
+        return "\n".join(parts)
     except OSError as e:
         return f"错误：重命名「{source}」→「{destination}」时出错: {e}"
 
@@ -1791,16 +1869,23 @@ def execute_write_file(path: str, content: str, force: bool = False) -> str:
     Returns:
         Formatted string with result summary.
     """
+    if not path or not isinstance(path, str) or not os.path.isabs(path):
+        return "错误：必须使用绝对路径！"
+
     resolved = _resolve_write_path(path, force)
     if resolved is None:
-        if not os.path.isabs(path):
-            return "错误：必须使用绝对路径！"
-        parent_dir = os.path.dirname(os.path.realpath(path))
+        real_path = os.path.realpath(path)
+        parent_dir = os.path.dirname(real_path)
         if not os.path.isdir(parent_dir):
-            return f"错误：父目录不存在「{os.path.dirname(path)}」"
-        if os.path.exists(os.path.realpath(path)):
-            return f"错误：文件已存在「{path}」。如需覆盖请设置 force=True。"
-        return f"错误：无法写入文件「{path}」"
+            try:
+                os.makedirs(parent_dir, exist_ok=True)
+            except OSError as e:
+                return f"错误：无法创建父目录「{parent_dir}」: {e}"
+            resolved = real_path
+        else:
+            if os.path.exists(real_path):
+                return f"错误：文件已存在「{path}」。如需覆盖请设置 force=True。"
+            return f"错误：无法写入文件「{path}」"
 
     parent = os.path.dirname(resolved)
     if not os.access(parent, os.W_OK):
@@ -1819,9 +1904,11 @@ def execute_write_file(path: str, content: str, force: bool = False) -> str:
 
     size_bytes = len(content.encode("utf-8"))
     size_str = _format_file_size(size_bytes)
+    line_count = content.count("\n") + 1 if content else 0
     return (
         f"✅ 文件已写入: {resolved}\n"
         f"  大小: {size_str}\n"
+        f"  行数: {line_count}\n"
         f"  字符数: {len(content)}"
     )
 
@@ -2303,7 +2390,7 @@ def execute_send_notification(
         icon: Icon name or path (freedesktop icon name like "dialog-information").
 
     Returns:
-        Success or error message string.
+        Structured result with status, summary, and details.
     """
     try:
         cmd = ["notify-send", "-a", "OpenCode Switcher"]
@@ -2330,16 +2417,17 @@ def execute_send_notification(
 
         if result.returncode != 0:
             err = result.stderr.strip()
-            return f"通知发送失败：{err}" if err else f"通知发送失败（返回码 {result.returncode}）"
+            error_msg = err if err else f"返回码 {result.returncode}"
+            return f"❌ 通知发送失败\n   原因: {error_msg}\n   标题: {summary}"
 
-        return f"✅ 通知已发送：{summary}"
+        return f"✅ 通知已发送\n   标题: {summary}\n   正文: {body or '(无)'}\n   紧急程度: {urgency}"
 
     except FileNotFoundError:
-        return "错误：系统中未找到 notify-send。请安装 libnotify-bin（Debian/Ubuntu: sudo apt install libnotify-bin）"
+        return "❌ 通知发送失败\n   原因: 系统中未找到 notify-send\n   解决方案: sudo apt install libnotify-bin"
     except subprocess.TimeoutExpired:
-        return "错误：发送通知超时（notify-send 无响应）"
+        return "❌ 通知发送失败\n   原因: notify-send 无响应（超时）\n   标题: {summary}"
     except Exception as e:
-        return f"错误：发送通知时发生异常 — {e}"
+        return f"❌ 通知发送失败\n   原因: {e}\n   标题: {summary}"
 
 
 # ── Sub-Agent Tool ─────────────────────────────────────────────────────────
