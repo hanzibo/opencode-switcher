@@ -45,6 +45,43 @@ def _get_ignore_dirs() -> set:
     return ignore_dirs
 
 
+# ── Read State Tracking (for edit_file staleness check) ─────────────────────
+
+_READ_FILE_STATE: Dict[str, Dict[str, Any]] = {}
+"""Tracks full file reads for edit_file staleness validation.
+Key: resolved absolute path.
+Value: {"content": str, "mtime": float, "full_read": bool, "encoding": str, "line_ending": str}
+"""
+
+
+def _check_file_stale(path: str) -> Optional[str]:
+    """Check if file has been modified since read_file was called.
+    Returns None if OK, error message string if stale/missing.
+    """
+    resolved = os.path.realpath(path)
+    state = _READ_FILE_STATE.get(resolved)
+    if state is None:
+        return f"错误：文件「{path}」尚未被读取。请先使用 read_file 工具读取该文件。"
+    if not state.get("full_read", False):
+        return f"错误：文件「{path}」之前只读取了部分内容。请使用 read_file 完整读取后再编辑。"
+    try:
+        current_mtime = os.path.getmtime(resolved)
+    except OSError:
+        return f"错误：无法访问文件「{path}」"
+    if current_mtime > state["mtime"]:
+        try:
+            with open(resolved, "rb") as f:
+                raw = f.read()
+            current_content = raw.decode(state.get("encoding", "utf-8"), errors="replace")
+        except Exception:
+            return f"错误：文件「{path}」自读取后已被修改，请重新读取。"
+        if current_content != state["content"]:
+            return f"错误：文件「{path}」自读取后已被外部修改，请重新使用 read_file 读取。"
+        # False positive (cloud sync, antivirus), update mtime
+        state["mtime"] = current_mtime
+    return None
+
+
 # ── Tool Definitions (OpenAI function calling schema) ──────────────────────
 
 TOOL_DEFINITIONS: List[Dict[str, Any]] = [
@@ -277,6 +314,38 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     }
                 },
                 "required": ["path", "content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": "对已读取过的文件执行精确字符串替换。用 old_string 精确匹配原文（包括空格和缩进），替换为 new_string。"
+                           "old_string 在同一文件中必须唯一（除非设置 replace_all=True）。"
+                           "修改前会校验文件自读取后是否被外部修改——若已过期则拒绝并提示重新读取。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "要编辑的文件的绝对路径"
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "要被替换的原文。必须精确匹配文件中的内容，包括空格和缩进。"
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "替换后的新内容"
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "是否替换所有匹配项。默认 false（只替换第一个匹配）。设为 true 替换所有。",
+                        "default": False
+                    }
+                },
+                "required": ["path", "old_string", "new_string"]
             }
         }
     },
@@ -597,6 +666,9 @@ def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1, end
         content = content[:max_chars]
         truncated_by_chars = True
 
+    # Determine whether this is a full read (for edit_file staleness tracking)
+    is_full_read = (start_line == 1 and end_line is None and not truncated_by_chars)
+
     if truncated_by_chars:
         content += f"\n\n...（内容因超出 max_chars={max_chars} 字符而被截断）"
     elif end_line is not None and end_line < total_lines:
@@ -604,7 +676,86 @@ def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1, end
     elif start_line > 1:
         content += f"\n\n...（已截断，仅显示第 {start_line} 行至文件末尾，文件共 {total_lines} 行）"
 
+    # Save read state for edit_file staleness check (full reads only)
+    if is_full_read:
+        try:
+            full_content = "".join(lines)
+            line_ending = "CRLF" if "\r\n" in full_content else "LF"
+            _READ_FILE_STATE[resolved] = {
+                "content": full_content,
+                "mtime": os.path.getmtime(resolved),
+                "full_read": True,
+                "encoding": "utf-8",
+                "line_ending": line_ending,
+            }
+        except OSError:
+            pass
+
     return content
+
+
+def execute_edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
+    """Replace old_string with new_string in file. Requires prior full read_file call."""
+    resolved = _resolve_safe_path(path)
+    if resolved is None:
+        return f"错误：文件不存在或路径无效「{path}」"
+    if not os.path.isfile(resolved):
+        return f"错误：路径不是文件「{resolved}」"
+
+    stale_err = _check_file_stale(resolved)
+    if stale_err is not None:
+        return stale_err
+
+    if not old_string:
+        return "错误：old_string 不能为空。"
+
+    state = _READ_FILE_STATE.get(os.path.realpath(resolved))
+    line_ending = state.get("line_ending", "LF") if state else "LF"
+
+    try:
+        with open(resolved, "r", encoding="utf-8") as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        return f"错误：文件「{resolved}」不是有效的 UTF-8 文本文件。"
+    except PermissionError:
+        return f"错误：无权读取文件「{resolved}」"
+    except OSError as e:
+        return f"错误：读取文件时出错「{resolved}」: {e}"
+
+    if old_string not in content:
+        return (
+            f"错误：未能在文件「{resolved}」中找到指定的 old_string。\n\n"
+            f"请确保 old_string 与文件内容完全匹配（包括空格和缩进）。\n"
+            f"如需查看文件当前内容，请使用 read_file 读取。"
+        )
+
+    occurrence_count = content.count(old_string)
+    if occurrence_count > 1 and not replace_all:
+        return (
+            f"错误：old_string 在文件中出现了 {occurrence_count} 次。"
+            f"请设置 replace_all=True 以替换所有匹配，或提供更精确的 old_string 以唯一匹配。"
+        )
+
+    new_content = content.replace(old_string, new_string) if replace_all else content.replace(old_string, new_string, 1)
+    actual_changes = occurrence_count if replace_all else 1
+
+    try:
+        with open(resolved, "w", encoding="utf-8", newline=("\r\n" if line_ending == "CRLF" else "\n")) as f:
+            f.write(new_content)
+    except PermissionError:
+        return f"错误：无权写入文件「{resolved}」"
+    except OSError as e:
+        return f"错误：写入文件时出错「{resolved}」: {e}"
+
+    _READ_FILE_STATE[os.path.realpath(resolved)] = {
+        "content": new_content,
+        "mtime": os.path.getmtime(resolved),
+        "full_read": True,
+        "encoding": "utf-8",
+        "line_ending": line_ending,
+    }
+
+    return f"已成功对文件「{path}」应用 {actual_changes} 处编辑。"
 
 
 # ── Time Query ─────────────────────────────────────────────────────────────
@@ -1479,6 +1630,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "file_info": execute_file_info,
     "ask_user_question": execute_ask_user_question,
     "write_file": execute_write_file,
+    "edit_file": execute_edit_file,
     "bash": execute_bash,
 }
 
@@ -1584,6 +1736,18 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             parts.append(
                 f'<div class="tool-call-info">✏️ <b>{mode}文件：</b>{safe_wpath}</div>'
                 + _make_collapsible_preview(content, preview_label)
+            )
+        elif name == "edit_file":
+            epath = args.get("path", "")
+            eold = args.get("old_string", "")
+            re_all = args.get("replace_all", False)
+            safe_epath = html.escape(epath)
+            old_preview = html.escape(eold[:200])
+            old_label = f"替换原文（{len(eold)} 字符）" if len(eold) <= 200 else f"替换原文（前200 / 共{len(eold)} 字符）"
+            plural = "全部" if re_all else "第一处"
+            parts.append(
+                f'<div class="tool-call-info">✏️ <b>编辑文件（{plural}匹配）：</b>{safe_epath}</div>'
+                + _make_collapsible_preview(eold, old_label, max_chars=200)
             )
         elif name == "bash":
             cmd = args.get("command", "")
