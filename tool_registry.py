@@ -1396,10 +1396,13 @@ def set_bash_cwd(path: str) -> str:
     if _bash_session is not None and _bash_session._started and _bash_session.process is not None:
         if _bash_session.process.poll() is None:
             # Persistent shell is active. Execute cd to switch directory.
-            cmd = f"cd {shlex.quote(path)}"
-            res = _bash_session.execute(cmd, timeout=5)
-            if res.get("timed_out", False):
-                return f"⚠️ 目录切换命令超时，但已更新全局配置。新路径：{path}"
+            try:
+                cmd = f"cd {shlex.quote(path)}"
+                res = _bash_session.execute(cmd, timeout=5)
+                if res.get("timed_out", False):
+                    return f"⚠️ 目录切换命令超时，已更新全局配置。新路径：{path}"
+            except Exception as e:
+                return f"⚠️ 现有 Bash 会话异常（{e}），已更新工作目录配置。新路径：{path}"
     return f"✅ Bash 工作路径已切换至：{path}"
 
 
