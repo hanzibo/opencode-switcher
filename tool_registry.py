@@ -1223,6 +1223,7 @@ _MAX_BASH_OUTPUT_CHARS = 5000
 _BASH_TIMEOUT_DEFAULT = 60
 _BASH_SHELL = "/bin/bash"
 _BASH_DEFAULT_CWD = os.path.dirname(os.path.abspath(__file__))
+_bash_cwd = _BASH_DEFAULT_CWD
 
 
 class _BashSession:
@@ -1243,13 +1244,14 @@ class _BashSession:
 
     def start(self):
         """Spawn a new persistent bash subprocess (binary pipe mode)."""
+        global _bash_cwd
         self.process = subprocess.Popen(
             [_BASH_SHELL],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,
-            cwd=_BASH_DEFAULT_CWD,
+            cwd=_bash_cwd,
             preexec_fn=os.setsid if hasattr(os, "setsid") else None,
         )
         self._started = True
@@ -1378,6 +1380,33 @@ class _BashSession:
         self.stop()
         self._timed_out = False
         self.start()
+
+
+def set_bash_cwd(path: str) -> str:
+    """Set the working directory for the bash session and update active process if running."""
+    global _bash_cwd, _bash_session
+    import shlex
+    path = os.path.abspath(os.path.expanduser(path.strip()))
+    if not os.path.exists(path):
+        return f"❌ 路径不存在：{path}"
+    if not os.path.isdir(path):
+        return f"❌ 路径不是一个目录：{path}"
+
+    _bash_cwd = path
+    if _bash_session is not None and _bash_session._started and _bash_session.process is not None:
+        if _bash_session.process.poll() is None:
+            # Persistent shell is active. Execute cd to switch directory.
+            cmd = f"cd {shlex.quote(path)}"
+            res = _bash_session.execute(cmd, timeout=5)
+            if res.get("timed_out", False):
+                return f"⚠️ 目录切换命令超时，但已更新全局配置。新路径：{path}"
+    return f"✅ Bash 工作路径已切换至：{path}"
+
+
+def get_bash_cwd() -> str:
+    """Get the current working directory of the bash session."""
+    global _bash_cwd
+    return _bash_cwd
 
 
 # Global bash session (module-level singleton)

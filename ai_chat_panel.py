@@ -70,6 +70,7 @@ class AIChatPanel(Gtk.Box):
         ("/title", "设置/生成标题"),
         ("/model", "切换模型"),
         ("/sandbox", "设置 write_file 沙箱路径"),
+        ("/cd", "切换 bash 工作路径"),
     ]
 
     def __init__(self, conversation_store, llm_settings_store, theme="dark", ai_commands=None, pygments_css_cache=None):
@@ -1206,6 +1207,21 @@ class AIChatPanel(Gtk.Box):
                 f'font-size: 13px;">{result}</div>'
             )
             return
+        if text == "/cd":
+            buf.set_text("")
+            self._select_and_set_bash_cwd()
+            return
+        if text.startswith("/cd "):
+            buf.set_text("")
+            arg = text[len("/cd "):].strip()
+            from tool_registry import set_bash_cwd
+            result = set_bash_cwd(arg)
+            self.append_html_to_webview(
+                f'<div style="color: #38bdf8; padding: 8px 12px; margin: 4px 0; '
+                f'border: 1px solid #38bdf8; border-radius: 6px; font-size: 13px;">'
+                f'{html.escape(result)}</div>'
+            )
+            return
         buf.set_text("")
         self._send_user_message(text)
         self._remove_pending_image()
@@ -2232,6 +2248,50 @@ class AIChatPanel(Gtk.Box):
 
     def grab_entry_focus(self):
         self._ai_entry.grab_focus()
+
+    def _select_and_set_bash_cwd(self):
+        """Open a directory chooser dialog to let the user select a folder to set as the active bash working directory."""
+        toplevel = self.get_toplevel()
+        if not isinstance(toplevel, Gtk.Window):
+            toplevel = None
+
+        dialog = Gtk.FileChooserDialog(
+            title="选择 Bash 工作目录",
+            transient_for=toplevel,
+            action=Gtk.FileChooserAction.SELECT_FOLDER,
+        )
+        dialog.add_button("_取消", Gtk.ResponseType.CANCEL)
+        dialog.add_button("_选择", Gtk.ResponseType.ACCEPT)
+
+        # Connect focus protection hooks to prevent transient dialog from dismissing switcher main window
+        if self.on_dialog_shown:
+            dialog.connect("show", lambda *_: self.on_dialog_shown())
+        if self.on_dialog_hidden:
+            dialog.connect("destroy", lambda *_: self.on_dialog_hidden())
+
+        # Set initial folder to current bash CWD if valid
+        from tool_registry import get_bash_cwd
+        current_cwd = get_bash_cwd()
+        if os.path.isdir(current_cwd):
+            dialog.set_current_folder(current_cwd)
+
+        def _on_dialog_response(dlg, response):
+            if response == Gtk.ResponseType.ACCEPT:
+                chosen = dlg.get_filename()
+                dlg.destroy()
+                if chosen:
+                    from tool_registry import set_bash_cwd
+                    result = set_bash_cwd(chosen)
+                    self.append_html_to_webview(
+                        f'<div style="color: #38bdf8; padding: 8px 12px; margin: 4px 0; '
+                        f'border: 1px solid #38bdf8; border-radius: 6px; font-size: 13px;">'
+                        f'{html.escape(result)}</div>'
+                    )
+            else:
+                dlg.destroy()
+
+        dialog.connect("response", _on_dialog_response)
+        dialog.show_all()
 
     def set_theme(self, name):
         self._theme = name
