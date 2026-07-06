@@ -6,4 +6,5 @@ toggle.sock
 venv/
 .hzb-agents/
 .omo/
+.mimocode/
 codebase_analysis.md
