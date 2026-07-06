@@ -292,6 +292,11 @@ class AIChatPanel(Gtk.Box):
                                     or _extract_after_header(raw, '<div class="assistant-header">')
                                     or raw
                                 )
+                                # Strip thinking details blocks if present
+                                content = re.sub(
+                                    r'<details class=["\']thinking-details["\'].*?</details>\n?',
+                                    "", content, flags=re.DOTALL
+                                )
                                 # Strip any remaining header div tags and whitespace
                                 content = re.sub(
                                     r'<div class=["\'](?:assistant|thinking|answer)-header["\'].*?</div>\n?',
@@ -556,11 +561,26 @@ class AIChatPanel(Gtk.Box):
         self._ai_response_div_added = False
         self._ai_assistant_html_base = ""
         rendered_prompt = _close_unclosed_code_blocks(prompt_text)
-        self._ai_markdown_text = f'<div class="user-header">You:</div>\n\n{rendered_prompt}\n\n<copy-marker data-msg-index="0" class="user-copy-marker"></copy-marker>\n\n---\n\n'
+        self._ai_markdown_text = (
+            f'<div class="msg-row user" markdown="1">\n'
+            f'<div class="msg-avatar user">👤</div>\n'
+            f'<div class="msg-bubble user" markdown="1">\n'
+            f'{rendered_prompt}\n'
+            f'<copy-marker data-msg-index="0" class="user-copy-marker"></copy-marker>\n'
+            f'</div>\n'
+            f'</div>\n\n'
+        )
         self._ai_title_generated = False
         user_html = _markdown_to_html_safe(
             self._ai_markdown_text,
-            fallback_content=f'<div class="user-header">You:</div>\n\n<p>{prompt_text}</p>\n\n<hr>'
+            fallback_content=(
+                f'<div class="msg-row user" markdown="1">\n'
+                f'<div class="msg-avatar user">👤</div>\n'
+                f'<div class="msg-bubble user" markdown="1">\n'
+                f'<p>{prompt_text}</p>\n'
+                f'</div>\n'
+                f'</div>'
+            )
         )
         self._ai_webview.load_html(self.get_html_template(self._theme, user_html), "file:///")
 
@@ -613,7 +633,15 @@ class AIChatPanel(Gtk.Box):
         else:
             rendered_text = _close_unclosed_code_blocks(content)
         user_msg_idx = len(self._ai_messages) - 1
-        self._ai_markdown_text += f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_text}\n\n<copy-marker data-msg-index="{user_msg_idx}" class="user-copy-marker"></copy-marker>\n\n---\n\n'
+        self._ai_markdown_text += (
+            f'\n\n<div class="msg-row user" markdown="1">\n'
+            f'<div class="msg-avatar user">👤</div>\n'
+            f'<div class="msg-bubble user" markdown="1">\n'
+            f'{rendered_text}\n'
+            f'<copy-marker data-msg-index="{user_msg_idx}" class="user-copy-marker"></copy-marker>\n'
+            f'</div>\n'
+            f'</div>\n\n'
+        )
         # 重置 JS 自动滚动标志，确保新消息提交后滚动到最底端并跟随流式输出
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript("_autoScroll = true;", None, None)
@@ -1129,7 +1157,12 @@ class AIChatPanel(Gtk.Box):
 
             safe_answer = html.escape(text)
             self.append_html_to_webview(
-                f'\n\n---\n\n<div class="user-header">You:</div>\n\n{safe_answer}\n\n---\n\n'
+                f'\n\n<div class="msg-row user" markdown="1">\n'
+                f'<div class="msg-avatar user">👤</div>\n'
+                f'<div class="msg-bubble user" markdown="1">\n'
+                f'{safe_answer}\n'
+                f'</div>\n'
+                f'</div>\n\n'
             )
             ask_state["answer"] = text
             ask_state["event"].set()

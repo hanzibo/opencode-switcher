@@ -16,7 +16,7 @@ import tool_registry
 from clipboard_store import ChatMessage, CONFIG_DIR
 
 # Python markdown extensions used for AI panel rendering
-_MARKDOWN_EXTENSIONS = ["fenced_code", "codehilite", "tables"]
+_MARKDOWN_EXTENSIONS = ["fenced_code", "codehilite", "tables", "md_in_html"]
 
 # LaTeX commands that LLMs commonly double-escape (\\frac -> \frac, etc.)
 _LATEX_COMMANDS = frozenset({
@@ -455,7 +455,7 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
         if not reasoning or not reasoning.strip():
             return ""
         escaped = html.escape(reasoning)
-        return f'\n\n<div class="thinking-header">💭 Thinking Mode:</div>\n\n{escaped}\n\n---\n\n'
+        return f'<details class="thinking-details"><summary class="thinking-summary">💭 Thinking Process</summary><div class="thinking-content">{escaped}</div></details>\n\n'
 
     for i, m in enumerate(messages):
         role = m.get("role", "")
@@ -470,25 +470,37 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
             continue
 
         if role == "assistant" and tool_calls:
-            # Render reasoning if present (skip if content already has thinking header from streaming)
+            # Render reasoning if present (skip if content already has thinking header/details from streaming)
+            reasoning_html = ""
             if reasoning_content:
-                has_thinking_in_content = isinstance(content, str) and 'thinking-header' in content
+                has_thinking_in_content = (isinstance(content, str) and 
+                                           ('thinking-header' in content or 'thinking-details' in content))
                 if not has_thinking_in_content:
-                    parts.append(_render_reasoning(reasoning_content))
+                    reasoning_html = _render_reasoning(reasoning_content)
             # Show tool call info
             tc_html = tool_registry.format_tool_calls_for_display(tool_calls)
-            if tc_html:
-                parts.append("\n\n" + tc_html + "\n\n")
+            tc_part = "\n\n" + tc_html + "\n\n" if tc_html else ""
             # If there's also content, display it
             if isinstance(content, list):
                 content = _vision_content_to_text(content)
+            content_part = ""
             if content and content.strip():
                 has_header = ('<div class="assistant-header">' in content
                              or '<div class="answer-header">' in content
-                             or '<div class="thinking-header">' in content)
+                             or '<div class="thinking-header">' in content
+                             or '<details class="thinking-details">' in content)
                 prefix = '' if has_header else '\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
-                parts.append(f'{prefix}{content}\n\n')
-            parts.append('\n\n---\n\n')
+                content_part = f'{prefix}{content}\n\n'
+            
+            parts.append(
+                f'<div class="msg-row assistant" markdown="1">\n'
+                f'<div class="msg-avatar assistant">🤖</div>\n'
+                f'<div class="msg-bubble assistant" markdown="1">\n'
+                f'{reasoning_html}{tc_part}{content_part}\n'
+                f'<copy-marker data-msg-index="{i}"></copy-marker>\n'
+                f'</div>\n'
+                f'</div>\n\n'
+            )
             continue
 
         if not content and not reasoning_content:
@@ -499,24 +511,40 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
         else:
             rendered_content = _close_unclosed_code_blocks(content)
 
-        if i == 0:
-            parts.append(f'<div class="user-header">You:</div>\n\n{rendered_content}\n\n<copy-marker data-msg-index="{i}" class="user-copy-marker"></copy-marker>\n\n---\n\n')
-        elif role == "user":
-            parts.append(f'\n\n---\n\n<div class="user-header">You:</div>\n\n{rendered_content}\n\n<copy-marker data-msg-index="{i}" class="user-copy-marker"></copy-marker>\n\n---\n\n')
+        if i == 0 or role == "user":
+            parts.append(
+                f'<div class="msg-row user" markdown="1">\n'
+                f'<div class="msg-avatar user">👤</div>\n'
+                f'<div class="msg-bubble user" markdown="1">\n'
+                f'{rendered_content}\n'
+                f'<copy-marker data-msg-index="{i}" class="user-copy-marker"></copy-marker>\n'
+                f'</div>\n'
+                f'</div>\n\n'
+            )
         elif role == "assistant":
             content_str = content if isinstance(content, str) else _vision_content_to_text(content)
-            # Render reasoning if present (skip if content already has thinking header from streaming)
-            if reasoning_content and 'thinking-header' not in content_str:
-                parts.append(_render_reasoning(reasoning_content))
-            if content_str.strip():
-                # Content already has role headers embedded from streaming phase;
-                # avoid adding another .assistant-header wrapper to prevent duplication.
-                has_header = ('<div class="assistant-header">' in content_str
-                             or '<div class="answer-header">' in content_str
-                             or '<div class="thinking-header">' in content_str)
-                prefix = '' if has_header else '\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
+            # Render reasoning if present (skip if content already has thinking header/details from streaming)
+            reasoning_html = ""
+            if reasoning_content and 'thinking-header' not in content_str and 'thinking-details' not in content_str:
+                reasoning_html = _render_reasoning(reasoning_content)
+            
+            if content_str.strip() or reasoning_html:
+                prefix = ""
+                if content_str.strip():
+                    # Content already has role headers embedded from streaming phase;
+                    # avoid adding another .assistant-header wrapper to prevent duplication.
+                    has_header = ('<div class="assistant-header">' in content_str
+                                 or '<div class="answer-header">' in content_str
+                                 or '<div class="thinking-header">' in content_str
+                                 or '<details class="thinking-details">' in content_str)
+                    prefix = '' if has_header else '\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
                 parts.append(
-                    f'{prefix}{content_str}\n\n'
-                    f'<copy-marker data-msg-index="{i}"></copy-marker>\n\n---\n\n'
+                    f'<div class="msg-row assistant" markdown="1">\n'
+                    f'<div class="msg-avatar assistant">🤖</div>\n'
+                    f'<div class="msg-bubble assistant" markdown="1">\n'
+                    f'{reasoning_html}{prefix}{content_str}\n\n'
+                    f'<copy-marker data-msg-index="{i}"></copy-marker>\n'
+                    f'</div>\n'
+                    f'</div>\n\n'
                 )
     return "".join(parts)

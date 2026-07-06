@@ -511,6 +511,239 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 .lightbox-img.dragging {{
                     transition: none !important;
                 }}
+                
+                /* --- Card-Bubble UI Styles --- */
+                hr {{
+                    display: none !important;
+                }}
+                
+                /* Hide redundant headers inside bubbles */
+                .user-header, .assistant-header, .answer-header {{
+                    display: none !important;
+                }}
+                
+                /* Message Row Layout */
+                .msg-row {{
+                    display: flex;
+                    align-items: flex-start;
+                    margin-bottom: 20px;
+                    gap: 12px;
+                    position: relative;
+                    box-sizing: border-box;
+                    width: 100%;
+                }}
+                .msg-row.user {{
+                    flex-direction: row-reverse;
+                }}
+                .msg-avatar {{
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 50%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 14px;
+                    flex-shrink: 0;
+                    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+                    user-select: none;
+                }}
+                .msg-avatar.user {{
+                    background: linear-gradient(135deg, #6366f1, #4f46e5);
+                    color: white;
+                }}
+                .msg-avatar.assistant {{
+                    background: linear-gradient(135deg, #0d9488, #0f766e);
+                    color: white;
+                }}
+                .msg-bubble {{
+                    position: relative;
+                    max-width: 82%;
+                    padding: 12px 16px;
+                    border-radius: 16px;
+                    font-size: 14px;
+                    line-height: 1.6;
+                    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.06);
+                    box-sizing: border-box;
+                }}
+                .msg-bubble.user {{
+                    background: rgba(99, 102, 241, 0.1);
+                    border: 1px solid rgba(99, 102, 241, 0.18);
+                    border-bottom-right-radius: 4px;
+                    color: inherit;
+                    width: fit-content;
+                }}
+                .msg-bubble.assistant {{
+                    background: rgba(255, 255, 255, 0.02);
+                    border: 1px solid rgba(255, 255, 255, 0.04);
+                    border-bottom-left-radius: 4px;
+                    width: calc(100% - 44px);
+                    padding-bottom: 32px; /* room for absolute copy/retry row */
+                }}
+                
+                .light .msg-bubble.user {{
+                    background: rgba(99, 102, 241, 0.07);
+                    border-color: rgba(99, 102, 241, 0.15);
+                    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
+                }}
+                .light .msg-bubble.assistant {{
+                    background: rgba(0, 0, 0, 0.015);
+                    border-color: rgba(0, 0, 0, 0.04);
+                }}
+                
+                .user-content {{
+                    word-break: break-word;
+                }}
+                
+                /* Muted and collapsible thinking styles */
+                details.thinking-details {{
+                    margin: 8px 0 14px 0;
+                    padding: 8px 12px;
+                    background: rgba(128, 128, 128, 0.05);
+                    border: 1px solid rgba(128, 128, 128, 0.12);
+                    border-radius: 8px;
+                    font-size: 13px;
+                    transition: all 0.2s ease;
+                }}
+                
+                details.thinking-details[open] {{
+                    background: rgba(128, 128, 128, 0.07);
+                }}
+                
+                summary.thinking-summary {{
+                    font-weight: 500;
+                    color: {thinking_color};
+                    cursor: pointer;
+                    outline: none;
+                    user-select: none;
+                }}
+                
+                summary.thinking-summary::-webkit-details-marker {{
+                    color: {thinking_color};
+                    margin-right: 6px;
+                }}
+                
+                .thinking-content {{
+                    margin-top: 8px;
+                    padding-top: 8px;
+                    border-top: 1px dashed rgba(128, 128, 128, 0.15);
+                    color: rgba(255, 255, 255, 0.7);
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    white-space: pre-wrap;
+                    line-height: 1.5;
+                }}
+                
+                .light details.thinking-details {{
+                    background: rgba(0, 0, 0, 0.02);
+                    border: 1px solid rgba(0, 0, 0, 0.06);
+                }}
+                
+                .light .thinking-content {{
+                    color: rgba(15, 23, 42, 0.75);
+                }}
+                
+                /* Action Button Row Hover-Reveal & Pill Styling */
+                .msg-btn-row {{
+                    position: absolute;
+                    bottom: 6px;
+                    right: 12px;
+                    display: flex;
+                    gap: 6px;
+                    opacity: 0;
+                    transition: opacity 0.2s ease;
+                    z-index: 10;
+                }}
+                
+                .msg-bubble:hover .msg-btn-row {{
+                    opacity: 1;
+                }}
+                
+                .msg-copy-btn, .retry-btn {{
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    background: rgba(128, 128, 128, 0.12);
+                    border: 1px solid rgba(128, 128, 128, 0.2);
+                    border-radius: 6px;
+                    color: inherit;
+                    cursor: pointer;
+                    font-size: 11px;
+                    padding: 3px 8px;
+                    transition: all 0.2s ease;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                    outline: none;
+                    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                    opacity: 1 !important; /* override old opacity rules */
+                }}
+                
+                .msg-copy-btn:hover, .retry-btn:hover {{
+                    background: rgba(128, 128, 128, 0.22);
+                    border-color: rgba(128, 128, 128, 0.3);
+                    transform: translateY(-1px);
+                }}
+                
+                .msg-copy-btn:active, .retry-btn:active {{
+                    transform: translateY(0);
+                }}
+                
+                .light .msg-copy-btn, .light .retry-btn {{
+                    background: rgba(0, 0, 0, 0.05);
+                    border-color: rgba(0, 0, 0, 0.12);
+                    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+                }}
+                
+                .light .msg-copy-btn:hover, .light .retry-btn:hover {{
+                    background: rgba(0, 0, 0, 0.08);
+                }}
+
+                /* Typing Indicator Styling */
+                .typing-indicator {{
+                    display: flex;
+                    align-items: center;
+                    gap: 4px;
+                    padding: 6px 0;
+                    width: fit-content;
+                }}
+                .typing-dot {{
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 50%;
+                    background: rgba(255, 255, 255, 0.45);
+                    animation: typing-bounce 1.2s infinite ease-in-out;
+                }}
+                .light .typing-dot {{
+                    background: rgba(15, 23, 42, 0.4);
+                }}
+                .typing-dot:nth-child(1) {{ animation-delay: 0s; }}
+                .typing-dot:nth-child(2) {{ animation-delay: 0.15s; }}
+                .typing-dot:nth-child(3) {{ animation-delay: 0.3s; }}
+                @keyframes typing-bounce {{
+                    0%, 80%, 100% {{ transform: scale(0.6); opacity: 0.4; }}
+                    40% {{ transform: scale(1.0); opacity: 1; }}
+                }}
+
+                /* Code Language Pill Styling */
+                pre {{
+                    position: relative;
+                    padding-top: 32px !important;
+                }}
+                pre::before {{
+                    content: attr(data-lang);
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    font-size: 10px;
+                    font-weight: bold;
+                    letter-spacing: 0.8px;
+                    padding: 4px 10px;
+                    border-radius: 6px 0 6px 0;
+                    background: rgba(128, 128, 128, 0.15);
+                    color: rgba(255, 255, 255, 0.6);
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                }}
+                .light pre::before {{
+                    color: rgba(15, 23, 42, 0.5);
+                    background: rgba(0, 0, 0, 0.05);
+                }}
             </style>
             <script>
                 function _renderMath(element) {{
@@ -552,14 +785,27 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     window._isStreaming = true;
                     const content = document.getElementById('content');
                     if (!document.getElementById(msgId)) {{
-                        const div = document.createElement('div');
-                        div.id = msgId;
-                        content.appendChild(div);
+                        const row = document.createElement('div');
+                        row.id = msgId;
+                        row.className = 'msg-row assistant';
+                        
+                        const avatar = document.createElement('div');
+                        avatar.className = 'msg-avatar assistant';
+                        avatar.textContent = '🤖';
+                        row.appendChild(avatar);
+                        
+                        const bubble = document.createElement('div');
+                        bubble.className = 'msg-bubble assistant';
+                        bubble.id = msgId + '-bubble';
+                        bubble.innerHTML = '<div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>';
+                        row.appendChild(bubble);
+                        
+                        content.appendChild(row);
                     }}
                     _scrollToBottom();
                 }}
                 function updateMessageContainer(msgId, html) {{
-                    const div = document.getElementById(msgId);
+                    const div = document.getElementById(msgId + '-bubble') || document.getElementById(msgId);
                     if (div) {{
                         div.innerHTML = html;
                         addCopyButtons();
@@ -568,7 +814,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     _scrollToBottom();
                 }}
                 function appendHtml(msgId, html) {{
-                    const div = document.getElementById(msgId);
+                    const div = document.getElementById(msgId + '-bubble') || document.getElementById(msgId);
                     if (div && html) {{
                         div.insertAdjacentHTML('beforeend', html);
                         _renderMath(div);
@@ -578,6 +824,19 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 }}
                 function addCopyButtons() {{
                     document.querySelectorAll('pre').forEach(function(pre) {{
+                        if (pre.classList.contains('tool-result-content')) return;
+                        
+                        const code = pre.querySelector('code');
+                        if (code) {{
+                            let lang = 'CODE';
+                            code.classList.forEach(function(cls) {{
+                                if (cls.startsWith('language-')) {{
+                                    lang = cls.replace('language-', '').toUpperCase();
+                                }}
+                            }});
+                            pre.setAttribute('data-lang', lang);
+                        }}
+
                         if (pre.querySelector('.copy-btn')) return;
                         const btn = document.createElement('button');
                         btn.className = 'copy-btn';

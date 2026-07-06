@@ -1,7 +1,38 @@
+import re
 import json
 from gi.repository import GLib
 import tool_registry
 from llm_client import _LLMHttpError
+
+def _clean_messages_for_llm(messages: list) -> list:
+    cleaned = []
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "assistant" and isinstance(content, str):
+            # Strip details thinking blocks
+            cleaned_content = re.sub(
+                r'<details class=["\']thinking-details["\'].*?</details>\n*',
+                "", content, flags=re.DOTALL
+            )
+            # Strip header divs
+            cleaned_content = re.sub(
+                r'<div class=["\'](?:assistant|thinking|answer)-header["\'].*?</div>\n*',
+                "", cleaned_content, flags=re.DOTALL
+            )
+            # Strip details summary and div tags
+            cleaned_content = re.sub(
+                r'</?details.*?>|</?summary.*?>|</?div.*?>',
+                "", cleaned_content
+            )
+            cleaned_content = cleaned_content.strip()
+            
+            msg_copy = dict(msg)
+            msg_copy["content"] = cleaned_content
+            cleaned.append(msg_copy)
+        else:
+            cleaned.append(msg)
+    return cleaned
 
 MAX_TOOL_ITERATIONS = 25
 
@@ -98,8 +129,9 @@ def _perform_llm_call(
     reset_iteration_state_fn()
 
     try:
+        cleaned_msgs = _clean_messages_for_llm(messages)
         for delta in llm_client.stream_chat_completion(
-            base_url, api_key, model_name, messages,
+            base_url, api_key, model_name, cleaned_msgs,
             timeout=30, cancel_event=cancel_event,
             temperature=temperature, max_tokens=max_tokens, top_p=top_p,
             tools=tool_registry.TOOL_DEFINITIONS,
@@ -119,7 +151,7 @@ def _perform_llm_call(
             if reasoning:
                 if not thinking_header_added:
                     with stream_lock:
-                        append_to_stream_queue_fn('<div class="thinking-header">💭 Thinking Mode:</div>\n')
+                        append_to_stream_queue_fn('<details class="thinking-details" open><summary class="thinking-summary">💭 Thinking Process</summary><div class="thinking-content">')
                     thinking_header_added = True
                 with stream_lock:
                     append_to_stream_queue_fn(reasoning)
@@ -132,13 +164,17 @@ def _perform_llm_call(
                     response_header_added = True
                     if has_thinking:
                         with stream_lock:
-                            append_to_stream_queue_fn('\n\n<div class="answer-header">💡 Answer:</div>\n')
+                            append_to_stream_queue_fn('</div></details>\n\n<div class="answer-header">💡 Answer:</div>\n')
                     else:
                         with stream_lock:
                             append_to_stream_queue_fn('\n\n<div class="assistant-header">🤖 Assistant:</div>\n')
                 with stream_lock:
                     append_to_stream_queue_fn(content)
                 assistant_text += content
+
+        if thinking_header_added and not response_header_added:
+            with stream_lock:
+                append_to_stream_queue_fn('</div></details>\n\n')
 
         if tool_calls_found:
             tool_call_msg = {
