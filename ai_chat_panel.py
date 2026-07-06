@@ -284,24 +284,37 @@ class AIChatPanel(Gtk.Box):
                         try:
                             index = int(index_str)
                             msgs = self._ai_messages
-                            if 0 <= index < len(msgs) and msgs[index].get("role") == "assistant":
-                                raw = msgs[index].get("content", "")
-                                # Extract only the Answer part (skip Thinking/Reasoning)
-                                content = (
-                                    _extract_after_header(raw, '<div class="answer-header">')
-                                    or _extract_after_header(raw, '<div class="assistant-header">')
-                                    or raw
-                                )
-                                # Strip thinking details blocks if present
-                                content = re.sub(
-                                    r'<details class=["\']thinking-details["\'].*?</details>\n?',
-                                    "", content, flags=re.DOTALL
-                                )
-                                # Strip any remaining header div tags and whitespace
-                                content = re.sub(
-                                    r'<div class=["\'](?:assistant|thinking|answer)-header["\'].*?</div>\n?',
-                                    "", content, flags=re.DOTALL
-                                ).strip()
+                            if 0 <= index < len(msgs) and msgs[index].get("role") in ("assistant", "tool"):
+                                # Gather all assistant messages in this turn
+                                turn_msgs = []
+                                temp_idx = index
+                                while temp_idx < len(msgs) and msgs[temp_idx].get("role") in ("assistant", "tool"):
+                                    turn_msgs.append(msgs[temp_idx])
+                                    temp_idx += 1
+                                
+                                # Extract final answer content from assistant messages in this turn
+                                content_parts = []
+                                for msg in turn_msgs:
+                                    if msg.get("role") == "assistant" and msg.get("content"):
+                                        content_str = msg["content"]
+                                        # Strip details thinking blocks
+                                        content_str = re.sub(
+                                            r'<details class=["\']thinking-details["\'].*?</details>\n?',
+                                            "", content_str, flags=re.DOTALL
+                                        )
+                                        # Strip headers
+                                        content_str = re.sub(
+                                            r'<div class=["\'](?:assistant|thinking|answer)-header["\'].*?</div>\n?',
+                                            "", content_str, flags=re.DOTALL
+                                        )
+                                        content_str = re.sub(
+                                            r'</?details.*?>|</?summary.*?>|</?div.*?>',
+                                            "", content_str
+                                        )
+                                        if content_str.strip():
+                                            content_parts.append(content_str.strip())
+                                            
+                                content = "\n\n".join(content_parts).strip()
                                 if content:
                                     if self.on_ai_copy_started:
                                         self.on_ai_copy_started()
