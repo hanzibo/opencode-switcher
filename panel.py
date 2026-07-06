@@ -160,6 +160,15 @@ class SearchPanel:
 
         middle_hbox.pack_start(self._dir_scrolled, False, True, 0)
 
+        self._session_sidebar_toggle = Gtk.ToggleButton.new_with_label("\u25c0")
+        self._session_sidebar_toggle.set_relief(Gtk.ReliefStyle.NONE)
+        self._session_sidebar_toggle.set_tooltip_text("折叠目录栏")
+        self._session_sidebar_toggle.get_style_context().add_class("sidebar-toggle")
+        self._session_sidebar_toggle.set_size_request(20, -1)
+        self._session_sidebar_toggle.set_can_focus(False)
+        self._session_sidebar_toggle.connect("toggled", self._on_session_sidebar_toggled)
+        middle_hbox.pack_start(self._session_sidebar_toggle, False, False, 0)
+
         self._separator = Gtk.DrawingArea.new()
         self._separator.set_size_request(1, -1)
         self._separator.connect("draw", self._on_separator_draw)
@@ -246,19 +255,23 @@ class SearchPanel:
             " color: %(search_fg)s; border: 1px solid %(input_border)s; border-radius: 8px;"
             " caret-color: %(caret)s; margin: 16px 20px 10px 20px; }"
             "#searchEntry:focus { border-color: %(sel_border)s; }"
-            "#resultLabel { font-family: \"JetBrains Mono\",\"monospace\"; font-size: 20px; padding: 0; }"
+            "#resultLabel { font-family: \"JetBrains Mono\",\"monospace\"; font-size: 18px; font-weight: bold; padding: 0; }"
             "#dirLabel { font-size: 16px; padding: 0; }"
             "#snippetLabel { font-size: 16px; padding: 0; }"
-            ".row { padding: 12px 18px; border-radius: 6px; margin: 2px 10px; border-left: 4px solid transparent; }"
+            ".row { padding: 12px 18px; border-radius: 6px; margin: 4px 10px; border-left: 4px solid transparent; }"
             ".row:hover { background: %(hover_bg)s; }"
             ".row:selected { background: %(sel_bg)s; border-left: 4px solid %(sel_border)s; }"
             "#emptyLabel { font-size: 20px; padding: 0; }"
             "#sideLabel { font-size: 17px; padding: 12px 18px; }"
             "#tabLabel { font-size: 16px; font-weight: bold; padding: 12px 24px; color: %(tab_fg)s; }"
-            ".tab-active { background: transparent; border-bottom: 3px solid %(sel_border)s; }"
+            ".tab-active { background: %(sel_bg)s; border-bottom: 3px solid %(sel_border)s; }"
             ".tab-active #tabLabel { color: %(tab_active_fg)s; }"
             ".tab-inactive { background: transparent; border-bottom: 3px solid transparent; }"
             ".tab-inactive:hover { background: %(hover_bg)s; }"
+            ".sidebar-toggle { font-size: 10px; padding: 0; min-width: 18px; min-height: 18px;"
+            " border: none; background: transparent; color: %(tab_fg)s;"
+            " border-radius: 2px; margin: 0; }"
+            ".sidebar-toggle:hover { background: %(btn_hover)s; color: %(text_fg)s; }"
             "dialog, messagedialog, GtkDialog, GtkMessageDialog, "
             "dialog box, messagedialog box, dialog grid, messagedialog grid, "
             ".dialog-vbox, .dialog-action-area, .dialog-content-area { "
@@ -538,6 +551,22 @@ class SearchPanel:
         else:
             self._separator_rgba = self._default_separator_rgba
         self._separator.queue_draw()
+
+    def _on_session_sidebar_toggled(self, btn):
+        collapsed = btn.get_active()
+        if collapsed:
+            self._dir_scrolled.set_no_show_all(True)
+            self._dir_scrolled.hide()
+            self._separator.hide()
+            btn.set_label("\u25b6")
+            btn.set_tooltip_text("展开目录栏")
+        else:
+            self._dir_scrolled.set_no_show_all(False)
+            self._dir_scrolled.show()
+            self._separator.show()
+            btn.set_label("\u25c0")
+            btn.set_tooltip_text("折叠目录栏")
+        self._window.queue_resize()
 
     def _on_dir_focus_in(self, *args):
         self._update_separator_focus(True)

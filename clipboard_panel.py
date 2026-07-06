@@ -72,6 +72,7 @@ _LATEX_COMMANDS = frozenset({
 
 CATEGORY_WIDTH = 200
 ACTION_WIDTH = 140
+PANEL_WIDTH = 1320
 # ponytail: removed fixed AI_PANEL_WIDTH — now uses equal expand with content area
 
 
@@ -191,6 +192,7 @@ class ClipboardPanel(Gtk.Box):
         self._loading_data = False
         self._conversation_store = ConversationStore()
         self._pygments_css_cache: Dict[str, str] = {}
+        self._sidebar_collapsed = False
 
         self._bg_color = Gdk.RGBA()
         self._title_color = Gdk.RGBA()
@@ -284,14 +286,15 @@ class ClipboardPanel(Gtk.Box):
         self._filter_tabs_box.set_margin_bottom(8)
 
         tab_spec = [
-            ("all", "全部"),
-            ("text", "文本"),
-            ("image", "图片"),
-            ("link", "链接"),
-            ("code", "代码")
+            ("all", "📋", "全部"),
+            ("text", "📝", "文本"),
+            ("image", "🖼️", "图片"),
+            ("link", "🔗", "链接"),
+            ("code", "💻", "代码")
         ]
-        for t_type, t_label in tab_spec:
-            btn = Gtk.Button.new_with_label(t_label)
+        for t_type, t_icon, t_tip in tab_spec:
+            btn = Gtk.Button.new_with_label(t_icon)
+            btn.set_tooltip_text(t_tip)
             btn.get_style_context().add_class("filter-tab")
             if t_type == "all":
                 btn.get_style_context().add_class("filter-tab-active")
@@ -300,52 +303,33 @@ class ClipboardPanel(Gtk.Box):
             self._tab_buttons[t_type] = btn
             btn.show()
 
+        self._filter_gear_btn = Gtk.Button.new_with_label("\u2699")
+        self._filter_gear_btn.set_tooltip_text("更多操作")
+        self._filter_gear_btn.get_style_context().add_class("filter-gear")
+        self._filter_gear_btn.set_relief(Gtk.ReliefStyle.NONE)
+        self._filter_gear_btn.set_can_focus(False)
+        self._filter_gear_btn.connect("clicked", self._on_filter_gear_clicked)
+        self._filter_tabs_box.pack_end(self._filter_gear_btn, False, False, 0)
+        self._filter_gear_btn.show()
+
         self._content_vbox.pack_start(self._filter_tabs_box, False, False, 0)
         self._content_vbox.pack_start(self._content_scrolled, True, True, 0)
 
-        self._action_sep = Gtk.DrawingArea.new()
-        self._action_sep.set_size_request(1, -1)
-        self._action_sep.connect("draw", self._on_sep_draw)
- 
-        self._action_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
-        self._action_box.set_size_request(ACTION_WIDTH, -1)
-        self._action_box.set_valign(Gtk.Align.START)
-        self._action_box.set_margin_start(12)
-        self._action_box.set_margin_top(12)
- 
-        self._btn_delete = Gtk.Button.new_with_label("Delete")
-        self._btn_delete.connect("clicked", self._on_delete_clicked)
-        self._btn_delete_all = Gtk.Button.new_with_label("Delete All")
-        self._btn_delete_all.connect("clicked", self._on_delete_all_clicked)
-        self._btn_prompts_config = Gtk.Button.new_with_label("Prompts Config")
-        self._btn_prompts_config.connect("clicked", self._on_prompts_config_clicked)
-        self._btn_create = Gtk.Button.new_with_label("Create")
-        self._btn_create.connect("clicked", self._on_create_clicked)
-        self._btn_edit = Gtk.Button.new_with_label("Edit")
-        self._btn_edit.connect("clicked", self._on_edit_clicked)
- 
-        self._btn_sort = Gtk.Button.new_with_label("Sort")
-        self._btn_sort.connect("clicked", self._on_sort_clicked)
- 
-        self._action_sep2 = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
-        self._action_sep2.set_margin_top(8)
-        self._action_sep2.set_margin_bottom(8)
- 
-        self._btn_backup = Gtk.Button.new_with_label("Backup")
-        self._btn_backup.connect("clicked", self._on_backup_clicked)
- 
-        self._btn_restore = Gtk.Button.new_with_label("Restore")
-        self._btn_restore.connect("clicked", self._on_restore_clicked)
- 
-        self._btn_recycle_bin = Gtk.Button.new_with_label("Recycle Bin")
-        self._btn_recycle_bin.connect("clicked", self._on_recycle_bin_clicked)
- 
-        self._btn_sort_cats = Gtk.Button.new_with_label("Sort Categories")
-        self._btn_sort_cats.connect("clicked", self._on_sort_cats_clicked)
- 
+        self._sidebar_toggle = Gtk.ToggleButton.new_with_label("\u25c0")
+        self._sidebar_toggle.set_relief(Gtk.ReliefStyle.NONE)
+        self._sidebar_toggle.set_tooltip_text("折叠侧边栏")
+        self._sidebar_toggle.get_style_context().add_class("sidebar-toggle")
+        self._sidebar_toggle.set_size_request(20, -1)
+        self._sidebar_toggle.set_can_focus(False)
+        self._sidebar_toggle.connect("toggled", self._on_sidebar_toggled)
+
         self.pack_start(self._cat_vbox, False, True, 0)
+        self.pack_start(self._sidebar_toggle, False, False, 0)
         self.pack_start(self._cat_sep, False, False, 0)
-        self.pack_start(self._content_vbox, True, True, 0)
+
+        self._content_paned = Gtk.Paned.new(Gtk.Orientation.HORIZONTAL)
+        self._content_paned.pack1(self._content_vbox, resize=True, shrink=False)
+        self.pack_start(self._content_paned, True, True, 0)
 
         # AI Chat Panel
         self._ai_chat_panel = AIChatPanel(
@@ -367,10 +351,8 @@ class ClipboardPanel(Gtk.Box):
         self._ai_chat_panel.on_combo_popup_hidden = self.on_combo_popup_hidden
         self._ai_chat_panel.on_clipboard_to_ai_request = self.on_clipboard_to_ai_request
 
-        self.pack_start(self._ai_chat_panel.separator, False, False, 0)
-        self.pack_start(self._ai_chat_panel, True, True, 0)
-        self.pack_start(self._action_sep, False, False, 0)
-        self.pack_start(self._action_box, False, False, 0)
+        self._content_paned.pack2(self._ai_chat_panel, resize=False, shrink=False)
+        self._content_paned.set_position(int(PANEL_WIDTH * 0.5))
 
         # Rebuild category list after all UI components (especially _content_list) are initialized
         self._rebuild_category_list()
@@ -428,6 +410,22 @@ class ClipboardPanel(Gtk.Box):
             if hasattr(row, 'cat_id') and row.cat_id == self._active_category_id:
                 self._cat_list.select_row(row)
                 break
+
+    def _on_sidebar_toggled(self, btn):
+        self._sidebar_collapsed = btn.get_active()
+        if self._sidebar_collapsed:
+            self._cat_vbox.set_no_show_all(True)
+            self._cat_vbox.hide()
+            self._cat_sep.hide()
+            btn.set_label("\u25b6")
+            btn.set_tooltip_text("展开侧边栏")
+        else:
+            self._cat_vbox.set_no_show_all(False)
+            self._cat_vbox.show()
+            self._cat_sep.show()
+            btn.set_label("\u25c0")
+            btn.set_tooltip_text("折叠侧边栏")
+        self.queue_resize()
 
     def _on_sep_draw(self, widget, cr):
         alloc = widget.get_allocation()
@@ -494,7 +492,7 @@ class ClipboardPanel(Gtk.Box):
             ".cat-row:selected { background: %(cat_sel)s; border-left: 4px solid %(cat_sel_border)s; }"
             ".cat-row #catLabel { color: %(text_secondary)s; }"
             ".cat-row:selected #catLabel { color: %(text_fg)s; }"
-            ".row { padding: 12px 18px; border-radius: 6px; margin: 2px 8px; border-left: 4px solid transparent; }"
+            ".row { padding: 12px 18px; border-radius: 6px; margin: 4px 8px; border-left: 4px solid transparent; }"
             ".row:hover { background: %(hover_bg)s; }"
             ".row:selected { background: %(sel_bg)s; border-left: 4px solid %(sel_border)s; }"
             "#catLabel { font-size: 16px; font-weight: 500; padding: 0 8px; }"
@@ -511,9 +509,21 @@ class ClipboardPanel(Gtk.Box):
             ".cat-tool-btn { font-size: 12px; padding: 4px 6px; border: none; border-radius: 4px; }"
             ".cat-tool-btn:hover { background: %(btn_hover)s; }"
             ".cat-tool-btn:active { background: %(btn_active)s; }"
-            ".filter-tab { padding: 4px 12px; border-radius: 20px; border: 1px solid %(btn_border)s; background: %(btn_bg)s; background-image: none; box-shadow: none; font-size: 13px; color: %(text_secondary)s; }"
+            ".filter-tab { padding: 2px 8px; border-radius: 20px; border: 1px solid %(btn_border)s; background: %(btn_bg)s; background-image: none; box-shadow: none; font-size: 15px; color: %(text_secondary)s; }"
             ".filter-tab:hover { background: %(btn_hover)s; background-image: none; color: %(text_fg)s; }"
             ".filter-tab-active { background: %(sel_bg)s; background-image: none; border-color: %(sel_border)s; color: %(text_fg)s; }"
+            ".sidebar-toggle { font-size: 10px; padding: 0; min-width: 18px; min-height: 18px;"
+            " border: none; background: transparent; color: %(text_secondary)s;"
+            " border-radius: 2px; margin: 0; }"
+            ".sidebar-toggle:hover { background: %(btn_hover)s; color: %(text_fg)s; }"
+            ".filter-gear { font-size: 16px; padding: 0 4px; min-width: 24px; min-height: 22px;"
+            " border: none; background: transparent; color: %(text_secondary)s;"
+            " border-radius: 4px; }"
+            ".filter-gear:hover { background: %(btn_hover)s; color: %(text_fg)s; }"
+            ".row-more-btn { font-size: 18px; padding: 0 4px; min-width: 26px; min-height: 26px;"
+            " border: none; background: transparent; color: %(text_secondary)s;"
+            " border-radius: 4px; }"
+            ".row-more-btn:hover { background: %(btn_hover)s; color: %(text_fg)s; }"
             ".cat-sep-row separator { background: %(cat_sep_color)s; min-height: 1px; }"
             "dialog, messagedialog, GtkDialog, GtkMessageDialog, .custom-dialog, "
             "dialog box, messagedialog box, dialog grid, messagedialog grid, .custom-dialog box, "
@@ -711,9 +721,7 @@ class ClipboardPanel(Gtk.Box):
         else:
             self._filter_tabs_box.hide()
 
-        self._update_actions()
-
-        # 1. Build regular item rows
+        # Build regular item rows
         for idx, item in enumerate(items):
             row = Gtk.ListBoxRow.new()
             row.get_style_context().add_class("row")
@@ -792,6 +800,50 @@ class ClipboardPanel(Gtk.Box):
         # Invalidate filter to trigger Gtk ListBox filter func
         self._content_list.invalidate_filter()
         GLib.idle_add(self._select_first_visible_row)
+
+    def _on_filter_gear_clicked(self, btn):
+        menu = Gtk.Menu.new()
+        is_clipboard = self._active_category_id == "__clipboard__"
+
+        if is_clipboard:
+            del_all = Gtk.MenuItem.new_with_label("Delete All")
+            del_all.connect("activate", lambda *_: self._on_delete_all_clicked(None))
+            menu.append(del_all)
+
+        prompts = Gtk.MenuItem.new_with_label("Prompts Config")
+        prompts.connect("activate", lambda *_: self._on_prompts_config_clicked(None))
+        menu.append(prompts)
+
+        sort_cats = Gtk.MenuItem.new_with_label("Sort Categories")
+        sort_cats.connect("activate", lambda *_: self._on_sort_cats_clicked(None))
+        menu.append(sort_cats)
+
+        if not is_clipboard:
+            cat = self._cat_store.get(self._active_category_id) if self._active_category_id else None
+            if cat and len(cat.items) > 1:
+                sort_items = Gtk.MenuItem.new_with_label("Sort Items")
+                sort_items.connect("activate", lambda *_: self._show_sort_dialog())
+                menu.append(sort_items)
+
+        menu.append(Gtk.SeparatorMenuItem.new())
+
+        backup = Gtk.MenuItem.new_with_label("Backup")
+        backup.connect("activate", lambda *_: self._on_backup_clicked(None))
+        menu.append(backup)
+
+        restore = Gtk.MenuItem.new_with_label("Restore")
+        restore.connect("activate", lambda *_: self._on_restore_clicked(None))
+        menu.append(restore)
+
+        recycle = Gtk.MenuItem.new_with_label("Recycle Bin")
+        recycle.connect("activate", lambda *_: self._on_recycle_bin_clicked(None))
+        menu.append(recycle)
+
+        if self.on_menu_shown:
+            self.on_menu_shown()
+        menu.connect("deactivate", lambda *_: GLib.timeout_add(300, self._on_menu_deactivated))
+        menu.show_all()
+        menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, None)
 
     def _list_filter_func(self, row, user_data):
         if getattr(row, "is_placeholder", False):
@@ -900,6 +952,14 @@ class ClipboardPanel(Gtk.Box):
 
         hbox.pack_start(right_vbox, False, False, 0)
 
+        more_btn = Gtk.Button.new_with_label("\u22ef")
+        more_btn.set_relief(Gtk.ReliefStyle.NONE)
+        more_btn.set_valign(Gtk.Align.START)
+        more_btn.set_margin_top(2)
+        more_btn.get_style_context().add_class("row-more-btn")
+        more_btn.connect("clicked", self._on_row_more_clicked, row, item)
+        hbox.pack_start(more_btn, False, False, 0)
+
         row.add(hbox)
 
     def _build_prompt_row(self, row, item: CategoryItem):
@@ -940,39 +1000,15 @@ class ClipboardPanel(Gtk.Box):
             tag_label.set_valign(Gtk.Align.CENTER)
             hbox.pack_start(tag_label, False, False, 0)
 
+        more_btn = Gtk.Button.new_with_label("\u22ef")
+        more_btn.set_relief(Gtk.ReliefStyle.NONE)
+        more_btn.set_valign(Gtk.Align.START)
+        more_btn.set_margin_top(2)
+        more_btn.get_style_context().add_class("row-more-btn")
+        more_btn.connect("clicked", self._on_row_more_clicked, row, item)
+        hbox.pack_start(more_btn, False, False, 0)
+
         row.add(hbox)
-
-    def _update_actions(self):
-        for child in self._action_box.get_children():
-            self._action_box.remove(child)
-
-        if self._active_category_id == "__clipboard__":
-            self._action_box.pack_start(self._btn_delete, False, False, 0)
-            self._action_box.pack_start(self._btn_delete_all, False, False, 0)
-            self._action_box.pack_start(self._btn_prompts_config, False, False, 0)
-        else:
-            self._action_box.pack_start(self._btn_create, False, False, 0)
-            self._action_box.pack_start(self._btn_edit, False, False, 0)
-            self._action_box.pack_start(self._btn_delete, False, False, 0)
-            self._action_box.pack_start(self._btn_sort, False, False, 0)
-
-        self._action_box.pack_start(self._action_sep2, False, False, 0)
-        self._action_box.pack_start(self._btn_sort_cats, False, False, 0)
-        self._action_box.pack_start(self._btn_backup, False, False, 0)
-        self._action_box.pack_start(self._btn_restore, False, False, 0)
-        self._action_box.pack_start(self._btn_recycle_bin, False, False, 0)
-
-        self._action_box.show_all()
-
-        is_clipboard = self._active_category_id == "__clipboard__"
-        has_custom_cats = any(c.id != "__clipboard__" for c in self._cat_store.get_all())
-        self._btn_delete_cat.set_sensitive(not is_clipboard and has_custom_cats)
-        self._btn_rename_cat.set_sensitive(not is_clipboard)
-
-        # Sort button sensitivity: only for custom categories with 2+ items
-        if not is_clipboard:
-            cat = self._cat_store.get(self._active_category_id)
-            self._btn_sort.set_sensitive(len(cat.items) > 1 if cat else False)
 
     def _on_sort_clicked(self, _btn):
         self._show_sort_dialog()
@@ -1071,6 +1107,62 @@ class ClipboardPanel(Gtk.Box):
     def _on_content_activated(self, _listbox, row):
         if hasattr(row, "store_item"):
             self._activate_item(row.store_item)
+
+    def _on_row_more_clicked(self, btn, row, item):
+        self._content_list.select_row(row)
+
+        menu = Gtk.Menu.new()
+        if self._active_category_id == "__clipboard__":
+            copy_item = Gtk.MenuItem.new_with_label("Copy")
+            copy_item.connect("activate", lambda *_: self._activate_item(item))
+            menu.append(copy_item)
+            del_item = Gtk.MenuItem.new_with_label("Delete")
+            del_item.connect("activate", lambda *_: self._delete_item(item))
+            menu.append(del_item)
+
+            item_type = getattr(item, "type", "text")
+            if item_type == "image":
+                send_ai_item = Gtk.MenuItem.new_with_label("\U0001f5bc\ufe0f \u53d1\u9001\u5230 AI \u770b\u76d8")
+                send_ai_item.connect("activate", lambda *_: self._send_image_to_ai(item))
+                menu.append(send_ai_item)
+
+            custom_prompts = self._custom_prompts_store.get_all()
+            if custom_prompts:
+                applicable_prompts = []
+                for p in custom_prompts:
+                    p_categories = getattr(p, "categories", None) or ["text"]
+                    if item_type in p_categories:
+                        applicable_prompts.append(p)
+                if applicable_prompts:
+                    menu.append(Gtk.SeparatorMenuItem.new())
+                    for p in applicable_prompts:
+                        prompt_item = Gtk.MenuItem.new_with_label(p.name)
+                        prompt_item.connect("activate", lambda *_, p_obj=p: self._ask_custom_prompt(item, p_obj))
+                        menu.append(prompt_item)
+        else:
+            copy_item = Gtk.MenuItem.new_with_label("Copy")
+            copy_item.connect("activate", lambda *_: self._activate_item(item))
+            menu.append(copy_item)
+
+            dynamic_copy_item = Gtk.MenuItem.new_with_label("Dynamic Copy")
+            has_placeholders = len(TEMPLATE_REGEX.findall(item.text)) > 0
+            dynamic_copy_item.set_sensitive(has_placeholders)
+            dynamic_copy_item.connect("activate", lambda *_: self._show_dynamic_copy_dialog(item))
+            menu.append(dynamic_copy_item)
+
+            edit_item = Gtk.MenuItem.new_with_label("Edit")
+            edit_item.connect("activate", lambda *_: self._edit_prompt(item))
+            menu.append(edit_item)
+
+            del_item = Gtk.MenuItem.new_with_label("Delete")
+            del_item.connect("activate", lambda *_: self._delete_item(item))
+            menu.append(del_item)
+
+        if self.on_menu_shown:
+            self.on_menu_shown()
+        menu.connect("deactivate", lambda *_: GLib.timeout_add(300, self._on_menu_deactivated))
+        menu.show_all()
+        menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, None)
 
     def _on_content_button(self, _listbox, event):
         if event.button != 3:
@@ -1721,9 +1813,6 @@ class ClipboardPanel(Gtk.Box):
                 return
 
             # Run backup in background thread to avoid blocking the GTK main loop
-            self._btn_backup.set_sensitive(False)
-            self._btn_backup.set_label("Backing up...")
-
             def worker():
                 err = "Unknown error"
                 path_or_msg = ""
@@ -1739,9 +1828,6 @@ class ClipboardPanel(Gtk.Box):
 
     def _on_backup_finished(self, err, path_or_msg):
         """Called on the main thread after background backup completes."""
-        self._btn_backup.set_sensitive(True)
-        self._btn_backup.set_label("Backup")
-
         if err is None:
             self._show_message_dialog(
                 Gtk.MessageType.INFO,
@@ -1811,9 +1897,6 @@ class ClipboardPanel(Gtk.Box):
                 return
 
             # Run restore in background thread to avoid blocking the GTK main loop
-            self._btn_restore.set_sensitive(False)
-            self._btn_restore.set_label("Restoring...")
-
             def worker():
                 err = "Unknown error"
                 try:
@@ -1828,8 +1911,6 @@ class ClipboardPanel(Gtk.Box):
 
     def _on_restore_finished(self, err):
         """Called on the main thread after background restore completes."""
-        self._btn_restore.set_sensitive(True)
-        self._btn_restore.set_label("Restore")
 
         if err is None:
             self._show_message_dialog(
