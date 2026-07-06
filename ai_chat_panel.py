@@ -31,7 +31,7 @@ from ai_text_utils import (
     _clean_history_title, _extract_local_title, _rebuild_markdown_from_messages,
     _vision_content_to_markdown, _resolve_vision_image_src,
     _vision_content_to_text, _image_hash_path, _image_to_data_uri, _cached_image_to_data_uri,
-    _model_supports_vision
+    _model_supports_vision, USER_AVATAR_HTML
 )
 
 # Regex to match placeholders: ${index[:prompt][=default]}
@@ -563,7 +563,7 @@ class AIChatPanel(Gtk.Box):
         rendered_prompt = _close_unclosed_code_blocks(prompt_text)
         self._ai_markdown_text = (
             f'<div class="msg-row user" markdown="1">\n'
-            f'<div class="msg-avatar user">👤</div>\n'
+            f'{USER_AVATAR_HTML}\n'
             f'<div class="msg-bubble user" markdown="1">\n'
             f'{rendered_prompt}\n'
             f'<copy-marker data-msg-index="0" class="user-copy-marker"></copy-marker>\n'
@@ -575,7 +575,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_markdown_text,
             fallback_content=(
                 f'<div class="msg-row user" markdown="1">\n'
-                f'<div class="msg-avatar user">👤</div>\n'
+                f'{USER_AVATAR_HTML}\n'
                 f'<div class="msg-bubble user" markdown="1">\n'
                 f'<p>{prompt_text}</p>\n'
                 f'</div>\n'
@@ -635,7 +635,7 @@ class AIChatPanel(Gtk.Box):
         user_msg_idx = len(self._ai_messages) - 1
         self._ai_markdown_text += (
             f'\n\n<div class="msg-row user" markdown="1">\n'
-            f'<div class="msg-avatar user">👤</div>\n'
+            f'{USER_AVATAR_HTML}\n'
             f'<div class="msg-bubble user" markdown="1">\n'
             f'{rendered_text}\n'
             f'<copy-marker data-msg-index="{user_msg_idx}" class="user-copy-marker"></copy-marker>\n'
@@ -1158,7 +1158,7 @@ class AIChatPanel(Gtk.Box):
             safe_answer = html.escape(text)
             self.append_html_to_webview(
                 f'\n\n<div class="msg-row user" markdown="1">\n'
-                f'<div class="msg-avatar user">👤</div>\n'
+                f'{USER_AVATAR_HTML}\n'
                 f'<div class="msg-bubble user" markdown="1">\n'
                 f'{safe_answer}\n'
                 f'</div>\n'

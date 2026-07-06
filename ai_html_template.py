@@ -542,18 +542,21 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    font-size: 14px;
                     flex-shrink: 0;
-                    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
                     user-select: none;
+                    box-sizing: border-box;
                 }}
                 .msg-avatar.user {{
                     background: linear-gradient(135deg, #6366f1, #4f46e5);
-                    color: white;
+                    color: #ffffff;
+                    border: 1px solid rgba(99, 102, 241, 0.35);
+                    box-shadow: 0 4px 10px rgba(99, 102, 241, 0.22);
                 }}
                 .msg-avatar.assistant {{
-                    background: linear-gradient(135deg, #0d9488, #0f766e);
-                    color: white;
+                    background: linear-gradient(135deg, #06b6d4, #0891b2);
+                    color: #ffffff;
+                    border: 1px solid rgba(6, 182, 212, 0.35);
+                    box-shadow: 0 4px 10px rgba(6, 182, 212, 0.22);
                 }}
                 .msg-bubble {{
                     position: relative;
@@ -791,7 +794,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                         
                         const avatar = document.createElement('div');
                         avatar.className = 'msg-avatar assistant';
-                        avatar.textContent = '🤖';
+                        avatar.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 2L14.8 9.2L22 12L14.8 14.8L12 22L9.2 14.8L2 12L9.2 9.2L12 2Z"/></svg>';
                         row.appendChild(avatar);
                         
                         const bubble = document.createElement('div');

@@ -18,6 +18,22 @@ from clipboard_store import ChatMessage, CONFIG_DIR
 # Python markdown extensions used for AI panel rendering
 _MARKDOWN_EXTENSIONS = ["fenced_code", "codehilite", "tables", "md_in_html"]
 
+USER_AVATAR_HTML = (
+    '<div class="msg-avatar user">'
+    '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">'
+    '<path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>'
+    '</svg>'
+    '</div>'
+)
+
+ASSISTANT_AVATAR_HTML = (
+    '<div class="msg-avatar assistant">'
+    '<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">'
+    '<path d="M12 2L14.8 9.2L22 12L14.8 14.8L12 22L9.2 14.8L2 12L9.2 9.2L12 2Z"/>'
+    '</svg>'
+    '</div>'
+)
+
 # LaTeX commands that LLMs commonly double-escape (\\frac -> \frac, etc.)
 _LATEX_COMMANDS = frozenset({
     "frac", "sqrt", "sum", "int", "prod", "lim", "sin", "cos", "log", "ln",
@@ -494,7 +510,7 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
             
             parts.append(
                 f'<div class="msg-row assistant" markdown="1">\n'
-                f'<div class="msg-avatar assistant">🤖</div>\n'
+                f'{ASSISTANT_AVATAR_HTML}\n'
                 f'<div class="msg-bubble assistant" markdown="1">\n'
                 f'{reasoning_html}{tc_part}{content_part}\n'
                 f'<copy-marker data-msg-index="{i}"></copy-marker>\n'
@@ -514,7 +530,7 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
         if i == 0 or role == "user":
             parts.append(
                 f'<div class="msg-row user" markdown="1">\n'
-                f'<div class="msg-avatar user">👤</div>\n'
+                f'{USER_AVATAR_HTML}\n'
                 f'<div class="msg-bubble user" markdown="1">\n'
                 f'{rendered_content}\n'
                 f'<copy-marker data-msg-index="{i}" class="user-copy-marker"></copy-marker>\n'
@@ -540,7 +556,7 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
                     prefix = '' if has_header else '\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
                 parts.append(
                     f'<div class="msg-row assistant" markdown="1">\n'
-                    f'<div class="msg-avatar assistant">🤖</div>\n'
+                    f'{ASSISTANT_AVATAR_HTML}\n'
                     f'<div class="msg-bubble assistant" markdown="1">\n'
                     f'{reasoning_html}{prefix}{content_str}\n\n'
                     f'<copy-marker data-msg-index="{i}"></copy-marker>\n'
