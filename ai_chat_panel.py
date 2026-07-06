@@ -335,11 +335,14 @@ class AIChatPanel(Gtk.Box):
                             if 0 <= index < len(msgs) and msgs[index].get("role") == "user":
                                 content = msgs[index].get("content", "")
                                 if content:
-                                    if self.on_ai_copy_started:
-                                        self.on_ai_copy_started()
-                                    _copy_to_clipboard(content)
-                                    if self.on_ai_copy_finished:
-                                        GLib.idle_add(self.on_ai_copy_finished)
+                                    if isinstance(content, list):
+                                        content = _vision_content_to_text(content)
+                                    if content:
+                                        if self.on_ai_copy_started:
+                                            self.on_ai_copy_started()
+                                        _copy_to_clipboard(content)
+                                        if self.on_ai_copy_finished:
+                                            GLib.idle_add(self.on_ai_copy_finished)
                         except (ValueError, IndexError):
                             pass
                     decision.ignore()
