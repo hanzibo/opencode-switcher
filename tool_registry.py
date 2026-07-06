@@ -74,14 +74,6 @@ _SUBAGENT_BLOCKED_TOOLS: Final[frozenset] = frozenset([
     "sub_agent",
 ])
 
-_SUBAGENT_SYSTEM_PROMPT = """You are a sub-agent of the OpenCode Switcher AI assistant.
-You have been assigned an independent task to complete on your own.
-
-You have full tool access: read/write/edit files, search code, execute bash commands, web search, etc.
-You CANNOT ask the user questions — use available tools to find any information you need.
-
-After completing the task, return a summary of the final result. Your output will be returned to the parent agent."""
-
 
 # ── Read State Tracking (for edit_file staleness check) ─────────────────────
 
@@ -886,9 +878,9 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
-            "name": "sub_agent",
-            "description": "创建一个独立子代理来完成指定任务。子代理拥有独立的上下文窗口和工具集（bash 会话、文件状态等），"
-                           "与当前对话完全隔离。当任务可以独立完成且不会影响当前上下文时使用。"
+             "name": "sub_agent",
+            "description": "创建一个独立子代理来完成指定任务。子代理拥有独立的上下文窗口和工具集，"
+                           "与当前对话完全隔离。支持多种代理类型（general/explore/bash）和后台运行。"
                            "任务完成后返回最终结果摘要。",
             "parameters": {
                 "type": "object",
@@ -901,6 +893,17 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                         "type": "integer",
                         "description": "子代理最大工具调用轮数（1-15，默认 10）",
                         "default": 10
+                    },
+                    "agent_type": {
+                        "type": "string",
+                        "enum": ["general", "explore", "bash"],
+                        "description": "子代理类型：general（通用全能，默认）、explore（只读探索）、bash（仅命令执行）",
+                        "default": "general"
+                    },
+                    "run_in_background": {
+                        "type": "boolean",
+                        "description": "设为 true 在后台运行，不阻塞当前对话。完成后将通过通知提醒。",
+                        "default": False
                     }
                 },
                 "required": ["task"]
@@ -927,8 +930,18 @@ def _get_llm_config() -> "LLMModelConfig":
     return default
 
 
-def _build_subagent_tools() -> list:
+def _build_subagent_tools(agent_type: str = "general") -> list:
     """Build filtered tool definitions list for sub-agent use."""
+    if agent_type == "explore":
+        allowed = {"read_file", "grep_search", "glob_find", "list_directory", "file_info",
+                    "get_current_time", "ask_user_question"}
+        return [t for t in TOOL_DEFINITIONS
+                if t.get("function", {}).get("name") in allowed]
+    if agent_type == "bash":
+        allowed = {"bash", "get_current_time", "ask_user_question"}
+        return [t for t in TOOL_DEFINITIONS
+                if t.get("function", {}).get("name") in allowed]
+    # general: all tools except blocked
     return [
         t for t in TOOL_DEFINITIONS
         if t.get("function", {}).get("name") not in _SUBAGENT_BLOCKED_TOOLS
@@ -2661,8 +2674,38 @@ def execute_send_notification(
 _MAX_SUBAGENT_TURNS = 15
 _SUBAGENT_TIMEOUT_PER_TURN = 60
 
+_SUBAGENT_TYPES = {
+    "general": {
+        "system_prompt": "You are a sub-agent. Your ONLY job is to execute the EXACT task given to you.\n\n"
+                         "CRITICAL RULES:\n"
+                         "- Follow the task instructions PRECISELY. Do not deviate, do not add extra work.\n"
+                         "- Use the available tools to gather information needed for the task.\n"
+                         "- You CANNOT ask the user questions — find answers using tools.\n"
+                         "- After completing the EXACT requested work, output a clear result.\n"
+                         "- Your output will be returned to the parent agent as-is.",
+    },
+    "explore": {
+        "system_prompt": "You are a code exploration sub-agent. Your ONLY job is to explore the codebase.\n\n"
+                         "CRITICAL RULES:\n"
+                         "- Follow the exploration task PRECISELY.\n"
+                         "- You have READ-ONLY tools: read files, search code, list directories, get file info.\n"
+                         "- You CANNOT modify files. You CANNOT ask the user questions.\n"
+                         "- After completing the EXACT requested analysis, output the findings.\n"
+                         "- Your output will be returned to the parent agent as-is.",
+    },
+    "bash": {
+        "system_prompt": "You are a command execution sub-agent.\n"
+                         "Your ONLY job is to execute the EXACT shell commands requested.\n\n"
+                         "You have the bash tool only. You CANNOT read/write files directly.\n"
+                         "You CANNOT ask the user questions.\n\n"
+                         "After executing, output the command results.",
+    },
+}
 
-def execute_sub_agent(task: str, max_turns: int = 10) -> str:
+
+def execute_sub_agent(task: str, max_turns: int = 10,
+                      agent_type: str = "general",
+                      run_in_background: bool = False) -> str:
     """Spawn an isolated sub-agent to complete a task independently.
 
     The sub-agent gets its own bash session, a clean file-read state,
@@ -2671,38 +2714,98 @@ def execute_sub_agent(task: str, max_turns: int = 10) -> str:
     Args:
         task: Description of the task for the sub-agent.
         max_turns: Maximum tool-calling iterations (1-15, default 10).
+        agent_type: "general" (full tools), "explore" (read-only), or "bash" (shell only).
+        run_in_background: If True, run in background thread and return immediately.
 
     Returns:
         The sub-agent's final text response, or an error message.
     """
+    if agent_type not in _SUBAGENT_TYPES:
+        return f"错误：无效的子代理类型「{agent_type}」。有效值：general, explore, bash"
+
+    if run_in_background:
+        global _background_subagent_id
+        _background_subagent_id += 1
+        subagent_id = _background_subagent_id
+        _run_subagent_background(task, max_turns, agent_type, subagent_id)
+        return f"⏳ 子代理已启动（任务ID: {subagent_id}，类型: {agent_type}）。" \
+               f"完成后结果将保存至 /tmp/opencode_subagent_{subagent_id}_result.txt，" \
+               f"可让主代理使用 read_file 读取。"
+
+    return _execute_subagent_sync(task, max_turns, agent_type)
+
+
+_background_subagent_id = 0
+
+
+def _run_subagent_background(task: str, max_turns: int, agent_type: str, subagent_id: int):
+    """Run a sub-agent in a background daemon thread."""
+    def _run():
+        result = _execute_subagent_sync(task, max_turns, agent_type)
+        result_path = f"/tmp/opencode_subagent_{subagent_id}_result.txt"
+        try:
+            with open(result_path, "w", encoding="utf-8") as f:
+                f.write(result)
+        except OSError:
+            pass
+        try:
+            summary = result[:100] + "..." if len(result) > 100 else result
+            execute_send_notification(
+                summary=f"子代理 {subagent_id} 已完成",
+                body=f"{summary}\n结果已保存至 {result_path}",
+                urgency="normal",
+                expire_time=8000,
+            )
+        except Exception:
+            pass
+
+    import threading as _threading
+    t = _threading.Thread(target=_run, daemon=True)
+    t.start()
+
+
+def _execute_subagent_sync(task: str, max_turns: int, agent_type: str) -> str:
+    """Synchronous sub-agent execution (internal)."""
+    sub_tools = _build_subagent_tools(agent_type)
+    type_info = _SUBAGENT_TYPES[agent_type]
+
+    # Use a local bash session — don't touch global _bash_session
+    local_session = _BashSession()
+    try:
+        local_session.start()
+    except Exception as e:
+        return f"错误：无法创建子 bash 会话 — {e}"
+
+    # Temporarily override global state for sub-agent execution
     global _bash_cwd, _bash_session
     saved_bash_cwd = _bash_cwd
-    saved_read_state = dict(_READ_FILE_STATE)
     saved_bash_session = _bash_session
+    saved_read_state = dict(_READ_FILE_STATE)
+    _bash_session = local_session
+    _bash_cwd = _BASH_DEFAULT_CWD
+    _READ_FILE_STATE.clear()
 
     try:
         config = _get_llm_config()
     except RuntimeError as e:
+        _bash_cwd = saved_bash_cwd
+        _bash_session = saved_bash_session
+        local_session.stop()
         return f"错误：{e}"
     if not config.api_key:
+        _bash_cwd = saved_bash_cwd
+        _bash_session = saved_bash_session
+        local_session.stop()
         return "错误：未配置 LLM API key。请在 AI 设置中配置。"
     if not config.base_url:
+        _bash_cwd = saved_bash_cwd
+        _bash_session = saved_bash_session
+        local_session.stop()
         return "错误：未配置 LLM base URL。请在 AI 设置中配置。"
-
-    sub_tools = _build_subagent_tools()
-
-    try:
-        _bash_session = _BashSession()
-        _bash_session.start()
-    except Exception as e:
-        return f"错误：无法创建子 bash 会话 — {e}"
-
-    _bash_cwd = _BASH_DEFAULT_CWD
-    _READ_FILE_STATE.clear()
 
     clamped_turns = max(1, min(max_turns, _MAX_SUBAGENT_TURNS))
     messages = [
-        {"role": "system", "content": _SUBAGENT_SYSTEM_PROMPT},
+        {"role": "system", "content": type_info["system_prompt"]},
         {"role": "user", "content": task},
     ]
 
@@ -2731,7 +2834,7 @@ def execute_sub_agent(task: str, max_turns: int = 10) -> str:
             tool_calls = response.get("tool_calls")
 
             if not tool_calls:
-                final_text = content
+                final_text = content  # may be empty → falls through to rebuild below
                 break
 
             assistant_msg = {"role": "assistant", "content": content or None}
@@ -2752,17 +2855,30 @@ def execute_sub_agent(task: str, max_turns: int = 10) -> str:
                     "content": result,
                 })
 
-        if final_text:
-            return final_text
-        return "(子代理已完成任务，但未返回文本结果)"
+        if not final_text:
+            # Rebuild result from all tool results and assistant messages
+            result_parts = []
+            for m in messages:
+                role = m.get("role", "")
+                content = m.get("content", "") or ""
+                if role == "tool":
+                    name = m.get("name", "")
+                    c = content.strip()
+                    if c and c != "None":
+                        result_parts.append(c[:500])
+                elif role == "assistant" and content.strip():
+                    result_parts.append(content[:500])
+            if result_parts:
+                final_text = "\n\n---\n\n".join(dict.fromkeys(result_parts))
+            else:
+                final_text = "(子代理已完成任务)"
+
+        if len(final_text) > MAX_TOOL_RESULT_CHARS:
+            final_text = final_text[:MAX_TOOL_RESULT_CHARS] + f"\n\n...（结果已截断，共 {len(final_text)} 字符）"
+        return final_text
 
     finally:
-        try:
-            if _bash_session is not None:
-                _bash_session.stop()
-        except Exception:
-            pass
-
+        local_session.stop()
         _bash_cwd = saved_bash_cwd
         _bash_session = saved_bash_session
         _READ_FILE_STATE.clear()
