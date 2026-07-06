@@ -9,16 +9,16 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ./                          # Flat root — no __init__.py, not a package
 ├── main.py                 # Entrypoint: flock lock, App(), Gtk.main() (~281 lines)
 ├── panel.py                # Search panel (~1354 lines) — tab switcher, slash cmds, CSS, evdev injection
-├── clipboard_panel.py      # Clipboard panel container (~2059 lines) — assembles subcomponents + event routing
-├── ai_chat_panel.py        # AI assistant sidebar (~2303 lines) — WebView, LLM dialog, ReAct tool calls
+├── clipboard_panel.py      # Clipboard panel container (~2058 lines) — assembles subcomponents + event routing
+├── ai_chat_panel.py        # AI assistant sidebar (~2293 lines) — WebView, LLM dialog, ReAct tool calls
 ├── clipboard_store.py      # Store: classification, categories, prompts, LLM config, conversations (~1032 lines, 12 classes, 7 dataclasses)
-├── tool_registry.py        # 19 AI tools, ReAct dispatcher, HTML formatting (~3043 lines, 59 functions)
+├── tool_registry.py        # 20 AI tools, ReAct dispatcher, HTML formatting (~3231 lines, 79 functions)
 ├── session_store.py        # SQLite reader + live-session detection (~202 lines)
 ├── launcher.py             # Terminal auto-detection + session spawner (~128 lines)
 ├── hotkey.py               # pynput (X11) + Unix socket (Wayland) — only 87 lines
 ├── utils.py                # is_wayland(), relative_time(), request_window_focus(), dirs (~48 lines)
 ├── llm_client.py           # LLM HTTP client + _ToolCallAccumulator (~309 lines)
-├── ai_tool_loop.py         # ReAct tool calling loop (~199 lines), imports tool_registry
+├── ai_tool_loop.py         # ReAct tool calling loop (~204 lines), imports tool_registry
 ├── ai_html_template.py     # WebView HTML + KaTeX inline embedding (~680 lines)
 ├── ai_text_utils.py        # Pure markdown/math/vision helpers, zero GTK dep (~506 lines)
 ├── ai_popovers.py          # AI command autocomplete + history popovers (~522 lines)
@@ -48,7 +48,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ### Tribal Knowledge
 | Path | Contents |
 |------|----------|
-| `.hzb-agents/experience/` | 87 per-feature postmortems — pitfalls, solutions, reasoning |
+| `.hzb-agents/experience/` | ~90 per-feature postmortems — pitfalls, solutions, reasoning |
 | `.omo/plans/` | 38 structured work plans from past development |
 | `.omo/evidence/` | Verification artifacts |
 
@@ -112,9 +112,9 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 - `/cd <path>` command switches the AI panel's active bash working directory
 
 ### AI Tool Calling (ReAct Loop)
-- **Architecture**: `llm_client.py` (`_LLMHttpClient`, `_ToolCallAccumulator` for SSE delta accumulation) → `ai_tool_loop.py` (`run_llm_react_loop` — max 25 iterations) → `tool_registry.py` (19 tool executors)
+- **Architecture**: `llm_client.py` (`_LLMHttpClient`, `_ToolCallAccumulator` for SSE delta accumulation) → `ai_tool_loop.py` (`run_llm_react_loop` — max 25 iterations) → `tool_registry.py` (20 tool executors)
 - LLM streams → if `finish_reason: "tool_calls"`, accumulate deltas → execute synchronously via `tool_registry.execute_tool_call()` → feed result back as `role: "tool"` → repeat
-- **19 tools**: `web_search` / `web_fetch` (Obscura browser), `list_directory` / `read_file` (supports line range) / `grep_search` / `glob_find` / `file_info` (safe-path guarded), `get_current_time`, `ask_user_question`, `write_file`, `edit_file` (exact-string replace with staleness check), `delete_file` / `rename_file` (file management), `todo_create` / `todo_update` / `todo_list` (persistent task management), `bash` (persistent bash session, supports `restart` and `timeout` params), `send_notification` (desktop notify-send), `sub_agent` (parallel isolated task execution)
+- **20 tools**: `web_search` / `web_fetch` (Obscura browser), `list_directory` / `read_file` (supports line range) / `grep_search` / `glob_find` / `file_info` (safe-path guarded), `get_current_time`, `ask_user_question`, `write_file`, `edit_file` (exact-string replace with staleness check), `delete_file` / `rename_file` (file management), `todo_create` / `todo_update` / `todo_list` (persistent task management), `bash` (persistent bash session, supports `restart` and `timeout` params), `send_notification` (desktop notify-send), `sub_agent` (parallel isolated task execution), `get_subagent_status` (poll background sub-agent progress)
 - Tool results rendered as collapsible `<pre>` sections in WebView (changed from `<div>` to prevent markdown parser block splitting)
 - `TOOL_CHOICE_AUTO` configurable per request
 
@@ -184,9 +184,6 @@ systemd/.desktop → run.sh → main.py (flock lock)
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
-- **No package structure**: Zero `__init__.py`. Modules flat in root.
-- **No automated tests**: No `pytest`.
-- **No CI/CD**: No GitHub Actions, Makefile, Dockerfile. `install.sh` is Debian/Ubuntu-only.
 - **`add_provider_for_screen`** in both panels (`panel.py:102`, `clipboard_panel.py:205`) — leaks CSS globally per GTK docs (accepted tradeoff).
 - **`opencode-switcher-toggle`**: Python code inside shell script via `exec python3 -c "..."` — fragile quoting.
 - **`run.sh` sources NVM**: Couples tray app runtime to user's shell Node.js env.
@@ -201,15 +198,15 @@ systemd/.desktop → run.sh → main.py (flock lock)
 
 | File | Lines | Nature |
 |------|-------|--------|
-| `ai_chat_panel.py` | 2303 | Extracted from clipboard_panel.py — AIChatPanel UI, WebView, LLM orchestration |
-| `clipboard_panel.py` | 2059 | Large — was 7713 before extracting 11 modules + ai_chat_panel.py |
-| `tool_registry.py` | 2534 | 19 tools + BashSession class + HTML formatting — verbose OpenAI JSON schemas account for size |
-| `panel.py` | 1354 | Gatekeeper — ~1300 lines, 25+ event handlers. CSS-in-code (~140 lines template string). |
+| `ai_chat_panel.py` | 2293 | AIChatPanel UI, WebView, LLM orchestration, stream+tool rendering |
+| `clipboard_panel.py` | 2058 | Large — was 7713 before extracting 11 modules + ai_chat_panel.py |
+| `tool_registry.py` | 3231 | 20 tools, 3 classes + HTML formatting — verbose OpenAI JSON schemas account for size |
+| `panel.py` | 1354 | Gatekeeper — 25+ event handlers. CSS-in-code (~140 lines template string). |
 | `clipboard_store.py` | 1032 | God module — 12 classes (7 dataclasses, 5 stores): classification, clipboard storage, categories, conversation persistence, LLM settings, prompts. |
 | `prompts_config_dialog.py` | 910 | Largest extracted piece — 910-line single dialog class. |
 | `gnome-extension/extension.js` | 350 | Compact but duplicates ~150 lines of classification logic. |
 
-**Remaining refactoring candidates**: (1) `ClipboardPanel` still co-located with `clipboard_panel.py` (2059 lines) — worth extracting to own module. (2) Extract shared `classify_text()` module for Python and JS. (3) Prompts config dialog is standalone but 910 lines. (4) `clipboard_store/` dir exists empty — possible package migration target.
+**Remaining refactoring candidates**: (1) `ClipboardPanel` still co-located with `clipboard_panel.py` (2058 lines) — worth extracting to own module. (2) Extract shared `classify_text()` module for Python and JS. (3) Prompts config dialog is standalone but 910 lines. (4) `clipboard_store/` dir exists empty — possible package migration target.
 
 ## CRITICAL GTK & PYGObject QUIRKS (Crash Guards)
 
