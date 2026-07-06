@@ -71,7 +71,6 @@ _LATEX_COMMANDS = frozenset({
 })
 
 CATEGORY_WIDTH = 200
-ACTION_WIDTH = 140
 PANEL_WIDTH = 1320
 # ponytail: removed fixed AI_PANEL_WIDTH — now uses equal expand with content area
 
@@ -718,8 +717,12 @@ class ClipboardPanel(Gtk.Box):
 
         if self._active_category_id == "__clipboard__":
             self._filter_tabs_box.show()
+            for btn in self._tab_buttons.values():
+                btn.show()
         else:
-            self._filter_tabs_box.hide()
+            for btn in self._tab_buttons.values():
+                btn.hide()
+            self._filter_tabs_box.show()
 
         # Build regular item rows
         for idx, item in enumerate(items):
