@@ -7,22 +7,22 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 
 ```
 ./                          # Flat root — no __init__.py, not a package
-├── main.py                 # Entrypoint: flock lock, App(), Gtk.main() (~281 lines)
-├── panel.py                # Search panel (~1354 lines) — tab switcher, slash cmds, CSS, evdev injection
-├── clipboard_panel.py      # Clipboard panel container (~2058 lines) — assembles subcomponents + event routing
-├── ai_chat_panel.py        # AI assistant sidebar (~2293 lines) — WebView, LLM dialog, ReAct tool calls
-├── clipboard_store.py      # Store: classification, categories, prompts, LLM config, conversations (~1032 lines, 12 classes, 7 dataclasses)
-├── tool_registry.py        # 20 AI tools, ReAct dispatcher, HTML formatting (~3231 lines, 79 functions)
-├── session_store.py        # SQLite reader + live-session detection (~202 lines)
-├── launcher.py             # Terminal auto-detection + session spawner (~128 lines)
-├── hotkey.py               # pynput (X11) + Unix socket (Wayland) — only 87 lines
-├── utils.py                # is_wayland(), relative_time(), request_window_focus(), dirs (~48 lines)
-├── llm_client.py           # LLM HTTP client + _ToolCallAccumulator (~309 lines)
-├── ai_tool_loop.py         # ReAct tool calling loop (~204 lines), imports tool_registry
-├── ai_html_template.py     # WebView HTML + KaTeX inline embedding (~680 lines)
-├── ai_text_utils.py        # Pure markdown/math/vision helpers, zero GTK dep (~506 lines)
-├── ai_popovers.py          # AI command autocomplete + history popovers (~522 lines)
-├── prompts_config_dialog.py # Prompts/LLM-config dialog (~910 lines, largest extracted piece)
+├── main.py                 # Entrypoint: flock lock, App(), Gtk.main() (~282 lines)
+├── panel.py                # Search panel (~1383 lines) — tab switcher, slash cmds, CSS, evdev injection
+├── clipboard_panel.py      # Clipboard panel container (~2109 lines) — assembles subcomponents + event routing
+├── ai_chat_panel.py        # AI assistant sidebar (~2294 lines) — WebView, LLM dialog, ReAct tool calls
+├── clipboard_store.py      # Store: classification, categories, prompts, LLM config, conversations (~1033 lines, 12 classes, 7 dataclasses)
+├── tool_registry.py        # 20 AI tools, ReAct dispatcher, HTML formatting (~3232 lines, 79 functions)
+├── session_store.py        # SQLite reader + live-session detection (~203 lines)
+├── launcher.py             # Terminal auto-detection + session spawner (~129 lines)
+├── hotkey.py               # pynput (X11) + Unix socket (Wayland) — only 88 lines
+├── utils.py                # is_wayland(), relative_time(), request_window_focus(), dirs (~50 lines)
+├── llm_client.py           # LLM HTTP client + _ToolCallAccumulator (~310 lines)
+├── ai_tool_loop.py         # ReAct tool calling loop (~205 lines), imports tool_registry
+├── ai_html_template.py     # WebView HTML + KaTeX inline embedding (~681 lines)
+├── ai_text_utils.py        # Pure markdown/math/vision helpers, zero GTK dep (~523 lines)
+├── ai_popovers.py          # AI command autocomplete + history popovers (~523 lines)
+├── prompts_config_dialog.py # Prompts/LLM-config dialog (~911 lines, largest extracted piece)
 ├── prompt_dialog.py        # Create/edit prompt dialog (~77 lines)
 ├── dynamic_copy_dialog.py  # Template placeholder dialog (~320 lines)
 ├── sort_dialog.py          # Sort items DnD dialog (~277 lines)
@@ -33,7 +33,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ├── opencode-switcher-toggle # Shell→Python hybrid: sends "toggle"/"toggle_ai" to Unix socket
 ├── katex/                  # KaTeX CSS/JS/fonts for math in AI WebView
 ├── gnome-extension/        # GNOME Shell extension (Wayland clipboard + focus IPC)
-│   ├── extension.js        # 350 lines — clipboard + focus + classification (duplicated from clipboard_store.py)
+│   ├── extension.js        # 351 lines — clipboard + focus + classification (duplicated from clipboard_store.py)
 │   ├── metadata.json
 │   └── AGENTS.md           # GNOME extension-specific agent instructions
 ├── clipboard_store/        # Empty dir — possible package migration target
@@ -174,13 +174,9 @@ systemd/.desktop → run.sh → main.py (flock lock)
 
 - **Strings**: double quotes (2833:368 vs single). Docstrings: `"""`
 - **Imports**: stdlib → third-party → local. `gi.require_version()` BEFORE `from gi.repository import ...`
-- **Types**: `from typing import Tuple, Dict, List, Optional` — NOT Python 3.9+ lowercase generics
 - **Thread safety**: `GLib.idle_add(callback, *args)` for background→UI updates. No `asyncio`.
 - **Platform check**: `utils.is_wayland()` reads `XDG_SESSION_TYPE` / `WAYLAND_DISPLAY`
-- **Naming**: PascalCase classes, snake_case functions, `_prefix` for private, `UPPER_CASE` constants
 - **Comments**: `# <space><text>`, Chinese or English. `# ponytail:` marks intentionally removed code.
-- **Entry points**: `if __name__ == "__main__":` guard required. Present in `main.py`, `inspect_db.py`, `migrate_history.py`.
-- **No linter/formatter/CI**: Manual discipline. No `asyncio`. No `assert` for tests.
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
@@ -192,21 +188,21 @@ systemd/.desktop → run.sh → main.py (flock lock)
 - **WebKit2 dependency** not in `install.sh` but required at runtime — AI panel crashes without it.
 - **GNOME extension duplicates Python classification** — ~150 lines of heuristic scoring in both Python and JS.
 - **Shared clipboard_history.json** — written by both Python and JS, no locking → potential corruption.
-- **`TEMPLATE_REGEX` duplicated** in `dynamic_copy_dialog.py`, `clipboard_panel.py`, `ai_chat_panel.py` — must keep in sync.
+- **`TEMPLATE_REGEX` duplicated** in `dynamic_copy_dialog.py`, `clipboard_panel.py`, and `ai_chat_panel.py` — must keep in sync.
 
 ## COMPLEXITY HOTSPOTS
 
 | File | Lines | Nature |
 |------|-------|--------|
-| `ai_chat_panel.py` | 2293 | AIChatPanel UI, WebView, LLM orchestration, stream+tool rendering |
-| `clipboard_panel.py` | 2058 | Large — was 7713 before extracting 11 modules + ai_chat_panel.py |
-| `tool_registry.py` | 3231 | 20 tools, 3 classes + HTML formatting — verbose OpenAI JSON schemas account for size |
-| `panel.py` | 1354 | Gatekeeper — 25+ event handlers. CSS-in-code (~140 lines template string). |
-| `clipboard_store.py` | 1032 | God module — 12 classes (7 dataclasses, 5 stores): classification, clipboard storage, categories, conversation persistence, LLM settings, prompts. |
-| `prompts_config_dialog.py` | 910 | Largest extracted piece — 910-line single dialog class. |
-| `gnome-extension/extension.js` | 350 | Compact but duplicates ~150 lines of classification logic. |
+| `ai_chat_panel.py` | 2294 | AIChatPanel UI, WebView, LLM orchestration, stream+tool rendering |
+| `clipboard_panel.py` | 2109 | Large — was 7713 before extracting 11 modules + ai_chat_panel.py |
+| `tool_registry.py` | 3232 | 20 tools, 3 classes + HTML formatting — verbose OpenAI JSON schemas account for size |
+| `panel.py` | 1383 | Gatekeeper — 25+ event handlers. CSS-in-code (~140 lines template string). |
+| `clipboard_store.py` | 1033 | God module — 12 classes (7 dataclasses, 5 stores): classification, clipboard storage, categories, conversation persistence, LLM settings, prompts. |
+| `prompts_config_dialog.py` | 911 | Largest extracted piece — 911-line single dialog class. |
+| `gnome-extension/extension.js` | 351 | Compact but duplicates ~150 lines of classification logic. |
 
-**Remaining refactoring candidates**: (1) `ClipboardPanel` still co-located with `clipboard_panel.py` (2058 lines) — worth extracting to own module. (2) Extract shared `classify_text()` module for Python and JS. (3) Prompts config dialog is standalone but 910 lines. (4) `clipboard_store/` dir exists empty — possible package migration target.
+**Remaining refactoring candidates**: (1) `ClipboardPanel` still co-located with `clipboard_panel.py` (2109 lines) — worth extracting to own module. (2) Extract shared `classify_text()` module for Python and JS. (3) Prompts config dialog is standalone but 911 lines. (4) `clipboard_store/` dir exists empty — possible package migration target.
 
 ## CRITICAL GTK & PYGObject QUIRKS (Crash Guards)
 
