@@ -947,7 +947,7 @@ def _build_subagent_tools(agent_type: str = "general") -> list:
     """Build filtered tool definitions list for sub-agent use."""
     if agent_type == "explore":
         allowed = {"read_file", "grep_search", "glob_find", "list_directory", "file_info",
-                    "get_current_time", "ask_user_question"}
+                    "get_current_time"}
         return [t for t in TOOL_DEFINITIONS
                 if t.get("function", {}).get("name") in allowed]
     if agent_type == "bash":

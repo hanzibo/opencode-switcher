@@ -566,13 +566,10 @@ class AIChatPanel(Gtk.Box):
 
     def _send_user_message(self, text: str):
         # Check for completed background sub-agents and inject results
-        try:
-            from tool_registry import check_background_subagents
-            bg_info = check_background_subagents()
-            if bg_info:
-                text = f"{bg_info}\n\n---\n\n{text}"
-        except Exception:
-            pass
+        from tool_registry import check_background_subagents
+        bg_info = check_background_subagents()
+        if bg_info:
+            text = f"{bg_info}\n\n---\n\n{text}"
 
         # Build message content with or without pending image
         if self._ai_pending_image_hash:
