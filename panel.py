@@ -111,7 +111,7 @@ class SearchPanel:
         self._tab_bar = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 0)
         self._tab_bar.set_can_focus(False)
         self._tab_labels = []
-        for title in ["Opencode Sessions", "Clipboard"]:
+        for title in ["Sessions", "Clipboard"]:
             eb = Gtk.EventBox.new()
             eb.set_can_focus(False)
             lbl = Gtk.Label.new(title)

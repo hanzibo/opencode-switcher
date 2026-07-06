@@ -494,7 +494,7 @@ class ClipboardPanel(Gtk.Box):
             ".row { padding: 12px 18px; border-radius: 6px; margin: 4px 8px; border-left: 4px solid transparent; }"
             ".row:hover { background: %(hover_bg)s; }"
             ".row:selected { background: %(sel_bg)s; border-left: 4px solid %(sel_border)s; }"
-            "#catLabel { font-size: 16px; font-weight: 500; padding: 0 8px; }"
+            "#catLabel { font-size: 14px; font-weight: 500; padding: 0 8px; }"
             "#clipTitle { font-family: \"JetBrains Mono\",\"monospace\"; font-size: 16px; padding: 0; }"
             "#clipText { font-size: 14px; padding: 0; }"
             "#clipTime { font-size: 12px; padding: 0; }"
@@ -523,6 +523,10 @@ class ClipboardPanel(Gtk.Box):
             " border: none; background: transparent; color: %(text_secondary)s;"
             " border-radius: 4px; }"
             ".row-more-btn:hover { background: %(btn_hover)s; color: %(text_fg)s; }"
+            "paned > separator { min-width: 5px; min-height: 5px;"
+            " background: %(input_border)s; border-radius: 2px; }"
+            "paned > separator:hover { background: %(sel_border)s; }"
+            "paned > separator:active { background: %(sel_border)s; }"
             ".cat-sep-row separator { background: %(cat_sep_color)s; min-height: 1px; }"
             "dialog, messagedialog, GtkDialog, GtkMessageDialog, .custom-dialog, "
             "dialog box, messagedialog box, dialog grid, messagedialog grid, .custom-dialog box, "
@@ -580,7 +584,9 @@ class ClipboardPanel(Gtk.Box):
             ".custom-dialog row:last-child, .custom-dialog listrow:last-child, .custom-dialog .sort-row:last-child { border-bottom: none; }"
             ".custom-dialog row:hover, .custom-dialog listrow:hover, .custom-dialog .sort-row:hover { background-color: %(hover_bg)s; }"
             ".custom-dialog row:selected, .custom-dialog listrow:selected, .custom-dialog .sort-row:selected { background-color: %(sel_bg)s; color: %(text_fg)s; }"
-            ".dynamic-copy-tag { color: #2ecc71; font-size: 12px; font-weight: bold; }"
+            ".dynamic-copy-tag { color: #2ecc71; font-size: 11px; font-weight: bold;"
+            " background: rgba(46,204,113,0.1); border: 1px solid rgba(46,204,113,0.25);"
+            " border-radius: 4px; padding: 2px 6px; margin-left: 4px; }"
             ".code-lang-tag { color: %(sel_border)s; font-size: 10px; font-weight: bold; margin-bottom: 2px; }"
             ".custom-dialog notebook, .custom-dialog notebook > stack { border: none; background-color: transparent; }"
             ".custom-dialog frame, .custom-dialog GtkFrame { background-color: %(dialog_bg)s; border: 1px solid %(input_border)s; border-radius: 8px; padding: 4px; }"
@@ -957,8 +963,7 @@ class ClipboardPanel(Gtk.Box):
 
         more_btn = Gtk.Button.new_with_label("\u22ef")
         more_btn.set_relief(Gtk.ReliefStyle.NONE)
-        more_btn.set_valign(Gtk.Align.START)
-        more_btn.set_margin_top(2)
+        more_btn.set_valign(Gtk.Align.CENTER)
         more_btn.get_style_context().add_class("row-more-btn")
         more_btn.connect("clicked", self._on_row_more_clicked, row, item)
         hbox.pack_start(more_btn, False, False, 0)
@@ -1005,8 +1010,7 @@ class ClipboardPanel(Gtk.Box):
 
         more_btn = Gtk.Button.new_with_label("\u22ef")
         more_btn.set_relief(Gtk.ReliefStyle.NONE)
-        more_btn.set_valign(Gtk.Align.START)
-        more_btn.set_margin_top(2)
+        more_btn.set_valign(Gtk.Align.CENTER)
         more_btn.get_style_context().add_class("row-more-btn")
         more_btn.connect("clicked", self._on_row_more_clicked, row, item)
         hbox.pack_start(more_btn, False, False, 0)
