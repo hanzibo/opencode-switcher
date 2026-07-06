@@ -12,7 +12,7 @@ from clipboard_panel import ClipboardPanel
 import difflib
 import os
 import time
-from utils import relative_time, is_wayland, request_window_focus
+from utils import relative_time, is_wayland, request_window_focus, PANEL_WIDTH
 
 
 def _get_active_monitor_geometry():
@@ -51,7 +51,6 @@ def _fuzzy_score(query: str, text: str) -> float:
 
 
 class SearchPanel:
-    PANEL_WIDTH = 1320
     SIDEBAR_WIDTH = 330
     MAX_VISIBLE = 10
     ROW_HEIGHT = 96
@@ -85,7 +84,7 @@ class SearchPanel:
 
         self._window = Gtk.Window.new(Gtk.WindowType.TOPLEVEL)
         self._window.set_title("OpenCode Switcher")
-        self._window.set_default_size(self.PANEL_WIDTH, self.MAX_VISIBLE * self.ROW_HEIGHT + 60)
+        self._window.set_default_size(PANEL_WIDTH, self.MAX_VISIBLE * self.ROW_HEIGHT + 60)
         self._window.set_resizable(False)
         self._window.set_decorated(False)
         self._window.set_keep_above(True)
@@ -487,7 +486,7 @@ class SearchPanel:
             self._clipboard_panel.hide_ai_panel()
 
         mx, my, mw, mh = _get_active_monitor_geometry()
-        x = mx + (mw - self.PANEL_WIDTH) // 2
+        x = mx + (mw - PANEL_WIDTH) // 2
         y = my + int(mh * 0.18)
         self._window.move(x, y)
         self._window.show_all()
@@ -558,13 +557,13 @@ class SearchPanel:
             self._dir_scrolled.set_no_show_all(True)
             self._dir_scrolled.hide()
             self._separator.hide()
-            btn.set_label("\u25b6")
+            btn.set_label("▶")
             btn.set_tooltip_text("展开目录栏")
         else:
             self._dir_scrolled.set_no_show_all(False)
             self._dir_scrolled.show()
             self._separator.show()
-            btn.set_label("\u25c0")
+            btn.set_label("◀")
             btn.set_tooltip_text("折叠目录栏")
         self._window.queue_resize()
 

@@ -35,6 +35,7 @@ def relative_time(ts_ms: int) -> str:
 
 CACHE_DIR = os.path.expanduser("~/.cache/opencode-switcher")
 CONVERSATIONS_DIR = os.path.join(CACHE_DIR, "conversations")
+PANEL_WIDTH = 1320
 
 def request_window_focus(wm_class: str):
     """向 GNOME 扩展发送窗口聚焦请求"""

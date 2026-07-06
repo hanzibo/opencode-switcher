@@ -22,7 +22,7 @@ import time
 import requests
 import json
 import base64
-from utils import relative_time, is_wayland, request_window_focus
+from utils import relative_time, is_wayland, request_window_focus, PANEL_WIDTH
 from urllib.parse import urlparse, parse_qs
 from ai_text_utils import (
     _dict_to_chat_message, _extract_after_header, _escape_math,
@@ -71,7 +71,6 @@ _LATEX_COMMANDS = frozenset({
 })
 
 CATEGORY_WIDTH = 200
-PANEL_WIDTH = 1320
 # ponytail: removed fixed AI_PANEL_WIDTH — now uses equal expand with content area
 
 
@@ -191,7 +190,6 @@ class ClipboardPanel(Gtk.Box):
         self._loading_data = False
         self._conversation_store = ConversationStore()
         self._pygments_css_cache: Dict[str, str] = {}
-        self._sidebar_collapsed = False
 
         self._bg_color = Gdk.RGBA()
         self._title_color = Gdk.RGBA()
@@ -411,20 +409,24 @@ class ClipboardPanel(Gtk.Box):
                 break
 
     def _on_sidebar_toggled(self, btn):
-        self._sidebar_collapsed = btn.get_active()
-        if self._sidebar_collapsed:
-            self._cat_vbox.set_no_show_all(True)
-            self._cat_vbox.hide()
-            self._cat_sep.hide()
-            btn.set_label("\u25b6")
-            btn.set_tooltip_text("展开侧边栏")
-        else:
-            self._cat_vbox.set_no_show_all(False)
-            self._cat_vbox.show()
-            self._cat_sep.show()
-            btn.set_label("\u25c0")
-            btn.set_tooltip_text("折叠侧边栏")
+        self._toggle_sidebar(self._cat_vbox, self._cat_sep, btn, "◀", "▶", "折叠侧边栏", "展开侧边栏")
         self.queue_resize()
+
+    @staticmethod
+    def _toggle_sidebar(widget, sep, btn, show_label, hide_label, show_tip, hide_tip):
+        collapsed = btn.get_active()
+        if collapsed:
+            widget.set_no_show_all(True)
+            widget.hide()
+            sep.hide()
+            btn.set_label(hide_label)
+            btn.set_tooltip_text(hide_tip)
+        else:
+            widget.set_no_show_all(False)
+            widget.show()
+            sep.show()
+            btn.set_label(show_label)
+            btn.set_tooltip_text(show_tip)
 
     def _on_sep_draw(self, widget, cr):
         alloc = widget.get_allocation()
@@ -811,7 +813,16 @@ class ClipboardPanel(Gtk.Box):
         GLib.idle_add(self._select_first_visible_row)
 
     def _on_filter_gear_clicked(self, btn):
+        # Destroy previous menu if still open
+        old = getattr(self, "_gear_menu", None)
+        if old is not None:
+            try:
+                old.destroy()
+            except Exception:
+                pass
+
         menu = Gtk.Menu.new()
+        self._gear_menu = menu
         is_clipboard = self._active_category_id == "__clipboard__"
 
         if is_clipboard:
@@ -1117,7 +1128,10 @@ class ClipboardPanel(Gtk.Box):
 
     def _on_row_more_clicked(self, btn, row, item):
         self._content_list.select_row(row)
+        menu = self._build_item_menu(item)
+        menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, None)
 
+    def _build_item_menu(self, item):
         menu = Gtk.Menu.new()
         if self._active_category_id == "__clipboard__":
             copy_item = Gtk.MenuItem.new_with_label("Copy")
@@ -1129,7 +1143,7 @@ class ClipboardPanel(Gtk.Box):
 
             item_type = getattr(item, "type", "text")
             if item_type == "image":
-                send_ai_item = Gtk.MenuItem.new_with_label("\U0001f5bc\ufe0f \u53d1\u9001\u5230 AI \u770b\u76d8")
+                send_ai_item = Gtk.MenuItem.new_with_label("🖼️ 发送到 AI 看盘")
                 send_ai_item.connect("activate", lambda *_: self._send_image_to_ai(item))
                 menu.append(send_ai_item)
 
@@ -1169,7 +1183,7 @@ class ClipboardPanel(Gtk.Box):
             self.on_menu_shown()
         menu.connect("deactivate", lambda *_: GLib.timeout_add(300, self._on_menu_deactivated))
         menu.show_all()
-        menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, None)
+        return menu
 
     def _on_content_button(self, _listbox, event):
         if event.button != 3:
@@ -1179,58 +1193,7 @@ class ClipboardPanel(Gtk.Box):
             return False
         self._content_list.select_row(row)
 
-        menu = Gtk.Menu.new()
-        item = row.store_item
-        if self._active_category_id == "__clipboard__":
-            copy_item = Gtk.MenuItem.new_with_label("Copy")
-            copy_item.connect("activate", lambda *_: self._activate_item(item))
-            menu.append(copy_item)
-            del_item = Gtk.MenuItem.new_with_label("Delete")
-            del_item.connect("activate", lambda *_: self._delete_item(item))
-            menu.append(del_item)
-
-            item_type = getattr(item, "type", "text")
-            if item_type == "image":
-                send_ai_item = Gtk.MenuItem.new_with_label("🖼️ 发送到 AI 看盘")
-                send_ai_item.connect("activate", lambda *_: self._send_image_to_ai(item))
-                menu.append(send_ai_item)
-
-            custom_prompts = self._custom_prompts_store.get_all()
-            if custom_prompts:
-                applicable_prompts = []
-                for p in custom_prompts:
-                    p_categories = getattr(p, "categories", None) or ["text"]
-                    if item_type in p_categories:
-                        applicable_prompts.append(p)
-                
-                if applicable_prompts:
-                    sep = Gtk.SeparatorMenuItem.new()
-                    menu.append(sep)
-                    for p in applicable_prompts:
-                        prompt_item = Gtk.MenuItem.new_with_label(p.name)
-                        prompt_item.connect("activate", lambda *_, p_obj=p: self._ask_custom_prompt(item, p_obj))
-                        menu.append(prompt_item)
-        else:
-            copy_item = Gtk.MenuItem.new_with_label("Copy")
-            copy_item.connect("activate", lambda *_: self._activate_item(item))
-            menu.append(copy_item)
-
-            dynamic_copy_item = Gtk.MenuItem.new_with_label("Dynamic Copy")
-            has_placeholders = len(TEMPLATE_REGEX.findall(item.text)) > 0
-            dynamic_copy_item.set_sensitive(has_placeholders)
-            dynamic_copy_item.connect("activate", lambda *_: self._show_dynamic_copy_dialog(item))
-            menu.append(dynamic_copy_item)
-
-            edit_item = Gtk.MenuItem.new_with_label("Edit")
-            edit_item.connect("activate", lambda *_: self._edit_prompt(item))
-            menu.append(edit_item)
-            del_item = Gtk.MenuItem.new_with_label("Delete")
-            del_item.connect("activate", lambda *_: self._delete_item(item))
-            menu.append(del_item)
-        if self.on_menu_shown:
-            self.on_menu_shown()
-        menu.connect("deactivate", lambda *_: GLib.timeout_add(300, self._on_menu_deactivated))
-        menu.show_all()
+        menu = self._build_item_menu(row.store_item)
         menu.popup_at_pointer(event)
         return True
 
@@ -1918,7 +1881,6 @@ class ClipboardPanel(Gtk.Box):
 
     def _on_restore_finished(self, err):
         """Called on the main thread after background restore completes."""
-
         if err is None:
             self._show_message_dialog(
                 Gtk.MessageType.INFO,
