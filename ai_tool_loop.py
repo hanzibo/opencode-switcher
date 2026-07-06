@@ -60,6 +60,7 @@ def run_llm_react_loop(
     set_tool_iteration_fn,
     reset_iteration_state_fn,
     set_reasoning_text_fn=None,
+    set_assistant_text_fn=None,
 ):
     set_tool_iteration_fn(0)
     iteration = 0
@@ -88,6 +89,7 @@ def run_llm_react_loop(
             reset_iteration_state_fn=reset_iteration_state_fn,
             iteration=iteration,
             set_reasoning_text_fn=set_reasoning_text_fn,
+            set_assistant_text_fn=set_assistant_text_fn,
         )
         if not should_continue:
             break
@@ -118,10 +120,8 @@ def _perform_llm_call(
     reset_iteration_state_fn,
     iteration: int,
     set_reasoning_text_fn=None,
+    set_assistant_text_fn=None,
 ) -> bool:
-    has_thinking = False
-    thinking_header_added = False
-    response_header_added = False
     assistant_text = ""
     reasoning_text = ""
     tool_calls_found = []
@@ -149,32 +149,18 @@ def _perform_llm_call(
             content = delta.get("content")
 
             if reasoning:
-                if not thinking_header_added:
-                    with stream_lock:
-                        append_to_stream_queue_fn('<details class="thinking-details" open><summary class="thinking-summary">💭 Thinking Process</summary><div class="thinking-content">')
-                    thinking_header_added = True
-                with stream_lock:
-                    append_to_stream_queue_fn(reasoning)
                 reasoning_text += reasoning
                 if set_reasoning_text_fn is not None:
                     set_reasoning_text_fn(reasoning_text)
-                has_thinking = True
+                with stream_lock:
+                    append_to_stream_queue_fn(reasoning)
             elif content:
-                if not response_header_added:
-                    response_header_added = True
-                    if has_thinking:
-                        with stream_lock:
-                            append_to_stream_queue_fn('</div></details>\n\n<div class="answer-header">💡 Answer:</div>\n')
-                    else:
-                        with stream_lock:
-                            append_to_stream_queue_fn('\n\n<div class="assistant-header">🤖 Assistant:</div>\n')
+                assistant_text += content
+                if set_assistant_text_fn is not None:
+                    set_assistant_text_fn(assistant_text)
                 with stream_lock:
                     append_to_stream_queue_fn(content)
-                assistant_text += content
 
-        if thinking_header_added and not response_header_added:
-            with stream_lock:
-                append_to_stream_queue_fn('</div></details>\n\n')
 
         if tool_calls_found:
             tool_call_msg = {
@@ -187,9 +173,6 @@ def _perform_llm_call(
             append_message_fn(tool_call_msg)
 
             flush_stream_queue_fn()
-
-            tc_html = tool_registry.format_tool_calls_for_display(tool_calls_found)
-            GLib.idle_add(append_html_to_webview_fn, tc_html)
 
             for tc in tool_calls_found:
                 if get_current_request_id_fn() != req_id:
@@ -207,15 +190,8 @@ def _perform_llm_call(
                     "name": tc_name,
                     "content": result,
                 })
-                result_html = tool_registry.format_tool_result_for_display(tc_name, result)
-                GLib.idle_add(append_html_to_webview_fn, result_html)
 
             if iteration + 1 >= MAX_TOOL_ITERATIONS:
-                err_msg = (
-                    f'\n\n<div class="tool-result"><b>⚠️ 已达到最大工具调用次数'
-                    f'（{MAX_TOOL_ITERATIONS}），请简化请求或重试。</b></div>\n\n'
-                )
-                GLib.idle_add(append_html_to_webview_fn, err_msg)
                 append_message_fn({
                     "role": "assistant",
                     "content": f"⚠️ 已达到最大工具调用次数（{MAX_TOOL_ITERATIONS}），请简化请求或重试。"

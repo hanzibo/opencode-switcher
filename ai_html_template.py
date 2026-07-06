@@ -644,6 +644,92 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     color: rgba(15, 23, 42, 0.75);
                 }}
                 
+                /* Tool Steps Timeline Styles */
+                .tool-steps-container {{
+                    margin: 10px 0;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 8px;
+                    border-left: 2px solid rgba(128, 128, 128, 0.15);
+                    padding-left: 12px;
+                    margin-left: 6px;
+                }}
+                details.tool-step-details {{
+                    background: rgba(128, 128, 128, 0.04);
+                    border: 1px solid rgba(128, 128, 128, 0.1);
+                    border-radius: 6px;
+                    font-size: 13px;
+                    overflow: hidden;
+                }}
+                details.tool-step-details[open] {{
+                    background: rgba(128, 128, 128, 0.06);
+                }}
+                summary.tool-step-summary {{
+                    padding: 6px 10px;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    user-select: none;
+                    outline: none;
+                    font-weight: 500;
+                }}
+                .tool-step-status {{
+                    font-size: 14px;
+                    display: inline-block;
+                }}
+                .tool-step-status.running {{
+                    animation: spin 1s linear infinite;
+                }}
+                @keyframes spin {{
+                    100% {{ transform: rotate(360deg); }}
+                }}
+                .tool-step-time {{
+                    margin-left: auto;
+                    color: rgba(128, 128, 128, 0.6);
+                    font-size: 11px;
+                }}
+                .tool-step-content {{
+                    padding: 8px 10px;
+                    border-top: 1px solid rgba(128, 128, 128, 0.08);
+                    background: rgba(0, 0, 0, 0.15);
+                }}
+                .tool-step-args {{
+                    font-family: monospace;
+                    font-size: 12px;
+                    margin-bottom: 6px;
+                    color: rgba(255, 255, 255, 0.7);
+                    word-break: break-all;
+                }}
+                .tool-step-result {{
+                    margin: 0;
+                }}
+                .tool-step-result pre {{
+                    margin: 0 !important;
+                    padding: 8px !important;
+                    background: rgba(0, 0, 0, 0.3) !important;
+                    border: 1px solid rgba(128, 128, 128, 0.1) !important;
+                    border-radius: 4px !important;
+                    font-size: 12px !important;
+                    max-height: 200px;
+                    overflow: auto;
+                }}
+                .light details.tool-step-details {{
+                    background: rgba(0, 0, 0, 0.02);
+                    border-color: rgba(0, 0, 0, 0.06);
+                }}
+                .light .tool-step-content {{
+                    background: rgba(0, 0, 0, 0.03);
+                }}
+                .light .tool-step-result pre {{
+                    background: rgba(255, 255, 255, 0.8) !important;
+                    border-color: rgba(0, 0, 0, 0.08) !important;
+                    color: inherit !important;
+                }}
+                .light .tool-step-args {{
+                    color: rgba(15, 23, 42, 0.6);
+                }}
+
                 /* Action Button Row Hover-Reveal & Pill Styling */
                 .msg-btn-row {{
                     position: absolute;

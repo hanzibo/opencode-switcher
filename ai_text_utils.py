@@ -8,6 +8,7 @@ LLM message rendering, and text cleaning. Extracted to reduce the
 import re
 import html
 import os
+import json
 import base64
 import mimetypes
 from typing import Optional, List, Dict, Tuple, Union
@@ -461,73 +462,195 @@ def _extract_local_title(message_content: Union[str, List, Dict]) -> str:
     return cleaned
 
 
+def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
+    func = tool_call.get("function", {})
+    name = func.get("name", "unknown")
+    arguments_str = func.get("arguments", "{}")
+    
+    # Try to parse arguments for prettier display
+    try:
+        args = json.loads(arguments_str)
+        args_display = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in args.items())
+    except Exception:
+        args_display = arguments_str
+
+    tool_icons = {
+        "bash": "🖥️",
+        "web_search": "🌐",
+        "web_fetch": "📖",
+        "read_file": "📄",
+        "write_file": "✍️",
+        "edit_file": "✏️",
+        "delete_file": "🗑️",
+        "list_directory": "📁",
+        "glob_find": "🔍",
+        "grep_search": "🔎",
+        "get_current_time": "⏰",
+        "todo_create": "📋",
+        "todo_update": "📋",
+        "todo_list": "📋",
+        "sub_agent": "🤖",
+        "get_subagent_status": "🤖"
+    }
+    icon = tool_icons.get(name, "⚙️")
+
+    # Status and result
+    status_icon = "✅"
+    duration_str = ""
+    result_html = ""
+    
+    if tool_result_msg:
+        content = tool_result_msg.get("content", "")
+        # Check if it was an error
+        if "❌" in content or "error" in content.lower() or "[错误]" in content:
+            status_icon = "❌"
+        
+        # Max limit for display to avoid slowing down Webview
+        MAX_DISPLAY = 4000
+        display_content = content[:MAX_DISPLAY]
+        if len(content) > MAX_DISPLAY:
+            display_content += f"\n\n...（结果已截断，共 {len(content)} 字符）"
+            
+        safe_content = html.escape(display_content)
+        result_html = (
+            f'<div class="tool-step-result">\n'
+            f'<pre><code>{safe_content}</code></pre>\n'
+            f'</div>\n'
+        )
+    else:
+        status_icon = '<span class="tool-step-status running">🔄</span>'
+        result_html = '<div class="tool-step-result"><em>正在运行中...</em></div>\n'
+
+    return (
+        f'<details class="tool-step-details">\n'
+        f'<summary class="tool-step-summary">\n'
+        f'<span class="tool-step-status">{status_icon}</span>\n'
+        f'<strong>调用工具: {icon} {name}</strong>\n'
+        f'<span class="tool-step-time">{duration_str}</span>\n'
+        f'</summary>\n'
+        f'<div class="tool-step-content">\n'
+        f'<div class="tool-step-args"><strong>参数:</strong> <code>{html.escape(args_display)}</code></div>\n'
+        f'{result_html}'
+        f'</div>\n'
+        f'</details>\n'
+    )
+
+
+def _render_active_turn_to_html(
+    turn_messages: List[Dict],
+    streaming_reasoning: str = "",
+    streaming_content: str = "",
+    is_streaming: bool = False
+) -> str:
+    # 1. Gather all reasoning
+    reasoning_parts = []
+    for msg in turn_messages:
+        if msg.get("role") == "assistant" and msg.get("reasoning_content"):
+            reasoning_parts.append(msg["reasoning_content"])
+    if streaming_reasoning:
+        reasoning_parts.append(streaming_reasoning)
+        
+    reasoning_text = "\n".join(reasoning_parts).strip()
+    reasoning_html = ""
+    if reasoning_text:
+        # If streaming, keep it open; otherwise collapse it
+        open_attr = ' open' if is_streaming and streaming_reasoning else ''
+        escaped = html.escape(reasoning_text)
+        reasoning_html = (
+            f'<details class="thinking-details"{open_attr}>\n'
+            f'<summary class="thinking-summary">💭 Thinking Process</summary>\n'
+            f'<div class="thinking-content">{escaped}</div>\n'
+            f'</details>\n\n'
+        )
+
+    # 2. Pair tool calls and results
+    tool_results_by_id = {}
+    legacy_tool_results = []
+    for msg in turn_messages:
+        if msg.get("role") == "tool":
+            cid = msg.get("tool_call_id")
+            if cid:
+                tool_results_by_id[cid] = msg
+            else:
+                legacy_tool_results.append(msg)
+
+    tool_calls_list = []
+    for msg in turn_messages:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                tool_calls_list.append(tc)
+
+    tool_steps_html = ""
+    if tool_calls_list:
+        steps_list = []
+        for i, tc in enumerate(tool_calls_list):
+            cid = tc.get("id")
+            result_msg = None
+            if cid and cid in tool_results_by_id:
+                result_msg = tool_results_by_id[cid]
+            elif i < len(legacy_tool_results):
+                result_msg = legacy_tool_results[i]
+                
+            steps_list.append(_render_tool_step(tc, result_msg))
+            
+        tool_steps_html = (
+            f'<div class="tool-steps-container">\n'
+            f'{"".join(steps_list)}'
+            f'</div>\n\n'
+        )
+
+    # 3. Gather final answer content
+    content_parts = []
+    for msg in turn_messages:
+        if msg.get("role") == "assistant" and msg.get("content"):
+            content_str = msg["content"]
+            # Clean switcher specific HTML markers
+            content_str = re.sub(
+                r'<details class=["\']thinking-details["\'].*?</details>\n*',
+                "", content_str, flags=re.DOTALL
+            )
+            content_str = re.sub(
+                r'<div class=["\'](?:assistant|thinking|answer)-header["\'].*?</div>\n*',
+                "", content_str, flags=re.DOTALL
+            )
+            content_str = re.sub(
+                r'</?details.*?>|</?summary.*?>|</?div.*?>',
+                "", content_str
+            )
+            if content_str.strip():
+                content_parts.append(content_str)
+                
+    if streaming_content:
+        content_parts.append(streaming_content)
+
+    final_content = "\n".join(content_parts).strip()
+    content_html = ""
+    if final_content:
+        rendered_md = _markdown_to_html_safe(final_content)
+        content_html = (
+            f'<div class="answer-header">💡 Answer:</div>\n'
+            f'{rendered_md}\n'
+        )
+
+    return f'{reasoning_html}{tool_steps_html}{content_html}'
+
+
 def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
     """Convert OpenAI-format message list back to rendered markdown text."""
     if not messages:
         return ""
     parts = []
-
-    def _render_reasoning(reasoning: str) -> str:
-        if not reasoning or not reasoning.strip():
-            return ""
-        escaped = html.escape(reasoning)
-        return f'<details class="thinking-details"><summary class="thinking-summary">💭 Thinking Process</summary><div class="thinking-content">{escaped}</div></details>\n\n'
-
-    for i, m in enumerate(messages):
+    i = 0
+    while i < len(messages):
+        m = messages[i]
         role = m.get("role", "")
         content = m.get("content", "")
-        tool_calls = m.get("tool_calls")
-        reasoning_content = m.get("reasoning_content", "")
-
-        if role == "tool":
-            tool_name = m.get("name", "unknown")
-            html_res = tool_registry.render_collapsible_tool_result(tool_name, content)
-            parts.append(f"\n\n{html_res}\n\n")
-            continue
-
-        if role == "assistant" and tool_calls:
-            # Render reasoning if present (skip if content already has thinking header/details from streaming)
-            reasoning_html = ""
-            if reasoning_content:
-                has_thinking_in_content = (isinstance(content, str) and 
-                                           ('thinking-header' in content or 'thinking-details' in content))
-                if not has_thinking_in_content:
-                    reasoning_html = _render_reasoning(reasoning_content)
-            # Show tool call info
-            tc_html = tool_registry.format_tool_calls_for_display(tool_calls)
-            tc_part = "\n\n" + tc_html + "\n\n" if tc_html else ""
-            # If there's also content, display it
+        
+        if role == "user":
             if isinstance(content, list):
-                content = _vision_content_to_text(content)
-            content_part = ""
-            if content and content.strip():
-                has_header = ('<div class="assistant-header">' in content
-                             or '<div class="answer-header">' in content
-                             or '<div class="thinking-header">' in content
-                             or '<details class="thinking-details">' in content)
-                prefix = '' if has_header else '\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
-                content_part = f'{prefix}{content}\n\n'
-            
-            parts.append(
-                f'<div class="msg-row assistant" markdown="1">\n'
-                f'{ASSISTANT_AVATAR_HTML}\n'
-                f'<div class="msg-bubble assistant" markdown="1">\n'
-                f'{reasoning_html}{tc_part}{content_part}\n'
-                f'<copy-marker data-msg-index="{i}"></copy-marker>\n'
-                f'</div>\n'
-                f'</div>\n\n'
-            )
-            continue
-
-        if not content and not reasoning_content:
-            continue
-
-        if isinstance(content, list):
-            rendered_content = _vision_content_to_markdown(content)
-        else:
-            rendered_content = _close_unclosed_code_blocks(content)
-
-        if i == 0 or role == "user":
+                rendered_content = _vision_content_to_markdown(content)
+            else:
+                rendered_content = _close_unclosed_code_blocks(content)
             parts.append(
                 f'<div class="msg-row user" markdown="1">\n'
                 f'{USER_AVATAR_HTML}\n'
@@ -537,30 +660,30 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
                 f'</div>\n'
                 f'</div>\n\n'
             )
-        elif role == "assistant":
-            content_str = content if isinstance(content, str) else _vision_content_to_text(content)
-            # Render reasoning if present (skip if content already has thinking header/details from streaming)
-            reasoning_html = ""
-            if reasoning_content and 'thinking-header' not in content_str and 'thinking-details' not in content_str:
-                reasoning_html = _render_reasoning(reasoning_content)
+            i += 1
+            continue
             
-            if content_str.strip() or reasoning_html:
-                prefix = ""
-                if content_str.strip():
-                    # Content already has role headers embedded from streaming phase;
-                    # avoid adding another .assistant-header wrapper to prevent duplication.
-                    has_header = ('<div class="assistant-header">' in content_str
-                                 or '<div class="answer-header">' in content_str
-                                 or '<div class="thinking-header">' in content_str
-                                 or '<details class="thinking-details">' in content_str)
-                    prefix = '' if has_header else '\n\n<div class="assistant-header">🤖 Assistant:</div>\n\n'
+        elif role == "assistant" or role == "tool":
+            # Start of assistant response turn.
+            # Gather all assistant and tool messages in this turn.
+            turn_msgs = []
+            start_idx = i
+            while i < len(messages) and messages[i].get("role") in ("assistant", "tool"):
+                turn_msgs.append(messages[i])
+                i += 1
+            
+            turn_html = _render_active_turn_to_html(turn_msgs, is_streaming=False)
+            if turn_html.strip():
                 parts.append(
                     f'<div class="msg-row assistant" markdown="1">\n'
                     f'{ASSISTANT_AVATAR_HTML}\n'
                     f'<div class="msg-bubble assistant" markdown="1">\n'
-                    f'{reasoning_html}{prefix}{content_str}\n\n'
-                    f'<copy-marker data-msg-index="{i}"></copy-marker>\n'
+                    f'{turn_html}\n'
+                    f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
                     f'</div>\n'
                     f'</div>\n\n'
                 )
+            continue
+            
+        i += 1
     return "".join(parts)

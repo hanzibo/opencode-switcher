@@ -31,7 +31,7 @@ from ai_text_utils import (
     _clean_history_title, _extract_local_title, _rebuild_markdown_from_messages,
     _vision_content_to_markdown, _resolve_vision_image_src,
     _vision_content_to_text, _image_hash_path, _image_to_data_uri, _cached_image_to_data_uri,
-    _model_supports_vision, USER_AVATAR_HTML
+    _model_supports_vision, USER_AVATAR_HTML, _render_active_turn_to_html
 )
 
 # Regex to match placeholders: ${index[:prompt][=default]}
@@ -826,6 +826,19 @@ class AIChatPanel(Gtk.Box):
             self._ai_response_div_added = False
             self._ai_assistant_html_base = ""
             self._ai_current_reasoning_text = ""
+            self._ai_dirty_stream = False
+
+        def append_message_callback(msg):
+            self._ai_messages.append(msg)
+            GLib.idle_add(self._render_current_assistant_message, req_id)
+
+        def set_reasoning_callback(text):
+            self._ai_current_reasoning_text = text
+            self._ai_dirty_stream = True
+
+        def set_assistant_callback(text):
+            self._ai_current_assistant_text = text
+            self._ai_dirty_stream = True
 
         run_llm_react_loop(
             llm_client=self._llm_client,
@@ -841,7 +854,7 @@ class AIChatPanel(Gtk.Box):
             stream_lock=self._ai_stream_lock,
             stream_queue=self._ai_stream_queue,
             get_current_request_id_fn=lambda: getattr(self, "_ai_request_id", 0),
-            append_message_fn=self._ai_messages.append,
+            append_message_fn=append_message_callback,
             append_html_to_webview_fn=self.append_html_to_webview,
             flush_stream_queue_fn=self._flush_stream_queue,
             append_to_stream_queue_fn=lambda text: self._ai_stream_queue.append(text),
@@ -850,7 +863,8 @@ class AIChatPanel(Gtk.Box):
             finalize_after_tool_loop_fn=self._finalize_after_tool_loop,
             set_tool_iteration_fn=lambda val: setattr(self, "_ai_tool_iteration", val),
             reset_iteration_state_fn=reset_iteration_state,
-            set_reasoning_text_fn=lambda text: setattr(self, "_ai_current_reasoning_text", text),
+            set_reasoning_text_fn=set_reasoning_callback,
+            set_assistant_text_fn=set_assistant_callback,
         )
 
     def _finalize_after_tool_loop(self, req_id: int):
@@ -977,20 +991,15 @@ class AIChatPanel(Gtk.Box):
             if self._ai_stream_queue:
                 new_text_list = self._ai_stream_queue
                 self._ai_stream_queue = []
-        
-        if new_text_list:
-            joined = "".join(new_text_list)
-            self._ai_markdown_text += joined
-            self._ai_current_assistant_text += joined
-            self._ai_assistant_buffer += joined
-            return True
-        return False
+        return len(new_text_list) > 0
 
     def _poll_stream_queue(self, req_id: int) -> bool:
         if getattr(self, "_ai_request_id", 0) != req_id:
             return False
         
-        if self._flush_stream_queue():
+        self._flush_stream_queue()
+        if getattr(self, "_ai_dirty_stream", False):
+            self._ai_dirty_stream = False
             self._render_current_assistant_message(req_id)
             
         return self._ai_streaming
@@ -998,30 +1007,34 @@ class AIChatPanel(Gtk.Box):
     def _render_current_assistant_message(self, req_id: int):
         if getattr(self, "_ai_request_id", 0) != req_id:
             return
+        if not getattr(self, "_ai_streaming", False):
+            return
         
-        iteration = getattr(self, "_ai_tool_iteration", 0)
-        msg_id = f"msg-{req_id}-{iteration}"
+        msg_id = f"msg-{req_id}"
         if not self._ai_response_div_added:
             js_append = f"appendMessageContainer('{msg_id}');"
             self._ai_webview.run_javascript(js_append, None, None)
             self._ai_response_div_added = True
-            self._ai_assistant_html_base = ""
+            
+        # Find messages for the current active turn
+        last_user_idx = -1
+        for idx in range(len(self._ai_messages) - 1, -1, -1):
+            if self._ai_messages[idx].get("role") == "user":
+                last_user_idx = idx
+                break
+                
+        turn_msgs = self._ai_messages[last_user_idx + 1:] if last_user_idx != -1 else self._ai_messages
         
-        text = _close_unclosed_code_blocks(self._ai_current_assistant_text)
-        html = _markdown_to_html_safe(text)
+        # Render the turn's html
+        html_content = _render_active_turn_to_html(
+            turn_msgs,
+            streaming_reasoning=getattr(self, "_ai_current_reasoning_text", ""),
+            streaming_content=getattr(self, "_ai_current_assistant_text", ""),
+            is_streaming=True
+        )
         
-        # Incremental append: if new HTML starts with previous base, send only the delta suffix
-        if html.startswith(self._ai_assistant_html_base):
-            new_suffix = html[len(self._ai_assistant_html_base):]
-            if new_suffix:
-                js_update = f"appendHtml('{msg_id}', {json.dumps(new_suffix)});"
-                self._ai_webview.run_javascript(js_update, None, None)
-        else:
-            # Prefix mismatch → full replace (e.g., math delimiter completed across chunks)
-            js_update = f"updateMessageContainer('{msg_id}', {json.dumps(html)});"
-            self._ai_webview.run_javascript(js_update, None, None)
-        
-        self._ai_assistant_html_base = html
+        js_update = f"updateMessageContainer('{msg_id}', {json.dumps(html_content)});"
+        self._ai_webview.run_javascript(js_update, None, None)
 
     def _get_pygments_css(self, theme: str) -> str:
         return _get_pygments_css(theme, self._pygments_css_cache)
@@ -1056,6 +1069,7 @@ class AIChatPanel(Gtk.Box):
         self._flush_stream_queue()
 
         # Append assistant text response to messages, preserving reasoning_content
+        self._ai_assistant_buffer = self._ai_current_assistant_text
         assistant_msg = {"role": "assistant", "content": self._ai_assistant_buffer}
         reasoning = getattr(self, "_ai_current_reasoning_text", "")
         if reasoning:
@@ -1071,6 +1085,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
         self._ai_assistant_html_base = ""
+        self._ai_dirty_stream = False
 
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
