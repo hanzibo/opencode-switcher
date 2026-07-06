@@ -2736,11 +2736,33 @@ def execute_sub_agent(task: str, max_turns: int = 10,
 
 
 _background_subagent_id = 0
+_background_subagent_results: Dict[int, str] = {}
+"""Stores completed background sub-agent results, keyed by subagent_id.
+Cleared once consumed by check_background_subagents()."""
+
+
+def check_background_subagents() -> str:
+    """Check if any background sub-agents have completed since last check.
+    Returns a formatted message with results, or empty string if none.
+    Clears the consumed entries. Designed to be called before sending a user message."""
+    global _background_subagent_results
+    if not _background_subagent_results:
+        return ""
+    parts = []
+    for sid in sorted(_background_subagent_results):
+        parts.append(
+            f"## 后台子代理 {sid} 已完成\n"
+            f"结果文件: /tmp/opencode_subagent_{sid}_result.txt\n\n"
+            f"请使用 read_file 读取结果文件以获取详细信息。"
+        )
+    _background_subagent_results.clear()
+    return "\n\n---\n\n".join(parts)
 
 
 def _run_subagent_background(task: str, max_turns: int, agent_type: str, subagent_id: int):
     """Run a sub-agent in a background daemon thread."""
     def _run():
+        global _background_subagent_results
         result = _execute_subagent_sync(task, max_turns, agent_type)
         result_path = f"/tmp/opencode_subagent_{subagent_id}_result.txt"
         try:
@@ -2748,6 +2770,7 @@ def _run_subagent_background(task: str, max_turns: int, agent_type: str, subagen
                 f.write(result)
         except OSError:
             pass
+        _background_subagent_results[subagent_id] = result
         try:
             summary = result[:100] + "..." if len(result) > 100 else result
             execute_send_notification(
