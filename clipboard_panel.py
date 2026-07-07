@@ -185,6 +185,8 @@ class ClipboardPanel(Gtk.Box):
         self._editing_rename_cat_id = None
         self._rename_activate_id = 0
         self._rename_focus_out_id = 0
+        self._active_popup_menu = None
+        self._last_processed_marker = ""
         self._setup_marker_monitor()
         self._last_rendered_category_id = None
         self._last_rendered_item_ids = None
@@ -815,7 +817,7 @@ class ClipboardPanel(Gtk.Box):
 
     def _on_filter_gear_clicked(self, btn):
         # Destroy previous menu if still open
-        old = getattr(self, "_active_popup_menu", None)
+        old = self._active_popup_menu
         if old is not None:
             try:
                 old.destroy()
@@ -1089,7 +1091,7 @@ class ClipboardPanel(Gtk.Box):
         if cat is None:
             return False
 
-        old = getattr(self, "_active_popup_menu", None)
+        old = self._active_popup_menu
         if old is not None:
             try:
                 old.destroy()
@@ -1186,7 +1188,7 @@ class ClipboardPanel(Gtk.Box):
             del_item.connect("activate", lambda *_: self._delete_item(item))
             menu.append(del_item)
 
-        old = getattr(self, "_active_popup_menu", None)
+        old = self._active_popup_menu
         if old is not None:
             try:
                 old.destroy()
@@ -1588,13 +1590,12 @@ class ClipboardPanel(Gtk.Box):
                 return
 
             # Deduplicate multiple GIO monitor events triggered by a single write
-            last_marker = getattr(self, "_last_processed_marker", "")
-            if content == last_marker:
+            if content == self._last_processed_marker:
                 return
             self._last_processed_marker = content
 
             # Deactivate active popup menu first to release GDK/Wayland grabs
-            active_menu = getattr(self, "_active_popup_menu", None)
+            active_menu = self._active_popup_menu
             if active_menu is not None:
                 try:
                     active_menu.popdown()
