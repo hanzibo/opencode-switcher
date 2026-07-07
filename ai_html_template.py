@@ -1157,6 +1157,9 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 function _scrollToBottomForce() {{
                     window.scrollTo({{top: document.body.scrollHeight, behavior: 'smooth'}});
                 }}
+                function _scrollToTopForce() {{
+                    window.scrollTo({{top: 0, behavior: 'smooth'}});
+                }}
             </script>
         </head>
         <body class="{theme_name}">
@@ -1165,6 +1168,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 <img id="lightbox-img" class="lightbox-img">
             </div>
             <div id="round-nav">
+                <button id="round-top" class="nav-btn" onclick="_scrollToTopForce()" title="跳至最顶端">⤴</button>
                 <button id="round-prev" class="nav-btn" onclick="_prevRound()">◀</button>
                 <span id="round-indicator" class="round-indicator">1/1</span>
                 <button id="round-next" class="nav-btn" onclick="_nextRound()">▶</button>
