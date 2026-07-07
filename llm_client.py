@@ -75,6 +75,7 @@ class _LLMHttpClient:
         self._session = requests.Session()
         retry_strategy = requests.packages.urllib3.util.retry.Retry(
             total=3,
+            connect=3,
             backoff_factor=1,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["POST"],
