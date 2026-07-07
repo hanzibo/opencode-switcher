@@ -634,8 +634,7 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
     
     if tool_result_msg:
         content = tool_result_msg.get("content", "")
-        # Check if it was an error
-        if "❌" in content or "error" in content.lower() or "[错误]" in content:
+        if content.strip().startswith(("❌", "错误：", "执行工具「", "搜索失败", "获取页面失败", "子代理")):
             status_icon = "❌"
         
         # Max limit for display to avoid slowing down Webview
