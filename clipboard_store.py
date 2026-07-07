@@ -1030,3 +1030,46 @@ class CustomPromptsStore:
         self._prompts = deepcopy(prompts)
         self._save()
 
+
+# ── QQ Mail IMAP Credentials ────────────────────────────────────────────────
+
+QQ_MAIL_CREDENTIALS_PATH = os.path.join(CONFIG_DIR, "qq_mail_credentials.json")
+
+
+@dataclass
+class QQMailCredential:
+    email: str = ""
+    auth_code: str = ""
+
+
+class QQMailCredentialsStore:
+    def __init__(self):
+        self.email = ""
+        self.auth_code = ""
+        self._load()
+
+    def _load(self):
+        if not os.path.isfile(QQ_MAIL_CREDENTIALS_PATH):
+            return
+        try:
+            with open(QQ_MAIL_CREDENTIALS_PATH) as f:
+                data = json.load(f)
+            self.email = data.get("email", "")
+            self.auth_code = data.get("auth_code", "")
+        except Exception:
+            pass
+
+    def save(self):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        try:
+            fd = os.open(QQ_MAIL_CREDENTIALS_PATH, flags, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump({
+                    "version": 1,
+                    "email": self.email,
+                    "auth_code": self.auth_code,
+                }, f, indent=2)
+        except Exception as e:
+            print(f"Error saving QQ mail credentials: {e}", flush=True)
+

@@ -25,6 +25,10 @@ import inspect
 import html
 import uuid
 from html.parser import HTMLParser
+import imaplib
+import email
+from email.header import decode_header
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Final, List, Optional, Callable, Tuple
 
 import requests
@@ -72,6 +76,7 @@ def _get_ignore_dirs() -> set:
 
 _SUBAGENT_BLOCKED_TOOLS: Final[frozenset] = frozenset([
     "ask_user_question",
+    "read_qq_mail",
     "sub_agent",
 ])
 
@@ -920,6 +925,42 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_qq_mail",
+            "description": "读取QQ邮箱收件箱中的邮件。需要先在设置中配置QQ邮箱地址和授权码（IMAP密码）。"
+                           "支持按数量、文件夹和搜索条件筛选邮件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "max_results": {
+                        "type": "integer",
+                        "description": "要获取的邮件数量（1-20，默认 5）",
+                        "default": 5
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "邮箱文件夹名称（默认「INBOX」收件箱）",
+                        "default": "INBOX"
+                    },
+                    "search_criteria": {
+                        "type": "string",
+                        "description": "IMAP 搜索条件（默认「ALL」全部）。"
+                                       "常用值：ALL（全部）、UNSEEN（未读）、FROM xxx（来自某人）、"
+                                       "SUBJECT xxx（主题包含）、SINCE 01-Jul-2026（指定日期后）",
+                        "default": "ALL"
+                    },
+                    "include_body": {
+                        "type": "boolean",
+                        "description": "是否包含邮件正文内容（默认 true）",
+                        "default": True
+                    }
+                },
                 "required": []
             }
         }
@@ -2695,6 +2736,187 @@ def execute_send_notification(
         return f"❌ 通知发送失败\n   原因: {e}\n   标题: {summary}"
 
 
+# ── QQ Mail Reader ──────────────────────────────────────────────────────────
+
+_QQMAIL_IMAP_SERVER = "imap.qq.com"
+_QQMAIL_IMAP_PORT = 993
+
+
+def execute_read_qq_mail(max_results: int = 5, folder: str = "INBOX",
+                         search_criteria: str = "ALL",
+                         include_body: bool = True) -> str:
+    """Read emails from QQ mailbox via IMAP over SSL.
+
+    Requires QQ mail IMAP authorization code configured in
+    qq_mail_credentials.json or QQ_MAIL_AUTH_CODE env var.
+    Uses stdlib imaplib + email — zero external dependencies."""
+    from clipboard_store import QQMailCredentialsStore
+
+    max_results = max(1, min(20, max_results))
+
+    store = QQMailCredentialsStore()
+    email_addr = store.email
+    auth_code = store.auth_code
+    if not email_addr:
+        email_addr = os.environ.get("QQ_MAIL_EMAIL", "").strip()
+    if not auth_code:
+        auth_code = os.environ.get("QQ_MAIL_AUTH_CODE", "").strip()
+
+    if not email_addr or not auth_code:
+        return (
+            "❌ QQ邮箱未配置。请先配置邮箱地址和授权码。\n\n"
+            "配置步骤：\n"
+            "1. 登录 QQ邮箱网页版 → 设置 → 账号与安全\n"
+            "2. 开启「POP3/SMTP/IMAP 服务」\n"
+            "3. 短信验证后获取 16 位授权码\n"
+            "4. 编辑 ~/.config/opencode-switcher/qq_mail_credentials.json：\n"
+            '   {\n'
+            '       "version": 1,\n'
+            '       "email": "yourname@qq.com",\n'
+            '       "auth_code": "16位授权码"\n'
+            '   }\n\n'
+            "也可通过环境变量配置：\n"
+            "  export QQ_MAIL_EMAIL=yourname@qq.com\n"
+            "  export QQ_MAIL_AUTH_CODE=你的16位授权码"
+        )
+
+    try:
+        mail = imaplib.IMAP4_SSL(_QQMAIL_IMAP_SERVER, _QQMAIL_IMAP_PORT)
+        mail.login(email_addr, auth_code)
+    except imaplib.IMAP4.error as e:
+        return f"❌ QQ邮箱登录失败：{e}\n请检查邮箱地址和授权码是否正确。"
+    except Exception as e:
+        return f"❌ 连接 QQ邮箱失败：{e}\n请检查网络连接。"
+
+    try:
+        try:
+            status, folder_data = mail.select(folder)
+            if status != "OK":
+                return f"❌ 无法打开文件夹「{folder}」"
+        except imaplib.IMAP4.error:
+            return f"❌ 文件夹「{folder}」不存在。"
+
+        try:
+            result, data = mail.search(None, search_criteria)
+            if result != "OK" or not data[0]:
+                return f"📭 收件箱无匹配邮件（条件：{search_criteria}）"
+        except imaplib.IMAP4.error:
+            return f"❌ 搜索条件无效：{search_criteria}"
+
+        email_ids = data[0].split()
+        total = len(email_ids)
+        fetch_count = min(max_results, total)
+        ids_to_fetch = email_ids[-fetch_count:]
+
+        result_parts = [f"📧 共 {total} 封匹配邮件，显示最新 {fetch_count} 封\n"]
+
+        for eid in reversed(ids_to_fetch):
+            try:
+                _, fetch_data = mail.fetch(eid, "(RFC822)")
+                raw_email = fetch_data[0][1]
+                msg = email.message_from_bytes(raw_email)
+
+                subject = _decode_email_header(msg["Subject"])
+                from_ = str(msg.get("From", "(未知发件人)"))
+                date_str = _format_email_date(msg.get("Date", ""))
+
+                result_parts.append(f"📩 发件人: {from_}")
+                result_parts.append(f"📎 主题: {subject}")
+                result_parts.append(f"🕐 时间: {date_str}")
+
+                if include_body:
+                    body_text = _extract_email_body(msg)
+                    if body_text:
+                        if len(body_text) > 500:
+                            body_text = body_text[:500] + (
+                                f"\n...（全文共 {len(body_text)} 字符，已截断）")
+                        result_parts.append(f"📋 内容:\n{body_text}")
+
+                result_parts.append("─" * 40)
+
+            except Exception as e:
+                result_parts.append(f"⚠️ 读取邮件时出错：{e}")
+                result_parts.append("─" * 40)
+
+        return "\n".join(result_parts).strip()
+
+    finally:
+        try:
+            mail.logout()
+        except Exception:
+            pass
+
+
+def _decode_email_header(header_value: str) -> str:
+    """Decode an email header that may be RFC 2047 encoded."""
+    if not header_value:
+        return "(无主题)"
+    try:
+        decoded_parts = decode_header(header_value)
+        result = ""
+        for part, charset in decoded_parts:
+            if isinstance(part, bytes):
+                result += part.decode(charset or "utf-8", errors="replace")
+            else:
+                result += part
+        return result
+    except Exception:
+        return str(header_value)
+
+
+def _format_email_date(date_str: str) -> str:
+    """Parse and format an email date string."""
+    if not date_str:
+        return ""
+    try:
+        dt = parsedate_to_datetime(date_str)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return date_str
+
+
+def _extract_email_body(msg: email.message.Message) -> str:
+    """Extract plain text body from an email, preferring text/plain over text/html."""
+    import html as html_mod
+
+    if msg.is_multipart():
+        plain_parts = []
+        html_parts_hack = []
+        for part in msg.walk():
+            ct = part.get_content_type()
+            try:
+                payload = part.get_payload(decode=True)
+                if not payload:
+                    continue
+                charset = part.get_content_charset() or "utf-8"
+                text = payload.decode(charset, errors="replace")
+                if ct == "text/plain":
+                    plain_parts.append(text)
+                elif ct == "text/html":
+                    html_parts_hack.append(text)
+            except Exception:
+                pass
+        if plain_parts:
+            return "\n".join(plain_parts).strip()
+        elif html_parts_hack:
+            text = re.sub(r"<[^>]+>", "", "\n".join(html_parts_hack))
+            return html_mod.unescape(text).strip()
+        return ""
+    else:
+        try:
+            payload = msg.get_payload(decode=True)
+            if not payload:
+                return ""
+            charset = msg.get_content_charset() or "utf-8"
+            text = payload.decode(charset, errors="replace")
+            if msg.get_content_type() == "text/html":
+                text = re.sub(r"<[^>]+>", "", text)
+                text = html_mod.unescape(text)
+            return text.strip()
+        except Exception:
+            return ""
+
+
 # ── Sub-Agent Tool ─────────────────────────────────────────────────────────
 
 _MAX_SUBAGENT_TURNS = 15
@@ -2967,6 +3189,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "delete_file": execute_delete_file,
     "rename_file": execute_rename_file,
     "send_notification": execute_send_notification,
+    "read_qq_mail": execute_read_qq_mail,
     "sub_agent": execute_sub_agent,
 }
 
@@ -3183,6 +3406,16 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
                 f'<div class="tool-call-info">🖥️ <b>执行命令：</b>{safe_first}</div>'
                 f'<div style="margin: 2px 0 4px 16px; font-size: 11px; color: #888;">超时限制：{cmd_timeout}s</div>'
                 + _make_collapsible_preview(cmd, cmd_label, max_chars=300, use_pre=True)
+            )
+        elif name == "read_qq_mail":
+            count = args.get("max_results", 5)
+            folder = args.get("folder", "INBOX")
+            criteria = args.get("search_criteria", "ALL")
+            safe_folder = html.escape(folder)
+            safe_criteria = html.escape(criteria)
+            parts.append(
+                f'<div class="tool-call-info">📧 <b>读取QQ邮件：</b>'
+                f'{count} 封，文件夹: {safe_folder}，条件: {safe_criteria}</div>'
             )
         else:
             safe_name = html.escape(name)
