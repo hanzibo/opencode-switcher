@@ -857,6 +857,67 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     color: rgba(15, 23, 42, 0.5);
                     background: rgba(0, 0, 0, 0.05);
                 }}
+
+                /* Round Navigation Bar */
+                #round-nav {{
+                    position: fixed;
+                    right: 8px;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    display: none;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 2px;
+                    background: rgba(30, 30, 40, 0.85);
+                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border-radius: 8px;
+                    padding: 6px 4px;
+                    z-index: 100;
+                    opacity: 0;
+                    transition: opacity 0.25s;
+                    backdrop-filter: blur(8px);
+                    user-select: none;
+                }}
+                #round-nav:hover {{
+                    opacity: 1 !important;
+                }}
+                #round-nav .nav-btn {{
+                    cursor: pointer;
+                    background: none;
+                    border: none;
+                    color: rgba(255, 255, 255, 0.5);
+                    font-size: 13px;
+                    padding: 2px 4px;
+                    line-height: 1.2;
+                    outline: none;
+                }}
+                #round-nav .nav-btn:hover {{
+                    color: #fff;
+                }}
+                #round-nav .nav-btn:disabled {{
+                    opacity: 0.15;
+                    cursor: default;
+                }}
+                #round-nav .round-indicator {{
+                    font-size: 10px;
+                    color: rgba(255, 255, 255, 0.4);
+                    padding: 2px 0;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", monospace;
+                    letter-spacing: 0.5px;
+                }}
+                .light #round-nav {{
+                    background: rgba(240, 240, 245, 0.9);
+                    border-color: rgba(0, 0, 0, 0.08);
+                }}
+                .light #round-nav .nav-btn {{
+                    color: rgba(0, 0, 0, 0.45);
+                }}
+                .light #round-nav .nav-btn:hover {{
+                    color: #000;
+                }}
+                .light #round-nav .round-indicator {{
+                    color: rgba(0, 0, 0, 0.35);
+                }}
             </style>
             <script>
                 function _renderMath(element) {{
@@ -893,6 +954,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     addCopyButtons();
                     _renderMath(content);
                     _scrollToBottom();
+                    _initRoundNav();
                 }}
                 function appendMessageContainer(msgId) {{
                     window._isStreaming = true;
@@ -1037,6 +1099,54 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 function addUserMessageCopyButtons() {{
                     _addCopyButtonsForMarkers('copy-marker.user-copy-marker', '📋 复制输入', 'opencode://copy-input', 'u-');
                 }}
+
+                /* ── Round Navigation ─────────────────────── */
+                var _currentRound = 1;
+                var _roundNavInitialized = false;
+                function _initRoundNav() {{
+                    if (!_roundNavInitialized) {{
+                        window.addEventListener('scroll', _updateRoundNav);
+                        _roundNavInitialized = true;
+                    }}
+                    _updateRoundNav();
+                    var nav = document.getElementById('round-nav');
+                    if (nav) nav.style.opacity = '0.5';
+                }}
+                function _updateRoundNav() {{
+                    var userRows = document.querySelectorAll('.msg-row.user');
+                    var nav = document.getElementById('round-nav');
+                    if (!nav) return;
+                    var total = userRows.length;
+                    if (total <= 1) {{ nav.style.display = 'none'; return; }}
+                    nav.style.display = 'flex';
+                    var scrollTop = window.scrollY;
+                    var found = 1;
+                    var minDist = Infinity;
+                    userRows.forEach(function(row, idx) {{
+                        var rect = row.getBoundingClientRect();
+                        var rowTop = rect.top + window.scrollY;
+                        var dist = Math.abs(rowTop - scrollTop);
+                        if (dist < minDist) {{ minDist = dist; found = idx + 1; }}
+                    }});
+                    _currentRound = Math.max(1, Math.min(found, total));
+                    var indicator = document.getElementById('round-indicator');
+                    if (indicator) indicator.textContent = _currentRound + '/' + total;
+                    var prevBtn = document.getElementById('round-prev');
+                    var nextBtn = document.getElementById('round-next');
+                    if (prevBtn) prevBtn.disabled = _currentRound <= 1;
+                    if (nextBtn) nextBtn.disabled = _currentRound >= total;
+                }}
+                function _scrollToRound(n) {{
+                    var userRows = document.querySelectorAll('.msg-row.user');
+                    if (n < 1 || n > userRows.length) return;
+                    var target = userRows[n - 1];
+                    if (target) {{
+                        var top = target.getBoundingClientRect().top + window.scrollY - 10;
+                        window.scrollTo({{top: top, behavior: 'smooth'}});
+                    }}
+                }}
+                function _prevRound() {{ _scrollToRound(_currentRound - 1); }}
+                function _nextRound() {{ _scrollToRound(_currentRound + 1); }}
             </script>
         </head>
         <body class="{theme_name}">
@@ -1044,8 +1154,14 @@ def get_html_template(theme_name: str, initial_html: str = "",
             <div id="lightbox" class="lightbox-overlay">
                 <img id="lightbox-img" class="lightbox-img">
             </div>
+            <div id="round-nav">
+                <button id="round-prev" class="nav-btn" onclick="_prevRound()">◀</button>
+                <span id="round-indicator" class="round-indicator">1/1</span>
+                <button id="round-next" class="nav-btn" onclick="_nextRound()">▶</button>
+            </div>
             <script>
                 _scrollToBottom();
+                _initRoundNav();
             </script>
         </body>
         </html>
