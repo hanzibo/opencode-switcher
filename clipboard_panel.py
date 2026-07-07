@@ -830,20 +830,29 @@ class ClipboardPanel(Gtk.Box):
             del_all = Gtk.MenuItem.new_with_label("Delete All")
             del_all.connect("activate", lambda *_: self._on_delete_all_clicked(None))
             menu.append(del_all)
+            menu.append(Gtk.SeparatorMenuItem.new())
 
-        prompts = Gtk.MenuItem.new_with_label("Prompts Config")
-        prompts.connect("activate", lambda *_: self._on_prompts_config_clicked(None))
-        menu.append(prompts)
+            prompts = Gtk.MenuItem.new_with_label("Prompts Config")
+            prompts.connect("activate", lambda *_: self._on_prompts_config_clicked(None))
+            menu.append(prompts)
 
-        settings = Gtk.MenuItem.new_with_label("Settings")
-        settings.connect("activate", lambda *_: self._on_settings_clicked(None))
-        menu.append(settings)
+            settings = Gtk.MenuItem.new_with_label("Settings")
+            settings.connect("activate", lambda *_: self._on_settings_clicked(None))
+            menu.append(settings)
+            menu.append(Gtk.SeparatorMenuItem.new())
 
-        sort_cats = Gtk.MenuItem.new_with_label("Sort Categories")
-        sort_cats.connect("activate", lambda *_: self._on_sort_cats_clicked(None))
-        menu.append(sort_cats)
+            backup = Gtk.MenuItem.new_with_label("Backup")
+            backup.connect("activate", lambda *_: self._on_backup_clicked(None))
+            menu.append(backup)
 
-        if not is_clipboard:
+            restore = Gtk.MenuItem.new_with_label("Restore")
+            restore.connect("activate", lambda *_: self._on_restore_clicked(None))
+            menu.append(restore)
+        else:
+            sort_cats = Gtk.MenuItem.new_with_label("Sort Categories")
+            sort_cats.connect("activate", lambda *_: self._on_sort_cats_clicked(None))
+            menu.append(sort_cats)
+
             create_template = Gtk.MenuItem.new_with_label("Create Template")
             create_template.connect("activate", lambda *_: self._on_create_clicked(None))
             menu.append(create_template)
@@ -854,19 +863,11 @@ class ClipboardPanel(Gtk.Box):
                 sort_items.connect("activate", lambda *_: self._show_sort_dialog())
                 menu.append(sort_items)
 
-        menu.append(Gtk.SeparatorMenuItem.new())
+            menu.append(Gtk.SeparatorMenuItem.new())
 
-        backup = Gtk.MenuItem.new_with_label("Backup")
-        backup.connect("activate", lambda *_: self._on_backup_clicked(None))
-        menu.append(backup)
-
-        restore = Gtk.MenuItem.new_with_label("Restore")
-        restore.connect("activate", lambda *_: self._on_restore_clicked(None))
-        menu.append(restore)
-
-        recycle = Gtk.MenuItem.new_with_label("Recycle Bin")
-        recycle.connect("activate", lambda *_: self._on_recycle_bin_clicked(None))
-        menu.append(recycle)
+            recycle = Gtk.MenuItem.new_with_label("Recycle Bin")
+            recycle.connect("activate", lambda *_: self._on_recycle_bin_clicked(None))
+            menu.append(recycle)
 
         if self.on_menu_shown:
             self.on_menu_shown()
