@@ -453,6 +453,19 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 th {{ background-color: {table_header_bg}; font-weight: 600; }}
                 tr:nth-child(even) {{ background-color: {table_alt_bg}; }}
 
+                /* Blockquote styling */
+                blockquote {{
+                    border-left: 3px solid {pre_border};
+                    margin: 8px 0;
+                    padding: 4px 12px;
+                    background: rgba(128, 128, 128, 0.06);
+                    border-radius: 0 4px 4px 0;
+                    color: inherit;
+                }}
+                blockquote p {{
+                    margin: 4px 0;
+                }}
+
                 /* Strikethrough, highlight, subscript, superscript */
                 del, s, strike {{ text-decoration: line-through; }}
                 mark {{

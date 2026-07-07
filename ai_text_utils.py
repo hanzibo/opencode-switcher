@@ -276,12 +276,60 @@ def _unescape_tool_results(html_text: str, placeholders: List[str]) -> str:
     return html_text
 
 
+def _fix_blockquote_fences(text: str) -> str:
+    """Convert blockquote sections containing code fences to raw HTML.
+
+    Python-Markdown's fenced_code extension does not recognize code fences
+    inside blockquote syntax (``> ``` ``). This function detects such patterns
+    and wraps them in native ``<blockquote markdown="1">`` so the md_in_html
+    extension can process the inner content, including fenced code blocks.
+
+    Blockquotes without code fences pass through unchanged.
+    """
+    lines = text.split('\n')
+    i = 0
+    result = []
+
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith('>'):
+            bq_lines = []
+            while i < len(lines) and lines[i].startswith('>'):
+                bq_lines.append(lines[i])
+                i += 1
+
+            # Strip '> ' or '>' prefix from each line
+            stripped = []
+            for bl in bq_lines:
+                if bl.startswith('> '):
+                    stripped.append(bl[2:])
+                elif bl == '>':
+                    stripped.append('')
+                else:
+                    stripped.append(bl[1:])
+
+            # Only convert if blockquote contains a code fence
+            has_fence = any(s.lstrip().startswith('```') for s in stripped)
+
+            if has_fence:
+                inner = '\n'.join(stripped)
+                result.append(f'\n<blockquote markdown="1">\n{inner}\n</blockquote>\n')
+            else:
+                result.extend(bq_lines)
+        else:
+            result.append(line)
+            i += 1
+
+    return '\n'.join(result)
+
+
 def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) -> str:
     escaped_text, placeholders = _escape_math(text)
     placeholders = [_fix_latex(p) for p in placeholders]
     escaped_text, tool_placeholders = _escape_tool_results(escaped_text)
     escaped_text = _ensure_list_blankline(escaped_text)
     escaped_text = _ensure_table_blankline(escaped_text)
+    escaped_text = _fix_blockquote_fences(escaped_text)
     try:
         import markdown
         html_text = markdown.markdown(escaped_text, extensions=_MARKDOWN_EXTENSIONS)
