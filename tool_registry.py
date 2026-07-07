@@ -928,6 +928,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
 
 TOOL_CHOICE_AUTO = "auto"
 
+ERROR_PREFIXES = ("❌", "错误：", "执行工具「", "搜索失败", "获取页面失败", "子代理")
 
 # ── Sub-Agent Helpers ────────────────────────────────────────────
 
