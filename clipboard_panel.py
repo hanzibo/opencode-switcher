@@ -350,6 +350,7 @@ class ClipboardPanel(Gtk.Box):
 
         self._content_paned.pack2(self._ai_chat_panel, resize=False, shrink=False)
         self._content_paned.set_position(int(PANEL_WIDTH * 0.5))
+        self._ai_chat_panel.set_size_request(420, -1)
 
         # Rebuild category list after all UI components (especially _content_list) are initialized
         self._rebuild_category_list()
@@ -996,6 +997,7 @@ class ClipboardPanel(Gtk.Box):
         title_label.set_text(item.title)
         title_label.set_halign(Gtk.Align.START)
         title_label.set_xalign(0)
+        title_label.set_ellipsize(Pango.EllipsizeMode.END)
         title_label.override_color(Gtk.StateFlags.NORMAL, self._title_color)
         vbox.pack_start(title_label, False, False, 0)
 
@@ -1045,13 +1047,6 @@ class ClipboardPanel(Gtk.Box):
         if row is None or not hasattr(row, 'cat_id'):
             return
 
-        # Before switching, if we were on clipboard, save visibility state and hide AI panel
-        if self._active_category_id == "__clipboard__":
-            if hasattr(self, '_ai_chat_panel'):
-                self._ai_panel_visible_saved = self._ai_chat_panel.is_visible()
-                if self._ai_panel_visible_saved:
-                    self._ai_chat_panel.hide_panel()
-
         self._active_category_id = row.cat_id
         self._selected_index = 0
         
@@ -1066,11 +1061,6 @@ class ClipboardPanel(Gtk.Box):
                 
         if not self._in_category_button:
             self._rebuild()
-
-        # After switching, if we are back on clipboard, restore AI panel if it was visible before
-        if self._active_category_id == "__clipboard__":
-            if getattr(self, "_ai_panel_visible_saved", False) and hasattr(self, '_ai_chat_panel'):
-                self._ai_chat_panel.show_panel()
 
     def _on_category_button(self, _listbox, event):
         if event.button != 3:
