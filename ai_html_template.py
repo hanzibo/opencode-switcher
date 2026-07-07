@@ -540,9 +540,8 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 /* --- Card-Bubble UI Styles --- */
                 hr {{
                     border: none;
-                    border-top: 1px solid {pre_border};
+                    border-top: 2px solid {assistant_color};
                     margin: 16px 0;
-                    opacity: 0.6;
                 }}
                 
                 /* Hide redundant headers inside bubbles */
