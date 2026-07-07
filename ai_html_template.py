@@ -448,6 +448,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 .answer-header {{ color: {answer_color}; font-weight: bold; margin-top: 12px; }}
                 .user-header {{ color: {user_color}; font-weight: bold; margin-top: 12px; }}
                 .assistant-header {{ color: {assistant_color}; font-weight: bold; margin-top: 12px; }}
+                summary {{ cursor: pointer; }}
                 table {{ border-collapse: collapse; width: 100%; margin: 8px 0; }}
                 th, td {{ border: 1px solid {pre_border}; padding: 6px 10px; text-align: left; }}
                 th {{ background-color: {table_header_bg}; font-weight: 600; }}

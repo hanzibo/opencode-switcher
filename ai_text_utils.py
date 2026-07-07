@@ -240,7 +240,7 @@ def _strip_ai_markup(text: str) -> str:
         "", text, flags=re.DOTALL
     )
     text = re.sub(
-        r'</?details.*?>|</?summary.*?>|</?div.*?>',
+        r'</?div.*?>',
         "", text
     )
     return text.strip()
@@ -323,6 +323,52 @@ def _fix_blockquote_fences(text: str) -> str:
     return '\n'.join(result)
 
 
+def _fix_details_blocks(text: str) -> str:
+    """Preprocess <details> tags to ensure markdown="1" attribute and proper blank line spacing.
+
+    Without markdown="1", md_in_html extension skips parsing nested markdown inside details blocks.
+    Without blank lines, tables/lists inside details blocks are squished and not recognized.
+    """
+    # 1. Inject markdown="1" into details open tags if not present
+    text = re.sub(
+        r'<details(?![^>]*\bmarkdown\b)([^>]*)>',
+        r'<details\1 markdown="1">',
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # 2. Line by line scanning to enforce empty line gaps around tags
+    lines = text.split('\n')
+    result = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip().lower()
+
+        # Insert blank line after summary block to allow nested markdown parsing
+        if '</summary>' in stripped:
+            result.append(line)
+            if i + 1 < len(lines):
+                next_stripped = lines[i + 1].strip()
+                if next_stripped and not next_stripped.startswith('</'):
+                    result.append('')
+            i += 1
+            continue
+
+        # Insert blank line before details close tag to properly close nested tables
+        if stripped == '</details>':
+            if result and result[-1].strip() and not result[-1].strip().startswith('<'):
+                result.append('')
+            result.append(line)
+            i += 1
+            continue
+
+        result.append(line)
+        i += 1
+
+    return '\n'.join(result)
+
+
 def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) -> str:
     escaped_text, placeholders = _escape_math(text)
     placeholders = [_fix_latex(p) for p in placeholders]
@@ -330,8 +376,22 @@ def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) ->
     escaped_text = _ensure_list_blankline(escaped_text)
     escaped_text = _ensure_table_blankline(escaped_text)
     escaped_text = _fix_blockquote_fences(escaped_text)
+    escaped_text = _fix_details_blocks(escaped_text)
     try:
         import markdown
+        try:
+            import markdown.util
+            block_elements = markdown.util.BLOCK_LEVEL_ELEMENTS
+            if isinstance(block_elements, list):
+                if 'details' not in block_elements:
+                    block_elements.append('details')
+                if 'summary' not in block_elements:
+                    block_elements.append('summary')
+            elif hasattr(block_elements, 'add'):
+                block_elements.add('details')
+                block_elements.add('summary')
+        except Exception:
+            pass
         html_text = markdown.markdown(escaped_text, extensions=_MARKDOWN_EXTENSIONS)
     except ImportError:
         if fallback_content is not None:
