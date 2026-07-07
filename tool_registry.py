@@ -2742,6 +2742,45 @@ _QQMAIL_IMAP_SERVER = "imap.qq.com"
 _QQMAIL_IMAP_PORT = 993
 
 
+def _sort_ids_by_internaldate(mail, total, max_results):
+    """Fetch INTERNALDATE for all messages and return the newest N IDs.
+
+    QQ Mail's IMAP sequence numbers are NOT in chronological order, so
+    sorting by sequence number is unreliable.  INTERNALDATE is the server-
+    side arrival timestamp — a lightweight metadata fetch without body data.
+    """
+    import re
+    from email.utils import parsedate_tz, mktime_tz
+
+    status, idata = mail.fetch(f'1:{total}', '(INTERNALDATE)')
+    if status != 'OK':
+        return None
+
+    date_pool = []
+    for token in idata:
+        if not isinstance(token, bytes):
+            continue
+        m = re.search(rb'(\d+)\s+\(INTERNALDATE\s+"([^"]+)"\)', token)
+        if not m:
+            continue
+        eid = int(m.group(1))
+        date_str = m.group(2).decode()
+        try:
+            dt = parsedate_tz(date_str)
+        except Exception:
+            continue
+        if dt:
+            ts = mktime_tz(dt)
+            date_pool.append((ts, eid))
+
+    if not date_pool:
+        return None
+
+    date_pool.sort(key=lambda x: x[0], reverse=True)
+    n = min(max_results, len(date_pool))
+    return [str(eid).encode() for _, eid in date_pool[:n]]
+
+
 def execute_read_qq_mail(max_results: int = 5, folder: str = "INBOX",
                          search_criteria: str = "ALL",
                          include_body: bool = True) -> str:
@@ -2803,14 +2842,17 @@ def execute_read_qq_mail(max_results: int = 5, folder: str = "INBOX",
         except imaplib.IMAP4.error:
             return f"❌ 搜索条件无效：{search_criteria}"
 
-        email_ids = data[0].split()
-        total = len(email_ids)
+        all_ids = data[0].split()
+        total = len(all_ids)
         fetch_count = min(max_results, total)
-        ids_to_fetch = email_ids[-fetch_count:]
+
+        sorted_ids = _sort_ids_by_internaldate(mail, total, fetch_count)
+        if sorted_ids is None:
+            return f"❌ 无法获取邮件时间信息，共 {total} 封"
 
         result_parts = [f"📧 共 {total} 封匹配邮件，显示最新 {fetch_count} 封\n"]
 
-        for eid in reversed(ids_to_fetch):
+        for eid in sorted_ids:
             try:
                 _, fetch_data = mail.fetch(eid, "(RFC822)")
                 raw_email = fetch_data[0][1]
