@@ -277,42 +277,39 @@ def _unescape_tool_results(html_text: str, placeholders: List[str]) -> str:
 
 
 def _fix_blockquote_fences(text: str) -> str:
-    """Convert blockquote sections containing code fences to raw HTML.
-
-    Python-Markdown's fenced_code extension does not recognize code fences
-    inside blockquote syntax (``> ``` ``). This function detects such patterns
-    and wraps them in native ``<blockquote markdown="1">`` so the md_in_html
-    extension can process the inner content, including fenced code blocks.
-
-    Blockquotes without code fences pass through unchanged.
-    """
+    """Convert blockquote sections containing code fences to raw HTML."""
     lines = text.split('\n')
     i = 0
     result = []
+    in_code_block = False
 
     while i < len(lines):
         line = lines[i]
-        if line.startswith('>'):
+        stripped = line.strip()
+
+        if stripped.startswith('```'):
+            in_code_block = not in_code_block
+
+        if not in_code_block and line.startswith('>'):
             bq_lines = []
             while i < len(lines) and lines[i].startswith('>'):
                 bq_lines.append(lines[i])
                 i += 1
 
-            # Strip '> ' or '>' prefix from each line
-            stripped = []
+            stripped_bq = []
             for bl in bq_lines:
                 if bl.startswith('> '):
-                    stripped.append(bl[2:])
+                    stripped_bq.append(bl[2:])
                 elif bl == '>':
-                    stripped.append('')
+                    stripped_bq.append('')
                 else:
-                    stripped.append(bl[1:])
+                    stripped_bq.append(bl[1:])
 
             # Only convert if blockquote contains a code fence
-            has_fence = any(s.lstrip().startswith('```') for s in stripped)
+            has_fence = any(s.lstrip().startswith('```') for s in stripped_bq)
 
             if has_fence:
-                inner = '\n'.join(stripped)
+                inner = '\n'.join(stripped_bq)
                 result.append(f'\n<blockquote markdown="1">\n{inner}\n</blockquote>\n')
             else:
                 result.extend(bq_lines)
@@ -329,39 +326,46 @@ def _fix_details_blocks(text: str) -> str:
     Without markdown="1", md_in_html extension skips parsing nested markdown inside details blocks.
     Without blank lines, tables/lists inside details blocks are squished and not recognized.
     """
-    # 1. Inject markdown="1" into details open tags if not present
-    text = re.sub(
-        r'<details(?![^>]*\bmarkdown\b)([^>]*)>',
-        r'<details\1 markdown="1">',
-        text,
-        flags=re.IGNORECASE
-    )
-
-    # 2. Line by line scanning to enforce empty line gaps around tags
     lines = text.split('\n')
     result = []
     i = 0
+    in_code_block = False
+
     while i < len(lines):
         line = lines[i]
-        stripped = line.strip().lower()
+        stripped = line.strip()
+        stripped_lower = stripped.lower()
 
-        # Insert blank line after summary block to allow nested markdown parsing
-        if '</summary>' in stripped:
-            result.append(line)
-            if i + 1 < len(lines):
-                next_stripped = lines[i + 1].strip()
-                if next_stripped and not next_stripped.startswith('</'):
+        if stripped.startswith('```'):
+            in_code_block = not in_code_block
+
+        if not in_code_block:
+            # 1. Inject markdown="1" into details open tags if not present
+            if stripped_lower.startswith('<details') and 'markdown' not in stripped_lower:
+                line = re.sub(
+                    r'<details(?![^>]*\bmarkdown\b)([^>]*)>',
+                    r'<details\1 markdown="1">',
+                    line,
+                    flags=re.IGNORECASE
+                )
+
+            # 2. Insert blank line after summary block to allow nested markdown parsing
+            if '</summary>' in stripped_lower:
+                result.append(line)
+                if i + 1 < len(lines):
+                    next_stripped = lines[i + 1].strip()
+                    if next_stripped and not next_stripped.startswith('</'):
+                        result.append('')
+                i += 1
+                continue
+
+            # 3. Insert blank line before details close tag to properly close nested tables
+            if stripped_lower == '</details>':
+                if result and result[-1].strip() and not result[-1].strip().startswith('<'):
                     result.append('')
-            i += 1
-            continue
-
-        # Insert blank line before details close tag to properly close nested tables
-        if stripped == '</details>':
-            if result and result[-1].strip() and not result[-1].strip().startswith('<'):
-                result.append('')
-            result.append(line)
-            i += 1
-            continue
+                result.append(line)
+                i += 1
+                continue
 
         result.append(line)
         i += 1
