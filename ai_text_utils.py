@@ -17,7 +17,12 @@ import tool_registry
 from clipboard_store import ChatMessage, CONFIG_DIR
 
 # Python markdown extensions used for AI panel rendering
-_MARKDOWN_EXTENSIONS = ["fenced_code", "codehilite", "tables", "md_in_html"]
+_MARKDOWN_EXTENSIONS = [
+    "fenced_code", "codehilite", "tables", "md_in_html",
+    "pymdownx.tilde",   # ~~删除线~~ 和 ~下标~
+    "pymdownx.caret",   # ^上标^
+    "pymdownx.mark",    # ==高亮==
+]
 
 USER_AVATAR_HTML = (
     '<div class="msg-avatar user">'

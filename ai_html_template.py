@@ -452,6 +452,18 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 th, td {{ border: 1px solid {pre_border}; padding: 6px 10px; text-align: left; }}
                 th {{ background-color: {table_header_bg}; font-weight: 600; }}
                 tr:nth-child(even) {{ background-color: {table_alt_bg}; }}
+
+                /* Strikethrough, highlight, subscript, superscript */
+                del, s, strike {{ text-decoration: line-through; }}
+                mark {{
+                    background: rgba(250, 204, 21, 0.25);
+                    color: inherit;
+                    padding: 0 2px;
+                    border-radius: 2px;
+                }}
+                sub {{ font-size: 75%; vertical-align: sub; }}
+                sup {{ font-size: 75%; vertical-align: super; }}
+
                 .math-fallback {{
                     display: inline-block;
                     background: rgba(128,128,128,0.08);
