@@ -28,7 +28,7 @@ from html.parser import HTMLParser
 import imaplib
 import email
 from email.header import decode_header
-from email.utils import parsedate_to_datetime
+from email.utils import parsedate_to_datetime, parsedate_tz, mktime_tz
 from typing import Any, Dict, Final, List, Optional, Callable, Tuple
 
 import requests
@@ -2749,9 +2749,6 @@ def _sort_ids_by_internaldate(mail, total, max_results):
     sorting by sequence number is unreliable.  INTERNALDATE is the server-
     side arrival timestamp — a lightweight metadata fetch without body data.
     """
-    import re
-    from email.utils import parsedate_tz, mktime_tz
-
     status, idata = mail.fetch(f'1:{total}', '(INTERNALDATE)')
     if status != 'OK':
         return None

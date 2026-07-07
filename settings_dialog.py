@@ -79,13 +79,13 @@ class SettingsDialog:
         vbox.pack_start(sep_top, False, False, 0)
 
         # ── Notebook (tabs) ──
-        notebook = Gtk.Notebook.new()
-        notebook.set_show_border(False)
-        vbox.pack_start(notebook, True, True, 0)
+        self._notebook = Gtk.Notebook.new()
+        self._notebook.set_show_border(False)
+        vbox.pack_start(self._notebook, True, True, 0)
 
         for tab_name, builder in self._tabs:
             page = builder()
-            notebook.append_page(page, Gtk.Label.new(tab_name))
+            self._notebook.append_page(page, Gtk.Label.new(tab_name))
 
         # ── Bottom buttons ──
         sep_bottom = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
@@ -171,7 +171,6 @@ class SettingsDialog:
         # ── Help hint ──
         help_frame = Gtk.Frame.new()
         help_frame.set_margin_top(16)
-        help_frame.get_style_context().add_class("settings-help")
 
         help_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
         help_vbox.set_margin_start(10)
@@ -201,7 +200,7 @@ class SettingsDialog:
         # ── Spacer so content stays top-aligned ──
         spacer = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         spacer.set_vexpand(True)
-        vbox.pack_start(spacer, False, True, 0)
+        vbox.pack_start(spacer, True, True, 0)
 
         return outer_sw
 

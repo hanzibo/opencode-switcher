@@ -1036,12 +1036,6 @@ class CustomPromptsStore:
 QQ_MAIL_CREDENTIALS_PATH = os.path.join(CONFIG_DIR, "qq_mail_credentials.json")
 
 
-@dataclass
-class QQMailCredential:
-    email: str = ""
-    auth_code: str = ""
-
-
 class QQMailCredentialsStore:
     def __init__(self):
         self.email = ""
