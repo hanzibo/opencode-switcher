@@ -18,6 +18,7 @@ from typing import Optional, Callable, List, Dict, Any, Tuple, Set
 from copy import deepcopy
 from uuid import uuid4
 from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P, CONFIG_DIR
+from settings_dialog import show_settings_dialog
 import time
 import requests
 import json
@@ -834,6 +835,10 @@ class ClipboardPanel(Gtk.Box):
         prompts.connect("activate", lambda *_: self._on_prompts_config_clicked(None))
         menu.append(prompts)
 
+        settings = Gtk.MenuItem.new_with_label("Settings")
+        settings.connect("activate", lambda *_: self._on_settings_clicked(None))
+        menu.append(settings)
+
         sort_cats = Gtk.MenuItem.new_with_label("Sort Categories")
         sort_cats.connect("activate", lambda *_: self._on_sort_cats_clicked(None))
         menu.append(sort_cats)
@@ -1327,6 +1332,13 @@ class ClipboardPanel(Gtk.Box):
             parent_window=self.get_toplevel(),
             custom_prompts_store=self._custom_prompts_store,
             llm_settings_store=self._llm_settings_store,
+            on_dialog_shown=self.on_dialog_shown,
+            on_dialog_hidden=self.on_dialog_hidden
+        )
+
+    def _on_settings_clicked(self, _btn):
+        show_settings_dialog(
+            parent_window=self.get_toplevel(),
             on_dialog_shown=self.on_dialog_shown,
             on_dialog_hidden=self.on_dialog_hidden
         )

@@ -148,6 +148,7 @@ install_files() {
     cp "$SCRIPT_DIR/hotkey.py"                   "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/launcher.py"                 "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/session_store.py"            "$INSTALL_DIR/"
+    cp "$SCRIPT_DIR/settings_dialog.py"          "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/clipboard_store.py"          "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/clipboard_panel.py"          "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/tool_registry.py"            "$INSTALL_DIR/"
