@@ -50,6 +50,8 @@ def run_llm_react_loop(
     set_tool_iteration_fn(0)
     iteration = 0
     while iteration < MAX_TOOL_ITERATIONS:
+        if cancel_event and cancel_event.is_set():
+            break
         should_continue = _perform_llm_call(
             llm_client=llm_client,
             base_url=base_url,
@@ -166,7 +168,7 @@ def _perform_llm_call(
                 if tc_name == "ask_user_question":
                     result = handle_ask_user_question_fn(tc)
                 else:
-                    result = tool_registry.execute_tool_call(tc)
+                    result = tool_registry.execute_tool_call(tc, cancel_event=cancel_event)
                 if get_current_request_id_fn() != req_id:
                     return False
                 append_message_fn({

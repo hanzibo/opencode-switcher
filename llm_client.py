@@ -206,6 +206,7 @@ class _LLMHttpClient:
 
                 for line in response.iter_lines(decode_unicode=True):
                     if cancel_event and cancel_event.is_set():
+                        response.close()
                         return
                     if not line:
                         continue

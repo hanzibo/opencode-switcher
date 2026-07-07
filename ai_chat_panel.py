@@ -1312,6 +1312,10 @@ class AIChatPanel(Gtk.Box):
         if self._ai_streaming:
             self._ai_cancel_event.set()
             self._flush_stream_queue()
+            # Preserve partial assistant content before resetting state
+            partial = getattr(self, "_ai_current_assistant_text", "")
+            if partial.strip():
+                self._ai_messages.append({"role": "assistant", "content": partial})
             self._update_send_button(False)
             self._ai_streaming = False
             self._ai_spinner.stop()

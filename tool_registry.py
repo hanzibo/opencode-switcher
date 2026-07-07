@@ -2383,7 +2383,7 @@ class _BashSession:
         )
         self._started = True
 
-    def execute(self, command: str, timeout: int = _BASH_TIMEOUT_DEFAULT) -> dict:
+    def execute(self, command: str, timeout: int = _BASH_TIMEOUT_DEFAULT, cancel_event=None) -> dict:
         """Execute a command and return ``{output, exit_code, timed_out}``.
 
         Raises ``RuntimeError`` if the session is in a timed-out state and
@@ -2430,6 +2430,16 @@ class _BashSession:
         deadline = time.monotonic() + timeout if timeout > 0 else float("inf")
 
         while time.monotonic() < deadline:
+            if cancel_event and cancel_event.is_set():
+                self._kill_process_group()
+                output = output_buf.decode("utf-8", errors="replace").strip()
+                full_len = len(output)
+                if len(output) > _MAX_BASH_OUTPUT_CHARS:
+                    truncated = output[:_MAX_BASH_OUTPUT_CHARS]
+                    saved_msg = _save_truncated_output(output, command)
+                    output = truncated + f"\n...（输出已截断，共 {full_len} 字符）{saved_msg}"
+                return {"output": output, "exit_code": -1, "timed_out": False}
+
             if process.poll() is not None and not sentinel_found:
                 remaining = os.read(fd, 65536)
                 if remaining:
@@ -2549,13 +2559,14 @@ def get_bash_cwd() -> str:
 _bash_session: Optional[_BashSession] = None
 
 
-def execute_bash(command: str, restart: bool = False, timeout: int = _BASH_TIMEOUT_DEFAULT) -> str:
+def execute_bash(command: str, restart: bool = False, timeout: int = _BASH_TIMEOUT_DEFAULT, cancel_event=None) -> str:
     """Execute a shell command in a persistent bash session.
 
     Args:
         command: Shell command to execute.
         restart: If True, restart the session before executing.
         timeout: Command timeout in seconds (1-120).
+        cancel_event: Optional threading.Event for cancellation signaling.
 
     Returns:
         Formatted result string with output, exit code, and status.
@@ -2586,7 +2597,7 @@ def execute_bash(command: str, restart: bool = False, timeout: int = _BASH_TIMEO
 
     timed_out = False
     try:
-        result = _bash_session.execute(command, timeout=timeout)
+        result = _bash_session.execute(command, timeout=timeout, cancel_event=cancel_event)
     except RuntimeError:
         # Session in timed-out state from prior call — auto-restart and retry once
         if _bash_session is not None:
@@ -2594,7 +2605,7 @@ def execute_bash(command: str, restart: bool = False, timeout: int = _BASH_TIMEO
         _bash_session = _BashSession()
         _bash_session.start()
         try:
-            result = _bash_session.execute(command, timeout=timeout)
+            result = _bash_session.execute(command, timeout=timeout, cancel_event=cancel_event)
         except RuntimeError as e:
             return f"错误：{e}"
 
@@ -2982,12 +2993,13 @@ def execute_get_subagent_status() -> str:
 TOOL_EXECUTORS["get_subagent_status"] = execute_get_subagent_status
 
 
-def execute_tool_call(tool_call: dict) -> str:
+def execute_tool_call(tool_call: dict, cancel_event=None) -> str:
     """Execute a single tool call and return the result as a string.
 
     Args:
         tool_call: OpenAI-format tool_call dict with "id", "type", "function" keys.
                    tool_call["function"] has "name" and "arguments" (JSON string).
+        cancel_event: Optional threading.Event for cancellation signaling.
 
     Returns:
         String result to be sent back as tool role content.
@@ -3005,7 +3017,7 @@ def execute_tool_call(tool_call: dict) -> str:
         return f"错误：未知工具「{name}」"
 
     try:
-        return executor(**arguments)
+        return executor(**arguments, cancel_event=cancel_event)
     except Exception as e:
         return f"执行工具「{name}」时出错：{e}"
 
