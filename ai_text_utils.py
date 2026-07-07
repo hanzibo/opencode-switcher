@@ -18,7 +18,7 @@ from clipboard_store import ChatMessage, CONFIG_DIR
 
 # Python markdown extensions used for AI panel rendering
 _MARKDOWN_EXTENSIONS = [
-    "fenced_code", "codehilite", "tables", "md_in_html",
+    "fenced_code", "codehilite", "tables", "md_in_html", "def_list",
     "pymdownx.tilde",   # ~~删除线~~ 和 ~下标~
     "pymdownx.caret",   # ^上标^
     "pymdownx.mark",    # ==高亮==
