@@ -861,7 +861,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 /* Round Navigation Bar */
                 #round-nav {{
                     position: fixed;
-                    right: 8px;
+                    right: 20px;
                     top: 50%;
                     transform: translateY(-50%);
                     display: none;
