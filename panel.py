@@ -917,6 +917,7 @@ class SearchPanel:
 
     def _clear_menu(self):
         self._menu_active = False
+        self._clear_menu_source_id = None
         return False
 
     def _on_delete(self, session):
