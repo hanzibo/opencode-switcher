@@ -844,6 +844,10 @@ class ClipboardPanel(Gtk.Box):
         menu.append(sort_cats)
 
         if not is_clipboard:
+            create_template = Gtk.MenuItem.new_with_label("Create Template")
+            create_template.connect("activate", lambda *_: self._on_create_clicked(None))
+            menu.append(create_template)
+
             cat = self._cat_store.get(self._active_category_id) if self._active_category_id else None
             if cat and len(cat.items) > 1:
                 sort_items = Gtk.MenuItem.new_with_label("Sort Items")

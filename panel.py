@@ -67,6 +67,7 @@ class SearchPanel:
         self._directories: List[str] = []
         self._selected_directory: Optional[str] = None
         self._menu_active = False
+        self._clear_menu_source_id = None
         self._delete_in_progress = False
         self._dialog_active = False
         self._combo_popup_active = False
@@ -389,9 +390,12 @@ class SearchPanel:
 
     def _on_clip_menu_shown(self):
         self._menu_active = True
+        if self._clear_menu_source_id is not None:
+            GLib.source_remove(self._clear_menu_source_id)
+            self._clear_menu_source_id = None
 
     def _on_clip_menu_hidden(self):
-        GLib.timeout_add(300, self._clear_menu)
+        self._clear_menu_source_id = GLib.timeout_add(300, self._clear_menu)
 
     def _on_combo_popup_shown(self):
         self._combo_popup_active = True
