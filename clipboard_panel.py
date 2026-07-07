@@ -815,7 +815,7 @@ class ClipboardPanel(Gtk.Box):
 
     def _on_filter_gear_clicked(self, btn):
         # Destroy previous menu if still open
-        old = getattr(self, "_gear_menu", None)
+        old = getattr(self, "_active_popup_menu", None)
         if old is not None:
             try:
                 old.destroy()
@@ -823,7 +823,7 @@ class ClipboardPanel(Gtk.Box):
                 pass
 
         menu = Gtk.Menu.new()
-        self._gear_menu = menu
+        self._active_popup_menu = menu
         is_clipboard = self._active_category_id == "__clipboard__"
 
         if is_clipboard:
@@ -1088,7 +1088,15 @@ class ClipboardPanel(Gtk.Box):
         if cat is None:
             return False
 
+        old = getattr(self, "_active_popup_menu", None)
+        if old is not None:
+            try:
+                old.destroy()
+            except Exception:
+                pass
+
         menu = Gtk.Menu.new()
+        self._active_popup_menu = menu
         if cat.pinned:
             item = Gtk.MenuItem.new_with_label("Remove from Top")
         else:
@@ -1177,8 +1185,16 @@ class ClipboardPanel(Gtk.Box):
             del_item.connect("activate", lambda *_: self._delete_item(item))
             menu.append(del_item)
 
+        old = getattr(self, "_active_popup_menu", None)
+        if old is not None:
+            try:
+                old.destroy()
+            except Exception:
+                pass
+
         if self.on_menu_shown:
             self.on_menu_shown()
+        self._active_popup_menu = menu
         menu.connect("deactivate", lambda *_: GLib.timeout_add(300, self._on_menu_deactivated))
         menu.show_all()
         return menu
@@ -1196,6 +1212,7 @@ class ClipboardPanel(Gtk.Box):
         return True
 
     def _on_menu_deactivated(self):
+        self._active_popup_menu = None
         if self.on_menu_hidden:
             self.on_menu_hidden()
         return False
@@ -1555,6 +1572,7 @@ class ClipboardPanel(Gtk.Box):
         if self._clip_items is not None:
             marker_path = os.path.expanduser("~/.cache/opencode-switcher/clipboard.updated")
             is_image = False
+            content = ""
             try:
                 if os.path.exists(marker_path):
                     with open(marker_path, "r") as f:
@@ -1563,6 +1581,34 @@ class ClipboardPanel(Gtk.Box):
                         is_image = True
             except Exception:
                 pass
+
+            # Ignore empty/transient reads during atomic file writes
+            if not content:
+                return
+
+            # Deduplicate multiple GIO monitor events triggered by a single write
+            last_marker = getattr(self, "_last_processed_marker", "")
+            if content == last_marker:
+                return
+            self._last_processed_marker = content
+
+            # Deactivate active popup menu first to release GDK/Wayland grabs
+            active_menu = getattr(self, "_active_popup_menu", None)
+            if active_menu is not None:
+                try:
+                    active_menu.popdown()
+                except Exception:
+                    pass
+                self._active_popup_menu = None
+
+                # Defer capture to allow Wayland compositor to fully release the grab
+                def do_deferred_capture():
+                    if is_image:
+                        capture_clipboard_once(self._clip_store)
+                    GLib.idle_add(self._finish_load)
+                    return False
+                GLib.timeout_add(150, do_deferred_capture)
+                return
 
             if is_image:
                 capture_clipboard_once(self._clip_store)
