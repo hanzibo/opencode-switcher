@@ -164,6 +164,15 @@ class _LLMHttpClient:
             body["tool_choice"] = tool_choice or tool_registry.TOOL_CHOICE_AUTO
         return url, headers, body
 
+    def _active_response_check_cancel(self, cancel_event) -> bool:
+        """Clean up active response and check if user requested cancellation.
+
+        Returns True if caller should return silently (user cancelled).
+        Returns False if caller should continue (raise as normal error).
+        """
+        self._active_response = None
+        return bool(cancel_event and cancel_event.is_set())
+
     def stream_chat_completion(
         self,
         base_url: str,
@@ -266,18 +275,15 @@ class _LLMHttpClient:
             self._active_response = None
 
         except requests.exceptions.Timeout:
-            self._active_response = None
-            if cancel_event and cancel_event.is_set():
+            if self._active_response_check_cancel(cancel_event):
                 return
             raise _LLMHttpError(f"请求超时（{timeout}秒）")
         except requests.exceptions.ConnectionError as e:
-            self._active_response = None
-            if cancel_event and cancel_event.is_set():
+            if self._active_response_check_cancel(cancel_event):
                 return
             raise _LLMHttpError(f"网络连接失败：{e}")
         except requests.exceptions.HTTPError as e:
-            self._active_response = None
-            if cancel_event and cancel_event.is_set():
+            if self._active_response_check_cancel(cancel_event):
                 return
             status = e.response.status_code if e.response is not None else "?"
             try:
@@ -287,8 +293,7 @@ class _LLMHttpClient:
                 err_msg = str(e)
             raise _LLMHttpError(f"HTTP {status}: {err_msg}")
         except requests.exceptions.RequestException as e:
-            self._active_response = None
-            if cancel_event and cancel_event.is_set():
+            if self._active_response_check_cancel(cancel_event):
                 return
             raise _LLMHttpError(f"请求异常：{e}")
 

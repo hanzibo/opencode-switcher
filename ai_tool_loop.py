@@ -50,6 +50,7 @@ def run_llm_react_loop(
     set_tool_iteration_fn(0)
     iteration = 0
     while iteration < MAX_TOOL_ITERATIONS:
+        # Stop before next iteration if user cancelled (pressed pause/stop)
         if cancel_event and cancel_event.is_set():
             break
         should_continue = _perform_llm_call(
