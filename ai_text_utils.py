@@ -224,6 +224,23 @@ def _unescape_math(html_text: str, placeholders: List[str]) -> str:
     return html_text
 
 
+def _strip_ai_markup(text: str) -> str:
+    """Strip AI panel HTML markup (thinking blocks, headers, divs) from assistant content."""
+    text = re.sub(
+        r'<details class=["\']thinking-details["\'].*?</details>\n*',
+        "", text, flags=re.DOTALL
+    )
+    text = re.sub(
+        r'<div class=["\'](?:assistant|thinking|answer)-header["\'].*?</div>\n*',
+        "", text, flags=re.DOTALL
+    )
+    text = re.sub(
+        r'</?details.*?>|</?summary.*?>|</?div.*?>',
+        "", text
+    )
+    return text.strip()
+
+
 def _escape_tool_results(text: str) -> Tuple[str, List[str]]:
     """Scan the text for tool result box HTML chunks and escape them using placeholders."""
     # Matches the outer tool-result-box up to the marker comment, anchored to start/end of line
@@ -496,7 +513,6 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
 
     # Status and result
     status_icon = "✅"
-    duration_str = ""
     result_html = ""
     
     if tool_result_msg:
@@ -526,7 +542,6 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
         f'<summary class="tool-step-summary">\n'
         f'<span class="tool-step-status">{status_icon}</span>\n'
         f'<strong>调用工具: {icon} {name}</strong>\n'
-        f'<span class="tool-step-time">{duration_str}</span>\n'
         f'</summary>\n'
         f'<div class="tool-step-content">\n'
         f'<div class="tool-step-args"><strong>参数:</strong> <code>{html.escape(args_display)}</code></div>\n'
@@ -604,19 +619,7 @@ def _render_active_turn_to_html(
     for msg in turn_messages:
         if msg.get("role") == "assistant" and msg.get("content"):
             content_str = msg["content"]
-            # Clean switcher specific HTML markers
-            content_str = re.sub(
-                r'<details class=["\']thinking-details["\'].*?</details>\n*',
-                "", content_str, flags=re.DOTALL
-            )
-            content_str = re.sub(
-                r'<div class=["\'](?:assistant|thinking|answer)-header["\'].*?</div>\n*',
-                "", content_str, flags=re.DOTALL
-            )
-            content_str = re.sub(
-                r'</?details.*?>|</?summary.*?>|</?div.*?>',
-                "", content_str
-            )
+            content_str = _strip_ai_markup(content_str)
             if content_str.strip():
                 content_parts.append(content_str)
                 

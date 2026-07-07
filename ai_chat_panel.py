@@ -31,7 +31,8 @@ from ai_text_utils import (
     _clean_history_title, _extract_local_title, _rebuild_markdown_from_messages,
     _vision_content_to_markdown, _resolve_vision_image_src,
     _vision_content_to_text, _image_hash_path, _image_to_data_uri, _cached_image_to_data_uri,
-    _model_supports_vision, USER_AVATAR_HTML, _render_active_turn_to_html
+    _model_supports_vision, USER_AVATAR_HTML, _render_active_turn_to_html,
+    _strip_ai_markup,
 )
 
 # Regex to match placeholders: ${index[:prompt][=default]}
@@ -297,20 +298,7 @@ class AIChatPanel(Gtk.Box):
                                 for msg in turn_msgs:
                                     if msg.get("role") == "assistant" and msg.get("content"):
                                         content_str = msg["content"]
-                                        # Strip details thinking blocks
-                                        content_str = re.sub(
-                                            r'<details class=["\']thinking-details["\'].*?</details>\n?',
-                                            "", content_str, flags=re.DOTALL
-                                        )
-                                        # Strip headers
-                                        content_str = re.sub(
-                                            r'<div class=["\'](?:assistant|thinking|answer)-header["\'].*?</div>\n?',
-                                            "", content_str, flags=re.DOTALL
-                                        )
-                                        content_str = re.sub(
-                                            r'</?details.*?>|</?summary.*?>|</?div.*?>',
-                                            "", content_str
-                                        )
+                                        content_str = _strip_ai_markup(content_str)
                                         if content_str.strip():
                                             content_parts.append(content_str.strip())
                                             

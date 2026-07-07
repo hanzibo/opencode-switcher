@@ -289,7 +289,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 }}
                 pre {{
                     background-color: {pre_bg};
-                    padding: 32px 12px 12px 12px;
+                    padding: 34px 12px 12px 12px;
                     border-radius: 6px;
                     overflow: auto;
                     border: 1px solid {pre_border};
@@ -761,7 +761,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
                     outline: none;
                     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-                    opacity: 1 !important; /* override old opacity rules */
+                    opacity: 1;
                 }}
                 
                 .msg-copy-btn:hover, .retry-btn:hover {{
@@ -811,10 +811,6 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 }}
 
                 /* Code Language Pill Styling */
-                pre {{
-                    position: relative;
-                    padding-top: 32px !important;
-                }}
                 pre::before {{
                     content: attr(data-lang);
                     position: absolute;

@@ -1,7 +1,7 @@
-import re
 import json
 from gi.repository import GLib
 import tool_registry
+from ai_text_utils import _strip_ai_markup
 from llm_client import _LLMHttpError
 
 def _clean_messages_for_llm(messages: list) -> list:
@@ -10,22 +10,7 @@ def _clean_messages_for_llm(messages: list) -> list:
         role = msg.get("role")
         content = msg.get("content")
         if role == "assistant" and isinstance(content, str):
-            # Strip details thinking blocks
-            cleaned_content = re.sub(
-                r'<details class=["\']thinking-details["\'].*?</details>\n*',
-                "", content, flags=re.DOTALL
-            )
-            # Strip header divs
-            cleaned_content = re.sub(
-                r'<div class=["\'](?:assistant|thinking|answer)-header["\'].*?</div>\n*',
-                "", cleaned_content, flags=re.DOTALL
-            )
-            # Strip details summary and div tags
-            cleaned_content = re.sub(
-                r'</?details.*?>|</?summary.*?>|</?div.*?>',
-                "", cleaned_content
-            )
-            cleaned_content = cleaned_content.strip()
+            cleaned_content = _strip_ai_markup(content)
             
             msg_copy = dict(msg)
             msg_copy["content"] = cleaned_content
