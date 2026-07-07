@@ -455,7 +455,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
 
                 /* Blockquote styling */
                 blockquote {{
-                    border-left: 3px solid {pre_border};
+                    border-left: 3px solid {assistant_color};
                     margin: 8px 0;
                     padding: 4px 12px;
                     background: rgba(128, 128, 128, 0.06);
