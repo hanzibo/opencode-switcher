@@ -1154,6 +1154,9 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 }}
                 function _prevRound() {{ _scrollToRound(_currentRound - 1); }}
                 function _nextRound() {{ _scrollToRound(_currentRound + 1); }}
+                function _scrollToBottomForce() {{
+                    window.scrollTo({{top: document.body.scrollHeight, behavior: 'smooth'}});
+                }}
             </script>
         </head>
         <body class="{theme_name}">
@@ -1165,6 +1168,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 <button id="round-prev" class="nav-btn" onclick="_prevRound()">◀</button>
                 <span id="round-indicator" class="round-indicator">1/1</span>
                 <button id="round-next" class="nav-btn" onclick="_nextRound()">▶</button>
+                <button id="round-bottom" class="nav-btn" onclick="_scrollToBottomForce()" title="跳至最底部">⤵</button>
             </div>
             <script>
                 _scrollToBottom();
