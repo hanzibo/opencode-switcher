@@ -1103,9 +1103,16 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 /* ── Round Navigation ─────────────────────── */
                 var _currentRound = 1;
                 var _roundNavInitialized = false;
+                var _rafId = null;
                 function _initRoundNav() {{
                     if (!_roundNavInitialized) {{
-                        window.addEventListener('scroll', _updateRoundNav);
+                        window.addEventListener('scroll', function() {{
+                            if (_rafId) return;
+                            _rafId = requestAnimationFrame(function() {{
+                                _rafId = null;
+                                _updateRoundNav();
+                            }});
+                        }});
                         _roundNavInitialized = true;
                     }}
                     _updateRoundNav();
