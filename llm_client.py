@@ -73,6 +73,12 @@ class _LLMHttpError(Exception):
 class _LLMHttpClient:
     def __init__(self):
         self._session = requests.Session()
+        self._active_response = None
+        self._connect_timeout = 4
+        self._init_session_retry()
+
+    def _init_session_retry(self):
+        """Configure the session with retry strategy and mount adapters."""
         retry_strategy = requests.packages.urllib3.util.retry.Retry(
             total=3,
             connect=3,
@@ -197,8 +203,9 @@ class _LLMHttpClient:
                 json=body,
                 headers=headers,
                 stream=True,
-                timeout=timeout,
+                timeout=(self._connect_timeout, timeout),
             ) as response:
+                self._active_response = response
                 response.raise_for_status()
                 response.encoding = "utf-8"
 
@@ -256,11 +263,22 @@ class _LLMHttpClient:
                 if calls:
                     yield {"tool_calls": calls}
 
+            self._active_response = None
+
         except requests.exceptions.Timeout:
+            self._active_response = None
+            if cancel_event and cancel_event.is_set():
+                return
             raise _LLMHttpError(f"请求超时（{timeout}秒）")
         except requests.exceptions.ConnectionError as e:
+            self._active_response = None
+            if cancel_event and cancel_event.is_set():
+                return
             raise _LLMHttpError(f"网络连接失败：{e}")
         except requests.exceptions.HTTPError as e:
+            self._active_response = None
+            if cancel_event and cancel_event.is_set():
+                return
             status = e.response.status_code if e.response is not None else "?"
             try:
                 err_body = e.response.json() if e.response is not None else {}
@@ -269,7 +287,22 @@ class _LLMHttpClient:
                 err_msg = str(e)
             raise _LLMHttpError(f"HTTP {status}: {err_msg}")
         except requests.exceptions.RequestException as e:
+            self._active_response = None
+            if cancel_event and cancel_event.is_set():
+                return
             raise _LLMHttpError(f"请求异常：{e}")
+
+    def cancel_active_request(self):
+        """Close the active HTTP response to unblock the SSE streaming thread.
+        If no response exists yet (blocked in connect phase), close the
+        entire connection pool to interrupt the connect attempt."""
+        if self._active_response is not None:
+            self._active_response.close()
+            self._active_response = None
+        else:
+            self._session.close()
+            self._session = requests.Session()
+            self._init_session_retry()
 
     def sync_chat_completion(
         self,

@@ -690,6 +690,7 @@ class AIChatPanel(Gtk.Box):
         """删除指定的 assistant 回复并重新请求 LLM（丢弃该回复之后的所有消息）。"""
         if self._ai_streaming:
             self._ai_cancel_event.set()
+            self._llm_client.cancel_active_request()
             self._flush_stream_queue()
             self._update_send_button(False)
             self._ai_streaming = False
@@ -1189,9 +1190,12 @@ class AIChatPanel(Gtk.Box):
 
         if self._ai_streaming:
             self._ai_cancel_event.set()
+            self._llm_client.cancel_active_request()
             self._flush_stream_queue()
             self._update_send_button(False, sensitive=False)
             self._ai_entry.placeholder_text = "正在中止..."
+            self._ai_spinner.stop()
+            self._ai_spinner.hide()
             return
         buf = self._ai_entry.get_buffer()
         start = buf.get_start_iter()
@@ -1311,6 +1315,7 @@ class AIChatPanel(Gtk.Box):
         """If a streaming response is in progress, cancel it and reset state."""
         if self._ai_streaming:
             self._ai_cancel_event.set()
+            self._llm_client.cancel_active_request()
             self._flush_stream_queue()
             # Preserve partial assistant content before resetting state
             partial = getattr(self, "_ai_current_assistant_text", "")

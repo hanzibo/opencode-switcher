@@ -21,6 +21,7 @@ import time
 import urllib.parse
 import re
 import shutil
+import inspect
 import html
 import uuid
 from html.parser import HTMLParser
@@ -3017,7 +3018,11 @@ def execute_tool_call(tool_call: dict, cancel_event=None) -> str:
         return f"错误：未知工具「{name}」"
 
     try:
-        return executor(**arguments, cancel_event=cancel_event)
+        import inspect
+        sig = inspect.signature(executor)
+        if 'cancel_event' in sig.parameters:
+            return executor(**arguments, cancel_event=cancel_event)
+        return executor(**arguments)
     except Exception as e:
         return f"执行工具「{name}」时出错：{e}"
 
