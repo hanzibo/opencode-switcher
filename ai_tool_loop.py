@@ -53,6 +53,15 @@ def run_llm_react_loop(
         # Stop before next iteration if user cancelled (pressed pause/stop)
         if cancel_event and cancel_event.is_set():
             break
+
+        # Check for completed background sub-agents before each LLM call
+        bg_info = tool_registry.check_background_subagents()
+        if bg_info:
+            messages.append({
+                "role": "system",
+                "content": f"[Background sub-agent completed]\n{bg_info}"
+            })
+
         should_continue = _perform_llm_call(
             llm_client=llm_client,
             base_url=base_url,
