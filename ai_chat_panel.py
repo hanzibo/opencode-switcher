@@ -527,7 +527,9 @@ class AIChatPanel(Gtk.Box):
         except Exception as e:
             print(f"[opencode-switcher] CSS load error: {e}")
 
-        GLib.timeout_add(2000, self._poll_subagent_status)
+        self._subagent_poll_timer_id = 0
+        if self._poll_subagent_status():
+            self._start_subagent_polling_timer()
 
     def _read_model_config(self, prompt_obj: Optional[CustomPrompt] = None, model_info: Optional[Dict] = None):
         bound_alias = None
@@ -868,6 +870,7 @@ class AIChatPanel(Gtk.Box):
                               req_id: int, temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
                               top_p: float = DEFAULT_TOP_P):
         """Start the ReAct loop by delegating execution to the run_llm_react_loop orchestrator."""
+        GLib.idle_add(self._start_subagent_polling_timer)
         def reset_iteration_state():
             self._ai_assistant_buffer = ""
             self._ai_current_assistant_text = ""
@@ -1182,7 +1185,13 @@ class AIChatPanel(Gtk.Box):
 
     # ── Sub-agent status bar (polling + UI) ──────────────────────────────────
 
+    def _start_subagent_polling_timer(self):
+        """按需启动子代理状态轮询定时器（若未启动则启动）。"""
+        if getattr(self, "_subagent_poll_timer_id", 0) == 0:
+            self._subagent_poll_timer_id = GLib.timeout_add(2000, self._poll_subagent_status)
+
     def _poll_subagent_status(self) -> bool:
+        keep_polling = False
         try:
             from tool_registry import get_subagent_status_map
             status_map = get_subagent_status_map()
@@ -1191,6 +1200,13 @@ class AIChatPanel(Gtk.Box):
                 sid: info for sid, info in status_map.items()
                 if info.get("conv_id") == active_conv_id
             }
+
+            # Check if there are any running subagents in the current active conversation
+            # Keep polling if subagents are running OR if the AI request is active (streaming/thinking)
+            has_running = any(info.get("status") == "running" for info in status_map.values())
+            if has_running or self._ai_streaming:
+                keep_polling = True
+
             current_ids = set(status_map.keys())
             existing_ids = set(self._ai_subagent_blocks.keys())
 
@@ -1207,7 +1223,12 @@ class AIChatPanel(Gtk.Box):
         except Exception as e:
             import sys
             print(f"[opencode-switcher] subagent poll error: {e}", file=sys.stderr)
-        return True
+
+        # Update the timer reference status and return whether GTK should continue scheduling it
+        if not keep_polling:
+            self._subagent_poll_timer_id = 0
+            return False  # Destroy timer
+        return True  # Keep timer running
 
     def _create_subagent_block(self, sid: Any, info: dict):
         """Create a FlowBoxChild for a sub-agent status block."""
@@ -2249,7 +2270,8 @@ class AIChatPanel(Gtk.Box):
             self._ai_messages.append(msg)
         self._ai_conversation_id = conv.id
         self._ai_conversation_created_at = conv.created_at
-        self._poll_subagent_status()
+        if self._poll_subagent_status():
+            self._start_subagent_polling_timer()
         self._ai_assistant_buffer = ""
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
@@ -2446,7 +2468,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_messages = []
         self._ai_conversation_id = uuid4().hex[:12]
         self._clear_subagent_bar_instantly()
-        self._poll_subagent_status()
+        if self._poll_subagent_status():
+            self._start_subagent_polling_timer()
         self._ai_assistant_buffer = ""
         self._ai_markdown_text = ""
         self._ai_current_assistant_text = ""
