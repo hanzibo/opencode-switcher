@@ -4267,6 +4267,17 @@ _background_subagent_status: Dict[int, Dict[str, Any]] = {}
 """Tracks running/background sub-agents: {id: {"task": str, "started_at": float, "status": str}}"""
 
 
+def get_subagent_status_map() -> Dict[int, Dict[str, Any]]:
+    """返回后台子代理状态字典的副本，供 UI 轮询使用。"""
+    return dict(_background_subagent_status)
+
+
+def remove_subagent_status(subagent_id: int):
+    """从后台子代理状态字典中删除特定 ID 的子代理记录。"""
+    global _background_subagent_status
+    _background_subagent_status.pop(subagent_id, None)
+
+
 def check_background_subagents() -> str:
     """Check if any background sub-agents have completed since last check.
     Returns a formatted message with results, or empty string if none.

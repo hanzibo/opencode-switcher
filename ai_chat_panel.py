@@ -123,6 +123,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_tool_iteration = 0
         self._ai_render_timeout_id = 0
         self._ai_ask_user_state = None
+        self._ai_selected_subagents: Set[int] = set()
+        self._ai_subagent_blocks: Dict[int, Gtk.FlowBoxChild] = {}
         self._ai_current_reasoning_text = ""
         self._ai_pending_title_notification = False
 
@@ -386,6 +388,21 @@ class AIChatPanel(Gtk.Box):
         self._ai_input_area.set_no_show_all(True)
         self._ai_input_area.set_margin_top(4)
 
+        # Sub-agent status bar (shown when background sub-agents exist)
+        self._ai_subagent_bar = Gtk.FlowBox.new()
+        self._ai_subagent_bar.set_max_children_per_line(100)
+        self._ai_subagent_bar.set_min_children_per_line(1)
+        self._ai_subagent_bar.set_selection_mode(Gtk.SelectionMode.NONE)
+        self._ai_subagent_bar.set_column_spacing(6)
+        self._ai_subagent_bar.set_row_spacing(0)
+        self._ai_subagent_bar.set_margin_bottom(2)
+        self._ai_subagent_bar.set_margin_start(4)
+        self._ai_subagent_bar.set_margin_end(4)
+        self._ai_subagent_bar.set_visible(False)
+        self._ai_subagent_bar.get_style_context().add_class("subagent-status-bar")
+        self._ai_subagent_bar.connect("child-activated", self._on_subagent_child_activated)
+        self._ai_input_area.pack_start(self._ai_subagent_bar, False, False, 0)
+
         self._ai_entry = Gtk.TextView.new()
         self._ai_entry.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         self._ai_entry.set_hexpand(True)
@@ -492,6 +509,25 @@ class AIChatPanel(Gtk.Box):
 
         self.pack_start(self._ai_input_area, False, False, 0)
 
+        try:
+            _subagent_css = b"""
+                .subagent-status-bar { margin: 4px 8px 2px 8px; min-height: 28px; }
+                .subagent-block-running { background-color: #3b82f6; color: #ffffff; border-radius: 4px; font-size: 12px; border: 2px solid transparent; }
+                .subagent-block-done { background-color: #22c55e; color: #ffffff; border-radius: 4px; font-size: 12px; border: 2px solid transparent; }
+                .subagent-block-done:hover { background-color: #16a34a; }
+                .subagent-block-failed { background-color: #ef4444; color: #ffffff; border-radius: 4px; font-size: 12px; border: 2px solid transparent; }
+                .subagent-block-selected { border-color: #ffffff; }
+                flowboxchild:focus { outline: none; box-shadow: none; }
+            """
+            _css_provider = Gtk.CssProvider()
+            _css_provider.load_from_data(_subagent_css)
+            Gtk.StyleContext.add_provider_for_screen(
+                Gdk.Screen.get_default(), _css_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
+        except Exception as e:
+            print(f"[opencode-switcher] CSS load error: {e}")
+
+        GLib.timeout_add(2000, self._poll_subagent_status)
 
     def _read_model_config(self, prompt_obj: Optional[CustomPrompt] = None, model_info: Optional[Dict] = None):
         bound_alias = None
@@ -1143,6 +1179,123 @@ class AIChatPanel(Gtk.Box):
         self._ai_send_btn.set_label(AI_BTN_LABEL_STOP if sending else AI_BTN_LABEL_SEND)
         self._ai_send_btn.set_sensitive(sensitive)
 
+    # ── Sub-agent status bar (polling + UI) ──────────────────────────────────
+
+    def _poll_subagent_status(self) -> bool:
+        try:
+            from tool_registry import get_subagent_status_map
+            status_map = get_subagent_status_map()
+            current_ids = set(status_map.keys())
+            existing_ids = set(self._ai_subagent_blocks.keys())
+
+            for sid in current_ids - existing_ids:
+                self._create_subagent_block(sid, status_map[sid])
+
+            for sid in existing_ids & current_ids:
+                self._update_subagent_block(sid, status_map[sid])
+
+            for sid in existing_ids - current_ids:
+                self._remove_subagent_block(sid)
+
+            self._ai_subagent_bar.set_visible(len(self._ai_subagent_blocks) > 0)
+        except Exception as e:
+            import sys
+            print(f"[opencode-switcher] subagent poll error: {e}", file=sys.stderr)
+        return True
+
+    def _create_subagent_block(self, sid: int, info: dict):
+        """Create a FlowBoxChild for a sub-agent status block."""
+        child = Gtk.FlowBoxChild.new()
+        box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+        label = Gtk.Label.new(f"  子代理 {sid}  ")
+        label.set_margin_start(4)
+        label.set_margin_end(4)
+        label.set_margin_top(2)
+        label.set_margin_bottom(2)
+        box.pack_start(label, True, True, 0)
+        child.add(box)
+
+        status = info.get("status", "unknown")
+        task = info.get("task", "")
+        box_ctx = box.get_style_context()
+        if status == "completed":
+            box_ctx.add_class("subagent-block-done")
+            child.set_tooltip_text(task)
+        elif status == "running":
+            box_ctx.add_class("subagent-block-running")
+            child.set_tooltip_text(f"运行中 — {task}")
+        else:
+            box_ctx.add_class("subagent-block-failed")
+            child.set_tooltip_text(task)
+
+        self._ai_subagent_bar.add(child)
+        self._ai_subagent_blocks[sid] = (child, child, box)
+        self._ai_subagent_bar.show_all()
+
+    def _update_subagent_block(self, sid: int, info: dict):
+        """Update an existing block when sub-agent status changes."""
+        entry = self._ai_subagent_blocks.get(sid)
+        if entry is None:
+            return
+        child, event_box, box = entry
+        status = info.get("status", "unknown")
+        ctx = box.get_style_context()
+        task = info.get("task", "")
+
+        if status == "completed":
+            ctx.remove_class("subagent-block-running")
+            ctx.add_class("subagent-block-done")
+            event_box.set_tooltip_text(task)
+        elif status == "running":
+            if ctx.has_class("subagent-block-done"):
+                ctx.remove_class("subagent-block-done")
+                self._ai_selected_subagents.discard(sid)
+            ctx.add_class("subagent-block-running")
+            event_box.set_tooltip_text(f"运行中 — {task}")
+
+    def _remove_subagent_block(self, sid: int):
+        """Remove a sub-agent block and clean up state."""
+        self._ai_selected_subagents.discard(sid)
+        entry = self._ai_subagent_blocks.pop(sid, None)
+        if entry:
+            child, _event_box, _box = entry
+            self._ai_subagent_bar.remove(child)
+
+    def _on_subagent_block_click(self, sid: int):
+        """Toggle selection state of a completed sub-agent block."""
+        with open("/tmp/subagent_debug.log", "a") as f:
+            f.write(f"click sid={sid}, selected before={self._ai_selected_subagents}\n")
+        entry = self._ai_subagent_blocks.get(sid)
+        if entry is None:
+            return True
+        child, event_box, box = entry
+        from tool_registry import get_subagent_status_map
+        info = get_subagent_status_map().get(sid, {})
+        if info.get("status") != "completed":
+            with open("/tmp/subagent_debug.log", "a") as f:
+                f.write(f"  skipped: status={info.get('status')}\n")
+            return True
+        ctx = box.get_style_context()
+        if sid in self._ai_selected_subagents:
+            self._ai_selected_subagents.discard(sid)
+            ctx.remove_class("subagent-block-selected")
+        else:
+            self._ai_selected_subagents.add(sid)
+            ctx.add_class("subagent-block-selected")
+        with open("/tmp/subagent_debug.log", "a") as f:
+            f.write(f"  selected after={self._ai_selected_subagents}\n")
+        return True  # Stop event propagation to prevent FlowBox default behavior
+
+    def _on_subagent_child_activated(self, flowbox, child):
+        """Handle child activation signal from FlowBox to toggle selection."""
+        sid = None
+        for k, v in self._ai_subagent_blocks.items():
+            if v[0] == child:
+                sid = k
+                break
+        if sid is not None:
+            self._on_subagent_block_click(sid)
+
     def _on_send_clicked(self, _btn=None):
         # Check for pending AskUserQuestion first — must precede streaming check
         ask_state = getattr(self, "_ai_ask_user_state", None)
@@ -1211,8 +1364,8 @@ class AIChatPanel(Gtk.Box):
         start = buf.get_start_iter()
         end = buf.get_end_iter()
         text = buf.get_text(start, end, True).strip()
-        # Allow send with empty text if there is a pending image
-        if not text and not self._ai_pending_image_data_uri:
+        # Allow send with empty text if there is a pending image or selected sub-agents
+        if not text and not self._ai_pending_image_data_uri and not self._ai_selected_subagents:
             return
         if text == "/new":
             buf.set_text("")
@@ -1279,6 +1432,43 @@ class AIChatPanel(Gtk.Box):
                 f'{html.escape(result)}</div>'
             )
             return
+        # Handle selected sub-agent blocks: build notification text and send
+        if self._ai_selected_subagents:
+            from tool_registry import get_subagent_status_map, check_background_subagents
+            # Drain any pending background results first
+            check_background_subagents()
+            parts = []
+            for sid in sorted(self._ai_selected_subagents):
+                info = get_subagent_status_map().get(sid, {})
+                task_desc = info.get("task", "未知任务")
+                parts.append(
+                    f"后台子代理 {sid} 已完成\n"
+                    f"任务: {task_desc}\n"
+                    f"结果文件: /tmp/opencode_subagent_{sid}_result.txt"
+                )
+            bg_text = "\n\n---\n\n".join(parts)
+            if text:
+                text = f"{bg_text}\n\n---\n\n{text}"
+            else:
+                text = bg_text
+
+            # Clean up selected blocks
+            from tool_registry import remove_subagent_status
+            for sid in list(self._ai_selected_subagents):
+                entry = self._ai_subagent_blocks.get(sid)
+                if entry:
+                    child, _event_box, _box = entry
+                    self._ai_subagent_bar.remove(child)
+                self._ai_subagent_blocks.pop(sid, None)
+                remove_subagent_status(sid)
+            self._ai_selected_subagents.clear()
+            self._ai_subagent_bar.set_visible(len(self._ai_subagent_blocks) > 0)
+
+            buf.set_text("")
+            self._send_user_message(text)
+            self._remove_pending_image()
+            return
+
         buf.set_text("")
         self._send_user_message(text)
         self._remove_pending_image()
