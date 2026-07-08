@@ -626,7 +626,8 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
         "sub_agent": "🤖",
         "get_subagent_status": "🤖",
         "read_qq_mail": "📧",
-        "get_code_metrics": "📊"
+        "get_code_metrics": "📊",
+        "find_project_dependencies": "🔗"
     }
     icon = tool_icons.get(name, "⚙️")
 

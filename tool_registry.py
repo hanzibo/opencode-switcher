@@ -22,6 +22,7 @@ import time
 import urllib.parse
 import re
 import shutil
+import sys
 import inspect
 import html
 import uuid
@@ -978,6 +979,30 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "path": {
                         "type": "string",
                         "description": "文件或目录的绝对路径。如果是目录，汇总其中所有文件的度量。"
+                    }
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_project_dependencies",
+            "description": "分析文件或项目的依赖关系。Python 文件使用 ast 模块精确提取 import 语句，"
+                           "JS/TS/Go 使用正则提取。将依赖分类为标准库、第三方包和本地模块，"
+                           "并检测循环依赖和孤立模块。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "文件或目录的绝对路径。如果是目录，分析项目中所有文件间的依赖关系。"
+                    },
+                    "recursive": {
+                        "type": "boolean",
+                        "description": "是否递归扫描子目录（默认 true）",
+                        "default": True
                     }
                 },
                 "required": ["path"]
@@ -3138,6 +3163,443 @@ def execute_get_code_metrics(path: str) -> str:
         return f"❌ 路径不存在: {path}"
 
 
+# ── Project Dependencies ────────────────────────────────────────────────────
+
+_DEP_IGNORE_DIRS = frozenset({
+    ".git", "__pycache__", "node_modules", "venv", ".venv",
+    "env", "build", "dist", "target", ".cache", ".omo", ".hzb-agents",
+})
+
+# Python stdlib module names (Python 3.10+)
+try:
+    _STDLIB_MODULES = frozenset(sys.stdlib_module_names)
+except AttributeError:
+    _STDLIB_MODULES = frozenset()
+
+
+def _extract_python_imports(source: str) -> List[Dict[str, str]]:
+    """Extract imports from Python source using ast module."""
+    imports = []
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return imports
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imports.append({
+                    "type": "import",
+                    "module": alias.name,
+                    "alias": alias.asname or "",
+                    "line": node.lineno,
+                })
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            for alias in node.names:
+                full = f"{module}.{alias.name}" if module else alias.name
+                imports.append({
+                    "type": "from_import",
+                    "module": full,
+                    "alias": alias.asname or "",
+                    "line": node.lineno,
+                })
+    return imports
+
+
+def _extract_js_imports(source: str) -> List[Dict[str, str]]:
+    """Extract imports from JS/TS source using regex."""
+    imports = []
+    # ES6 static imports
+    for m in re.finditer(
+        r'(?:import\s+(?:(?:\{[^}]*\}|[^;{]+)\s+from\s+)?["\']([^"\']+)["\']|require\s*\(\s*["\']([^"\']+)["\']\s*\))',
+        source
+    ):
+        module = m.group(1) or m.group(2)
+        imports.append({"type": "import", "module": module, "alias": "", "line": 0})
+    return imports
+
+
+def _extract_go_imports(source: str) -> List[Dict[str, str]]:
+    """Extract imports from Go source using regex."""
+    imports = []
+    # Single imports: import "fmt"
+    for m in re.finditer(r'import\s+"([^"]+)"', source):
+        imports.append({"type": "import", "module": m.group(1), "alias": "", "line": 0})
+    # Grouped imports: import ( "fmt" "os" )
+    in_group = False
+    for line in source.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("import ("):
+            in_group = True
+            continue
+        if in_group and stripped.startswith(")"):
+            in_group = False
+            continue
+        if in_group and (stripped.startswith('"') and stripped.endswith('"')):
+            imports.append({"type": "import", "module": stripped.strip('"'), "alias": "", "line": 0})
+    return imports
+
+
+def _categorize_dependency(module_name: str, project_root: str) -> str:
+    """Categorize a module as stdlib, third_party, or local."""
+    top_level = module_name.split(".")[0]
+    # Check stdlib
+    if top_level in _STDLIB_MODULES:
+        return "stdlib"
+    # Check local (relative import or file exists in project)
+    if module_name.startswith("."):
+        return "local"
+    local_path = os.path.join(project_root, top_level.replace(".", os.sep))
+    if os.path.isdir(local_path) or os.path.isfile(local_path + ".py"):
+        return "local"
+    return "third_party"
+
+
+def _find_python_files(root: str, recursive: bool = True) -> List[str]:
+    """Find all Python files in a directory tree."""
+    files = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        if not recursive:
+            dirnames[:] = []
+        else:
+            dirnames[:] = [d for d in dirnames if d not in _DEP_IGNORE_DIRS]
+        for f in filenames:
+            if f.endswith(".py"):
+                files.append(os.path.join(dirpath, f))
+    return sorted(files)
+
+
+def execute_find_dependencies(path: str, recursive: bool = True) -> str:
+    """Analyze dependencies of a file or project directory.
+
+    For Python files, uses ast module for precise import detection.
+    For JS/TS/Go files, uses regex-based extraction.
+    Categorizes dependencies as stdlib / third-party / local.
+    Detects circular dependencies and potentially unused exports.
+
+    Args:
+        path: Absolute path to file or directory.
+        recursive: Whether to scan subdirectories (default True).
+
+    Returns:
+        Formatted dependency report with imports, direction, layering,
+        unused exports, and circular dependency analysis.
+    """
+    if not path or not os.path.isabs(path):
+        return "❌ 错误：必须使用绝对路径！"
+
+    resolved = os.path.realpath(path)
+    project_root = resolved if os.path.isdir(resolved) else os.path.dirname(resolved)
+
+    py_files = []
+    js_files = []
+    go_files = []
+
+    if os.path.isfile(resolved):
+        if resolved.endswith(".py"):
+            py_files = [resolved]
+        elif resolved.endswith((".js", ".ts", ".jsx", ".tsx")):
+            js_files = [resolved]
+        elif resolved.endswith(".go"):
+            go_files = [resolved]
+        else:
+            return f"❌ 不支持的文件类型: {resolved}"
+    elif os.path.isdir(resolved):
+        for dirpath, dirnames, filenames in os.walk(resolved):
+            if not recursive:
+                dirnames[:] = []
+            else:
+                dirnames[:] = [d for d in dirnames if d not in _DEP_IGNORE_DIRS]
+            for f in filenames:
+                fpath = os.path.join(dirpath, f)
+                if f.endswith(".py"):
+                    py_files.append(fpath)
+                elif f.endswith((".js", ".ts", ".jsx", ".tsx")):
+                    js_files.append(fpath)
+                elif f.endswith(".go"):
+                    go_files.append(fpath)
+    else:
+        return f"❌ 路径不存在: {path}"
+
+    if not (py_files or js_files or go_files):
+        return "未找到可分析的代码文件（Python/JS/TS/Go）。"
+
+    # Phase 1: extract imports + defined names from all files
+    file_info = {}  # rel_path -> {"imports": [...], "defined": set(), "categories": {stdlib, 3rd, local}}
+    all_raw_imports = {}  # rel_path -> raw import dicts (for unused export detection)
+
+    for fpath in py_files:
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                source = f.read()
+        except Exception:
+            continue
+        rel = os.path.relpath(fpath, project_root)
+        imports = _extract_python_imports(source)
+        funcs, classes = _extract_defined_names(source)
+        all_raw_imports[rel] = imports
+        cats = {"stdlib": set(), "third_party": set(), "local": set()}
+        for imp in imports:
+            cat = _categorize_dependency(imp["module"], project_root)
+            cats[cat].add(imp["module"])
+        file_info[rel] = {"imports": imports, "defined": funcs | classes,
+                          "categories": cats, "is_python": True}
+
+    for fpath in js_files:
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                source = f.read()
+        except Exception:
+            continue
+        rel = os.path.relpath(fpath, project_root)
+        imports = _extract_js_imports(source)
+        all_raw_imports[rel] = imports
+        cats = {"stdlib": set(), "third_party": set(), "local": set()}
+        for imp in imports:
+            mod = imp["module"]
+            if mod.startswith(".") or mod.startswith("/"):
+                cats["local"].add(mod)
+            else:
+                cats["third_party"].add(mod)
+        file_info[rel] = {"imports": imports, "defined": set(),
+                          "categories": cats, "is_python": False}
+
+    for fpath in go_files:
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="replace") as f:
+                source = f.read()
+        except Exception:
+            continue
+        rel = os.path.relpath(fpath, project_root)
+        imports = _extract_go_imports(source)
+        all_raw_imports[rel] = imports
+        cats = {"stdlib": set(), "third_party": set(), "local": set()}
+        for imp in imports:
+            mod = imp["module"]
+            parts = mod.split("/")
+            if len(parts) >= 3 and "." in parts[0]:
+                cats["third_party"].add(mod)
+            else:
+                cats["stdlib"].add(mod)
+        file_info[rel] = {"imports": imports, "defined": set(),
+                          "categories": cats, "is_python": False}
+
+    if not file_info:
+        return "未找到可分析的文件。"
+
+    # Phase 2: build forward + reverse dependency graphs
+    forward = {}  # rel -> {stdlib: [], 3rd: [], local: [rel2]}
+    reverse = {}  # rel -> [rel_of_importer]
+    for rel, info in file_info.items():
+        forward[rel] = {
+            "stdlib": sorted(info["categories"]["stdlib"]),
+            "third_party": sorted(info["categories"]["third_party"]),
+            "local": sorted(info["categories"]["local"]),
+        }
+    # Build reverse: for each file's local deps, add it to the reverse index of the dep
+    for rel, info in file_info.items():
+        local_deps = info["categories"]["local"]
+        for dep_module in local_deps:
+            top_mod = dep_module.split(".")[0]
+            dep_rel = top_mod + ".py"
+            if dep_rel not in reverse:
+                reverse[dep_rel] = []
+            if rel not in reverse[dep_rel]:
+                reverse[dep_rel].append(rel)
+
+    # Phase 3: module layering
+    # Bottom: files that import 0-1 local modules
+    # Middle: files that both import and are imported
+    # Top: files that are imported by no one but import local modules
+    bottom = []
+    middle = []
+    top = []
+    for rel, info in file_info.items():
+        local_imports = len(info["categories"]["local"])
+        imported_by = len(reverse.get(rel, []))
+        if local_imports <= 1 and imported_by == 0:
+            bottom.append(rel)
+        elif imported_by == 0 and local_imports > 0:
+            top.append(rel)
+        else:
+            middle.append(rel)
+
+    # Phase 4: unused exports detection (Python only)
+    unused_exports = {}  # rel -> [name, ...]
+    for rel, info in file_info.items():
+        if not info.get("is_python"):
+            continue
+        defined = info.get("defined", set())
+        if not defined:
+            continue
+        # Collect all names imported FROM this module
+        imported_names = set()
+        for other_rel, other_info in file_info.items():
+            if other_rel == rel:
+                continue
+            for imp in other_info.get("imports", []):
+                if imp.get("type") == "from_import":
+                    full = imp["module"]
+                    # module is "clipboard_store.ClipboardStore" -> module="clipboard_store", name="ClipboardStore"
+                    parts = full.split(".")
+                    if len(parts) >= 2:
+                        mod_part = parts[0]
+                        name_part = ".".join(parts[1:])
+                        # Check if the module part matches this file's module name
+                        # (e.g., clipboard_store.ClipboardStore → module=clipboard_store)
+                        mod_file = mod_part + ".py"
+                        if mod_file == rel:
+                            imported_names.add(name_part)
+                    elif full == rel.replace(".py", ""):
+                        # import module directly, all defs are accessible
+                        pass
+        # Check for unused
+        unused = set()
+        for name in defined:
+            if name.startswith("_"):
+                continue  # private by convention
+            if name not in imported_names:
+                unused.add(name)
+        if unused:
+            unused_exports[rel] = sorted(unused)
+
+    # Phase 5: circular dependency
+    all_modules = {}
+    for rel, info in file_info.items():
+        all_modules[rel] = list(info["categories"]["local"])
+    circles = _find_circular_deps(all_modules)
+
+    # ── Format Output ──────────────────────────────────────────
+
+    total_stdlib = sum(len(f["categories"]["stdlib"]) for f in file_info.values())
+    total_third = sum(len(f["categories"]["third_party"]) for f in file_info.values())
+    total_local = sum(len(f["categories"]["local"]) for f in file_info.values())
+    total_imports = total_stdlib + total_third + total_local
+
+    lines = [
+        f"🔗 项目依赖分析: {os.path.basename(project_root)}",
+        "═" * 50,
+        "",
+        f"📊 概览",
+        f"   · 总文件数:      {len(file_info)}",
+        f"   · 总导入语句:     {total_imports}",
+        f"   · 标准库:        {total_stdlib}",
+        f"   · 第三方包:      {total_third}",
+        f"   · 本地模块依赖:   {total_local}",
+        f"   · 循环依赖:      {'⚠️ 发现 ' + str(len(circles)) + ' 个' if circles else '✅ 无'}",
+        "",
+    ]
+
+    # Module layering
+    lines.append("📦 模块分层")
+    if bottom:
+        lines.append(f"   底层 (不依赖其他本地模块):")
+        lines.append(f"     {', '.join(sorted(bottom))}")
+    if middle:
+        lines.append(f"   中间层 (互相依赖):")
+        # Show top 8 middle files
+        mid_show = sorted(middle)[:8]
+        lines.append(f"     {', '.join(mid_show)}")
+        if len(middle) > 8:
+            lines.append(f"     ... 及其他 {len(middle) - 8} 个")
+    if top:
+        lines.append(f"   顶层 (不被其他模块依赖):")
+        lines.append(f"     {', '.join(sorted(top))}")
+    lines.append("")
+
+    # Per-file detail (show ALL files, no truncation)
+    # Sort by total imports descending
+    sorted_rels = sorted(file_info.items(),
+                         key=lambda x: len(x[1]["categories"]["stdlib"]) + len(x[1]["categories"]["third_party"]) + len(x[1]["categories"]["local"]),
+                         reverse=True)
+
+    lines.append("─" * 55)
+    lines.append(f"📄 各文件依赖详情（按依赖数降序，共 {len(sorted_rels)} 个文件）")
+    lines.append("")
+
+    for idx, (rel, info) in enumerate(sorted_rels, 1):
+        cats = info["categories"]
+        imp_count = len(cats["stdlib"]) + len(cats["third_party"]) + len(cats["local"])
+        imported_by = reverse.get(rel, [])
+        lines.append(f"【{idx}】{rel} ({imp_count} 导入)")
+        lines.append(f"  📥 导入:")
+        # Show non-empty categories
+        if cats["stdlib"]:
+            stdlib_list = ", ".join(sorted(cats["stdlib"])[:12])
+            extra = f" +{len(cats['stdlib']) - 12}" if len(cats['stdlib']) > 12 else ""
+            lines.append(f"    stdlib: {stdlib_list}{extra}")
+        if cats["third_party"]:
+            third_list = ", ".join(sorted(cats["third_party"])[:8])
+            extra = f" +{len(cats['third_party']) - 8}" if len(cats['third_party']) > 8 else ""
+            lines.append(f"    3rd:   {third_list}{extra}")
+        if cats["local"]:
+            local_files_shown = set()
+            for local_mod in sorted(cats["local"]):
+                local_mod_clean = local_mod.split(".")[0]
+                local_rel = local_mod_clean + ".py"
+                display = local_mod_clean + (".py" if local_rel in file_info else "")
+                if display not in local_files_shown:
+                    local_files_shown.add(display)
+                    lines.append(f"    → {display}")
+        if imported_by:
+            lines.append(f"  📤 被引用: {', '.join(sorted(imported_by)[:6])}"
+                         + (f" +{len(imported_by)-6}" if len(imported_by) > 6 else ""))
+        else:
+            lines.append(f"  📤 被引用: (无)")
+        lines.append("")
+
+    # Circular deps
+    lines.append("─" * 55)
+    lines.append("⚠️  循环依赖检测")
+    if circles:
+        for a, b in circles:
+            lines.append(f"   {a} ↔ {b}")
+    else:
+        lines.append("   ✅ 无")
+
+    # Unused exports
+    lines.append("")
+    lines.append("─" * 55)
+    lines.append("🕳️  未使用的导出（定义了但未被其他文件引用）")
+    if unused_exports:
+        total_unused = sum(len(v) for v in unused_exports.values())
+        lines.append(f"   检测到 {total_unused} 个（可能包含误报：动态注册、`__main__` 入口、或仅内部使用的符号）")
+        for rel, names in sorted(unused_exports.items()):
+            for name in sorted(names):
+                lines.append(f"   · {rel}: {name}()")
+    else:
+        lines.append("   ✅ 无 — 所有定义的函数/类均被引用")
+
+    return "\n".join(lines)
+
+
+def _extract_defined_names(source: str) -> tuple:
+    """Extract top-level function and class names from Python source."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set(), set()
+    funcs = set()
+    classes = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            funcs.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            classes.add(node.name)
+    return funcs, classes
+
+
+def _find_circular_deps(modules: Dict[str, List[str]]) -> List[tuple]:
+    """Simple pairwise circular dependency detection."""
+    circles = []
+    names = list(modules.keys())
+    for i, name_a in enumerate(names):
+        for name_b in names[i + 1:]:
+            if name_a in modules.get(name_b, []) and name_b in modules.get(name_a, []):
+                circles.append((name_a, name_b))
+    return circles
+
+
 # ── Sub-Agent Tool ─────────────────────────────────────────────────────────
 
 _MAX_SUBAGENT_TURNS = 15
@@ -3412,6 +3874,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "send_notification": execute_send_notification,
     "read_qq_mail": execute_read_qq_mail,
     "get_code_metrics": execute_get_code_metrics,
+    "find_project_dependencies": execute_find_dependencies,
     "sub_agent": execute_sub_agent,
 }
 
@@ -3644,6 +4107,14 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             safe_path = html.escape(fpath)
             parts.append(
                 f'<div class="tool-call-info">📊 <b>代码度量：</b>{safe_path}</div>'
+            )
+        elif name == "find_project_dependencies":
+            fpath = args.get("path", "")
+            rec = args.get("recursive", True)
+            safe_path = html.escape(fpath)
+            rec_str = "递归" if rec else "非递归"
+            parts.append(
+                f'<div class="tool-call-info">🔗 <b>项目依赖分析：</b>{safe_path} ({rec_str})</div>'
             )
         else:
             safe_name = html.escape(name)
