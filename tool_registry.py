@@ -943,7 +943,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     },
                     "max_turns": {
                         "type": "integer",
-                        "description": "子代理最大工具调用轮数（1-15，默认 10）",
+                        "description": "子代理最大工具调用轮数（1-20，默认 10）",
                         "default": 10
                     },
                     "agent_type": {
@@ -967,11 +967,20 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "function": {
             "name": "get_subagent_status",
             "description": "查询后台子代理的执行状态。当已启动后台子代理（run_in_background=true）后，"
-                           "可以用此工具检查其是否完成。返回所有后台子代理的 ID、状态和任务描述。",
+                           "可以用此工具检查其是否完成。支持按 ID 查询单个任务或查看全部。",
             "parameters": {
                 "type": "object",
-                "properties": {},
-                "required": []
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "description": "可选。指定子代理 ID 查询单个任务的状态和结果。省略则返回所有后台子代理的状态摘要。"
+                    },
+                    "clear_completed": {
+                        "type": "boolean",
+                        "description": "设为 true 可清除所有已完成的子代理状态记录。",
+                        "default": False
+                    }
+                }
             }
         }
     },
@@ -4181,7 +4190,7 @@ def execute_parse_file_ast(path: str, language: str = "auto",
 
 # ── Sub-Agent Tool ─────────────────────────────────────────────────────────
 
-_MAX_SUBAGENT_TURNS = 15
+_MAX_SUBAGENT_TURNS = 20
 _SUBAGENT_TIMEOUT_PER_TURN = 60
 
 _SUBAGENT_TYPES = {
@@ -4285,6 +4294,7 @@ def _run_subagent_background(task: str, max_turns: int, agent_type: str, subagen
             "task": task[:100],
             "started_at": _background_subagent_status.get(subagent_id, {}).get("started_at", 0),
             "status": "completed",
+            "completed_at": time.time(),
         }
         result_path = f"/tmp/opencode_subagent_{subagent_id}_result.txt"
         try:
@@ -4459,17 +4469,70 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
 }
 
 
-def execute_get_subagent_status() -> str:
-    """查询所有后台子代理的执行状态。"""
+def execute_get_subagent_status(id: Optional[int] = None,
+                                clear_completed: bool = False) -> str:
+    """查询后台子代理的执行状态。
+
+    Args:
+        id: 可选。按 ID 查询单个子代理的状态。省略则列出全部。
+        clear_completed: 设为 True 清除所有已完成的子代理记录。
+    """
+    global _background_subagent_status
+
+    _SUBAGENT_CLEANUP_AGE = 300  # 5 minutes
+
+    # Auto-cleanup: remove completed tasks older than 5 minutes
+    now = time.time()
+    to_remove = []
+    for sid, info in list(_background_subagent_status.items()):
+        if info.get("status") == "completed":
+            completed_at = info.get("completed_at", 0)
+            if completed_at and (now - completed_at) > _SUBAGENT_CLEANUP_AGE:
+                to_remove.append(sid)
+    for sid in to_remove:
+        del _background_subagent_status[sid]
+
+    # Clear completed on demand
+    if clear_completed:
+        to_clear = [sid for sid, info in _background_subagent_status.items()
+                    if info.get("status") == "completed"]
+        for sid in to_clear:
+            del _background_subagent_status[sid]
+        if not _background_subagent_status:
+            return "✅ 已清除所有已完成的后台子代理记录。"
+        return f"✅ 已清除 {len(to_clear)} 个已完成的后台子代理记录。"
+
     if not _background_subagent_status:
         return "当前没有运行中的后台子代理。"
+
+    # Single-task query mode
+    if id is not None:
+        info = _background_subagent_status.get(id)
+        if info is None:
+            return f"错误：未找到 ID 为「{id}」的后台子代理。"
+        status = info.get("status", "unknown")
+        task = info.get("task", "?")
+        started = info.get("started_at", 0)
+        elapsed = int(now - started) if started else 0
+        status_emoji = "✅" if status == "completed" else "🔄" if status == "running" else "❌"
+        elapsed_str = f"{elapsed // 60}分{elapsed % 60}秒" if elapsed >= 60 else f"{elapsed}秒"
+        lines = [
+            f"📋 子代理 {id} 状态:\n",
+            f"{status_emoji} ID={id}，状态={status}，耗时={elapsed_str}",
+            f"   任务: {task}",
+        ]
+        if status == "completed":
+            lines.append(f"   结果文件: /tmp/opencode_subagent_{id}_result.txt")
+        return "\n".join(lines)
+
+    # List mode (all)
     lines = ["📋 后台子代理状态:\n"]
     for sid in sorted(_background_subagent_status):
         info = _background_subagent_status[sid]
         status = info.get("status", "unknown")
         task = info.get("task", "?")
         started = info.get("started_at", 0)
-        elapsed = int(time.time() - started) if started else 0
+        elapsed = int(now - started) if started else 0
         status_emoji = "✅" if status == "completed" else "🔄" if status == "running" else "❌"
         elapsed_str = f"{elapsed // 60}分{elapsed % 60}秒" if elapsed >= 60 else f"{elapsed}秒"
         lines.append(f"{status_emoji} ID={sid}，状态={status}，耗时={elapsed_str}")
