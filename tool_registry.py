@@ -7,6 +7,7 @@ Tool Registry — Function Calling 工具定义与执行器
 所有工具使用零新外部依赖（requests 和 stdlib only）。
 """
 
+import ast
 import datetime
 import difflib
 import fnmatch
@@ -962,6 +963,24 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     }
                 },
                 "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_code_metrics",
+            "description": "分析文件或目录的代码度量指标：总行数、代码行数、注释行数、空行数、"
+                           "函数/类数量。支持任何文本文件。对于 Python 文件额外提供函数和类计数。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "文件或目录的绝对路径。如果是目录，汇总其中所有文件的度量。"
+                    }
+                },
+                "required": ["path"]
             }
         }
     },
@@ -2956,6 +2975,169 @@ def _extract_email_body(msg: email.message.Message) -> str:
             return ""
 
 
+# ── Code Metrics ────────────────────────────────────────────────────────────
+
+_METRICS_BINARY_EXTS = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg",
+    ".woff", ".woff2", ".ttf", ".eot",
+    ".pyc", ".o", ".so", ".dll", ".dylib",
+    ".zip", ".tar", ".gz", ".bz2", ".xz",
+})
+
+_METRICS_IGNORE_DIRS = frozenset({
+    ".git", "__pycache__", "node_modules", "venv", ".venv",
+    "env", "build", "dist", "target", ".cache", ".omo", ".hzb-agents",
+})
+
+
+def _is_binary(path: str) -> bool:
+    ext = os.path.splitext(path)[1].lower()
+    return ext in _METRICS_BINARY_EXTS
+
+
+def _count_file_lines(path: str) -> Optional[dict]:
+    try:
+        total = 0
+        code = 0
+        comments = 0
+        blank = 0
+        is_python = path.endswith(".py")
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                total += 1
+                stripped = line.strip()
+                if not stripped:
+                    blank += 1
+                elif stripped.startswith("#"):
+                    comments += 1
+                else:
+                    code += 1
+        result = {
+            "file": os.path.basename(path),
+            "total_lines": total,
+            "code_lines": code,
+            "comment_lines": comments,
+            "blank_lines": blank,
+        }
+        if is_python:
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    source = f.read()
+                tree = ast.parse(source)
+                funcs = sum(1 for n in ast.walk(tree)
+                           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+                classes = sum(1 for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
+                result["num_functions"] = funcs
+                result["num_classes"] = classes
+            except SyntaxError:
+                result["num_functions"] = 0
+                result["num_classes"] = 0
+        return result
+    except Exception:
+        return None
+
+
+def _format_metrics_table(results: list, total: dict) -> str:
+    if not results:
+        return "没有找到可分析的文件。"
+    lines = []
+    if len(results) > 1:
+        lines.append("📊 代码度量汇总")
+        lines.append(f"{'文件':40s} {'总行数':>8s} {'代码行':>8s} {'注释行':>8s} {'空行':>8s}{' 函数':>6s}{' 类':>6s}")
+        lines.append("─" * 90)
+        for r in sorted(results, key=lambda x: x["total_lines"], reverse=True):
+            fn = r.get("file", "?")
+            fn_trunc = fn[:38] + ".." if len(fn) > 38 else fn
+            funcs = r.get("num_functions", "-")
+            classes = r.get("num_classes", "-")
+            f_str = str(funcs) if funcs != "-" else "-"
+            c_str = str(classes) if classes != "-" else "-"
+            lines.append(
+                f"{fn_trunc:40s} {r['total_lines']:>8d} {r['code_lines']:>8d} "
+                f"{r['comment_lines']:>8d} {r['blank_lines']:>8d} {f_str:>6s} {c_str:>6s}"
+            )
+        lines.append("─" * 90)
+        lines.append(
+            f"{'总计':40s} {total['total_lines']:>8d} {total['code_lines']:>8d} "
+            f"{total['comment_lines']:>8d} {total['blank_lines']:>8d} "
+            f"{str(total.get('num_functions', '-')):>6s} {str(total.get('num_classes', '-')):>6s}"
+        )
+    else:
+        r = results[0]
+        lines.append(f"📊 代码度量: {r['file']}")
+        lines.append(f"   总行数:     {r['total_lines']}")
+        lines.append(f"   代码行:     {r['code_lines']}")
+        lines.append(f"   注释行:     {r['comment_lines']}")
+        if r["total_lines"] > 0:
+            pct = r["comment_lines"] / r["total_lines"] * 100
+            lines[-1] += f"  ({pct:.1f}%)"
+        lines.append(f"   空行:       {r['blank_lines']}")
+        if "num_functions" in r:
+            lines.append(f"   函数:       {r['num_functions']}")
+            lines.append(f"   类:         {r['num_classes']}")
+    return "\n".join(lines)
+
+
+def execute_get_code_metrics(path: str) -> str:
+    """Analyze code metrics for a file or directory.
+
+    Supports Python (with ast-based function/class counting) and
+    common text-based source files. Binary files are skipped automatically.
+
+    Args:
+        path: Absolute path to file or directory.
+
+    Returns:
+        Formatted metrics report with line counts and structure info.
+    """
+    if not path or not os.path.isabs(path):
+        return "❌ 错误：必须使用绝对路径！"
+
+    resolved = os.path.realpath(path)
+
+    if os.path.isfile(resolved):
+        if _is_binary(resolved):
+            return f"❌ 跳过二进制文件: {os.path.basename(resolved)}"
+        result = _count_file_lines(resolved)
+        if result is None:
+            return f"❌ 无法读取文件: {path}"
+        return _format_metrics_table([result], result)
+
+    elif os.path.isdir(resolved):
+        all_results = []
+        totals = {"total_lines": 0, "code_lines": 0,
+                  "comment_lines": 0, "blank_lines": 0,
+                  "num_functions": 0, "num_classes": 0}
+        for root, dirs, files in os.walk(resolved):
+            dirs[:] = [d for d in dirs if d not in _METRICS_IGNORE_DIRS]
+            for fname in sorted(files):
+                fpath = os.path.join(root, fname)
+                if _is_binary(fpath):
+                    continue
+                ext = os.path.splitext(fname)[1].lower()
+                if ext not in (".py", ".js", ".ts", ".rs", ".go", ".java",
+                               ".c", ".cpp", ".h", ".hpp", ".cs", ".rb",
+                               ".sh", ".bash", ".zsh", ".yaml", ".yml",
+                               ".json", ".xml", ".html", ".css", ".scss",
+                               ".md", ".rst", ".txt", ".cfg", ".ini",
+                               ".conf", ".toml"):
+                    continue
+                result = _count_file_lines(fpath)
+                if result:
+                    all_results.append(result)
+                    totals["total_lines"] += result["total_lines"]
+                    totals["code_lines"] += result["code_lines"]
+                    totals["comment_lines"] += result["comment_lines"]
+                    totals["blank_lines"] += result["blank_lines"]
+                    totals["num_functions"] += result.get("num_functions", 0)
+                    totals["num_classes"] += result.get("num_classes", 0)
+        if not all_results:
+            return f"在目录中未找到可分析的代码文件: {path}"
+        return _format_metrics_table(all_results, totals)
+    else:
+        return f"❌ 路径不存在: {path}"
+
+
 # ── Sub-Agent Tool ─────────────────────────────────────────────────────────
 
 _MAX_SUBAGENT_TURNS = 15
@@ -3229,6 +3411,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "rename_file": execute_rename_file,
     "send_notification": execute_send_notification,
     "read_qq_mail": execute_read_qq_mail,
+    "get_code_metrics": execute_get_code_metrics,
     "sub_agent": execute_sub_agent,
 }
 
@@ -3455,6 +3638,12 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             parts.append(
                 f'<div class="tool-call-info">📧 <b>读取QQ邮件：</b>'
                 f'{count} 封，文件夹: {safe_folder}，条件: {safe_criteria}</div>'
+            )
+        elif name == "get_code_metrics":
+            fpath = args.get("path", "")
+            safe_path = html.escape(fpath)
+            parts.append(
+                f'<div class="tool-call-info">📊 <b>代码度量：</b>{safe_path}</div>'
             )
         else:
             safe_name = html.escape(name)
