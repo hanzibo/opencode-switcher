@@ -494,9 +494,36 @@ def _ensure_table_blankline(text: str) -> str:
 
 
 def _close_unclosed_code_blocks(text: str) -> str:
-    """Ensure that any unclosed markdown code blocks (triple backticks) are closed."""
-    if text.count("```") % 2 != 0:
-        return text + "\n```"
+    """Ensure that any unclosed markdown code blocks (triple backticks or tildes) are closed."""
+    lines = text.splitlines()
+    open_fence_char = None  # '`' or '~'
+    open_fence_len = 0
+
+    for line in lines:
+        if open_fence_len == 0:
+            # Look for opening fence (at most 3 leading spaces)
+            leading_spaces = len(line) - len(line.lstrip(' '))
+            if leading_spaces <= 3:
+                match = re.match(r'^(`{3,}|~{3,})', line.lstrip(' '))
+                if match:
+                    fence = match.group(1)
+                    open_fence_char = fence[0]
+                    open_fence_len = len(fence)
+        else:
+            # Look for closing fence (at most 3 leading spaces, >= open_fence_len matching chars, no trailing non-space)
+            leading_spaces = len(line) - len(line.lstrip(' '))
+            if leading_spaces <= 3:
+                pattern = r'^(' + re.escape(open_fence_char) + r'{' + str(open_fence_len) + r',})\s*$'
+                if re.match(pattern, line.lstrip(' ')):
+                    open_fence_len = 0
+                    open_fence_char = None
+
+    if open_fence_len > 0:
+        closing_fence = open_fence_char * open_fence_len
+        if text and not text.endswith('\n'):
+            return text + '\n' + closing_fence
+        return text + closing_fence
+
     return text
 
 
