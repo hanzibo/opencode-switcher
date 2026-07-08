@@ -3087,21 +3087,22 @@ def _is_binary(path: str) -> bool:
 
 def _count_file_lines(path: str) -> Optional[dict]:
     try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            source = f.read()
         total = 0
         code = 0
         comments = 0
         blank = 0
         is_python = path.endswith(".py")
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                total += 1
-                stripped = line.strip()
-                if not stripped:
-                    blank += 1
-                elif stripped.startswith("#"):
-                    comments += 1
-                else:
-                    code += 1
+        for line in source.split("\n"):
+            total += 1
+            stripped = line.strip()
+            if not stripped:
+                blank += 1
+            elif stripped.startswith("#"):
+                comments += 1
+            else:
+                code += 1
         result = {
             "file": os.path.basename(path),
             "total_lines": total,
@@ -3111,8 +3112,6 @@ def _count_file_lines(path: str) -> Optional[dict]:
         }
         if is_python:
             try:
-                with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    source = f.read()
                 tree = ast.parse(source)
                 funcs = sum(1 for n in ast.walk(tree)
                            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
@@ -3421,7 +3420,6 @@ def execute_find_dependencies(path: str, recursive: bool = True) -> str:
 
     # Phase 1: extract imports + defined names from all files
     file_info = {}  # rel_path -> {"imports": [...], "defined": set(), "categories": {stdlib, 3rd, local}}
-    all_raw_imports = {}  # rel_path -> raw import dicts (for unused export detection)
 
     for fpath in py_files:
         try:
@@ -3432,7 +3430,6 @@ def execute_find_dependencies(path: str, recursive: bool = True) -> str:
         rel = os.path.relpath(fpath, project_root)
         imports = _extract_python_imports(source)
         funcs, classes = _extract_defined_names(source)
-        all_raw_imports[rel] = imports
         cats = {"stdlib": set(), "third_party": set(), "local": set()}
         for imp in imports:
             cat = _categorize_dependency(imp["module"], project_root)
@@ -3448,7 +3445,6 @@ def execute_find_dependencies(path: str, recursive: bool = True) -> str:
             continue
         rel = os.path.relpath(fpath, project_root)
         imports = _extract_js_imports(source)
-        all_raw_imports[rel] = imports
         cats = {"stdlib": set(), "third_party": set(), "local": set()}
         for imp in imports:
             mod = imp["module"]
@@ -3467,7 +3463,6 @@ def execute_find_dependencies(path: str, recursive: bool = True) -> str:
             continue
         rel = os.path.relpath(fpath, project_root)
         imports = _extract_go_imports(source)
-        all_raw_imports[rel] = imports
         cats = {"stdlib": set(), "third_party": set(), "local": set()}
         for imp in imports:
             mod = imp["module"]
@@ -3793,7 +3788,7 @@ def _parse_python_ast(path: str, include_body: bool = False,
                         "returns": ret,
                         "is_async": isinstance(child, ast.AsyncFunctionDef),
                         "decorators": [],
-                        "docstring": ast.get_docstring(child) or "",
+                        "docstring": ast.get_docstring(child) or "" if (include_docstrings or include_body) else "",
                     }
                     if include_body:
                         m_info["body"] = ast.get_source_segment(source, child) or ""
@@ -3830,7 +3825,7 @@ def _parse_python_ast(path: str, include_body: bool = False,
                 "returns": ret,
                 "is_async": isinstance(node, ast.AsyncFunctionDef),
                 "decorators": [],
-                "docstring": ast.get_docstring(node) or "",
+                "docstring": ast.get_docstring(node) or "" if (include_docstrings or include_body) else "",
             }
             for dec in node.decorator_list:
                 try:
