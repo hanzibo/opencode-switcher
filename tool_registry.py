@@ -4245,11 +4245,14 @@ def execute_sub_agent(task: str, max_turns: int = 10,
     if run_in_background:
         global _background_subagent_id
         _background_subagent_id += 1
-        subagent_id = _background_subagent_id
+        conv_id = get_current_conversation_id()
+        short_hash = get_conv_short_hash(conv_id)
+        subagent_id = f"{short_hash}-{_background_subagent_id}"
         _background_subagent_status[subagent_id] = {
             "task": task[:100],
             "started_at": time.time(),
             "status": "running",
+            "conv_id": conv_id,
         }
         _run_subagent_background(task, max_turns, agent_type, subagent_id)
         return f"⏳ 子代理已启动（任务ID: {subagent_id}，类型: {agent_type}）。" \
@@ -4258,41 +4261,76 @@ def execute_sub_agent(task: str, max_turns: int = 10,
 
     return _execute_subagent_sync(task, max_turns, agent_type)
 
+import hashlib
+import threading
+
+_thread_local = threading.local()
+
+def set_current_conversation_id(conv_id: Optional[str]):
+    """设置当前线程活跃的对话 ID，供后台子代理关联会话。"""
+    _thread_local.conversation_id = conv_id
+
+def get_current_conversation_id() -> Optional[str]:
+    """获取当前线程活跃的对话 ID。"""
+    return getattr(_thread_local, "conversation_id", None)
+
+def get_conv_short_hash(conv_id: Optional[str]) -> str:
+    """根据对话 ID 生成唯一的 5 位 hex 短 hash 标识。"""
+    if not conv_id:
+        return "temp"
+    return hashlib.md5(conv_id.encode('utf-8')).hexdigest()[:5]
+
 
 _background_subagent_id = 0
-_background_subagent_results: Dict[int, str] = {}
+_background_subagent_results: Dict[Any, str] = {}
 """Stores completed background sub-agent results, keyed by subagent_id.
 Cleared once consumed by check_background_subagents()."""
-_background_subagent_status: Dict[int, Dict[str, Any]] = {}
+_background_subagent_status: Dict[Any, Dict[str, Any]] = {}
 """Tracks running/background sub-agents: {id: {"task": str, "started_at": float, "status": str}}"""
 
 
-def get_subagent_status_map() -> Dict[int, Dict[str, Any]]:
+def get_subagent_status_map() -> Dict[Any, Dict[str, Any]]:
     """返回后台子代理状态字典的副本，供 UI 轮询使用。"""
     return dict(_background_subagent_status)
 
 
-def remove_subagent_status(subagent_id: int):
+def remove_subagent_status(subagent_id: Any):
     """从后台子代理状态字典中删除特定 ID 的子代理记录。"""
     global _background_subagent_status
     _background_subagent_status.pop(subagent_id, None)
 
 
-def check_background_subagents() -> str:
+def check_background_subagents(conv_id: Optional[str] = None) -> str:
     """Check if any background sub-agents have completed since last check.
     Returns a formatted message with results, or empty string if none.
     Clears the consumed entries. Designed to be called before sending a user message."""
     global _background_subagent_results
     if not _background_subagent_results:
         return ""
+    
+    if conv_id is None:
+        conv_id = get_current_conversation_id()
+
+    # Find results belonging to the specified conversation
+    matching_sids = []
+    for sid in list(_background_subagent_results.keys()):
+        sid_conv_id = _background_subagent_status.get(sid, {}).get("conv_id")
+        if sid_conv_id == conv_id:
+            matching_sids.append(sid)
+
+    if not matching_sids:
+        return ""
+
     parts = []
-    for sid in sorted(_background_subagent_results):
+    # Sort matching sids. They are strings like "hash-1", "hash-2", etc.
+    for sid in sorted(matching_sids):
         parts.append(
             f"## 后台子代理 {sid} 已完成\n"
             f"结果文件: /tmp/opencode_subagent_{sid}_result.txt\n\n"
             f"请使用 read_file 读取结果文件以获取详细信息。"
         )
-    _background_subagent_results.clear()
+        _background_subagent_results.pop(sid, None)
+
     return "\n\n---\n\n".join(parts)
 
 
@@ -4306,6 +4344,7 @@ def _run_subagent_background(task: str, max_turns: int, agent_type: str, subagen
             "started_at": _background_subagent_status.get(subagent_id, {}).get("started_at", 0),
             "status": "completed",
             "completed_at": time.time(),
+            "conv_id": _background_subagent_status.get(subagent_id, {}).get("conv_id"),
         }
         result_path = f"/tmp/opencode_subagent_{subagent_id}_result.txt"
         try:

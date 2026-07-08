@@ -46,52 +46,57 @@ def run_llm_react_loop(
     reset_iteration_state_fn,
     set_reasoning_text_fn=None,
     set_assistant_text_fn=None,
+    conv_id: str = None,
 ):
     set_tool_iteration_fn(0)
-    iteration = 0
-    while iteration < MAX_TOOL_ITERATIONS:
-        # Stop before next iteration if user cancelled (pressed pause/stop)
-        if cancel_event and cancel_event.is_set():
-            break
+    tool_registry.set_current_conversation_id(conv_id)
+    try:
+        iteration = 0
+        while iteration < MAX_TOOL_ITERATIONS:
+            # Stop before next iteration if user cancelled (pressed pause/stop)
+            if cancel_event and cancel_event.is_set():
+                break
 
-        # Check for completed background sub-agents before each LLM call
-        bg_info = tool_registry.check_background_subagents()
-        if bg_info:
-            messages.append({
-                "role": "system",
-                "content": f"[Background sub-agent completed]\n{bg_info}"
-            })
+            # Check for completed background sub-agents before each LLM call
+            bg_info = tool_registry.check_background_subagents()
+            if bg_info:
+                messages.append({
+                    "role": "system",
+                    "content": f"[Background sub-agent completed]\n{bg_info}"
+                })
 
-        should_continue = _perform_llm_call(
-            llm_client=llm_client,
-            base_url=base_url,
-            api_key=api_key,
-            model_name=model_name,
-            messages=messages,
-            req_id=req_id,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            top_p=top_p,
-            cancel_event=cancel_event,
-            stream_lock=stream_lock,
-            stream_queue=stream_queue,
-            get_current_request_id_fn=get_current_request_id_fn,
-            append_message_fn=append_message_fn,
-            append_html_to_webview_fn=append_html_to_webview_fn,
-            flush_stream_queue_fn=flush_stream_queue_fn,
-            append_to_stream_queue_fn=append_to_stream_queue_fn,
-            handle_ask_user_question_fn=handle_ask_user_question_fn,
-            on_llm_api_finished_fn=on_llm_api_finished_fn,
-            finalize_after_tool_loop_fn=finalize_after_tool_loop_fn,
-            reset_iteration_state_fn=reset_iteration_state_fn,
-            iteration=iteration,
-            set_reasoning_text_fn=set_reasoning_text_fn,
-            set_assistant_text_fn=set_assistant_text_fn,
-        )
-        if not should_continue:
-            break
-        iteration += 1
-        set_tool_iteration_fn(iteration)
+            should_continue = _perform_llm_call(
+                llm_client=llm_client,
+                base_url=base_url,
+                api_key=api_key,
+                model_name=model_name,
+                messages=messages,
+                req_id=req_id,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+                cancel_event=cancel_event,
+                stream_lock=stream_lock,
+                stream_queue=stream_queue,
+                get_current_request_id_fn=get_current_request_id_fn,
+                append_message_fn=append_message_fn,
+                append_html_to_webview_fn=append_html_to_webview_fn,
+                flush_stream_queue_fn=flush_stream_queue_fn,
+                append_to_stream_queue_fn=append_to_stream_queue_fn,
+                handle_ask_user_question_fn=handle_ask_user_question_fn,
+                on_llm_api_finished_fn=on_llm_api_finished_fn,
+                finalize_after_tool_loop_fn=finalize_after_tool_loop_fn,
+                reset_iteration_state_fn=reset_iteration_state_fn,
+                iteration=iteration,
+                set_reasoning_text_fn=set_reasoning_text_fn,
+                set_assistant_text_fn=set_assistant_text_fn,
+            )
+            if not should_continue:
+                break
+            iteration += 1
+            set_tool_iteration_fn(iteration)
+    finally:
+        tool_registry.set_current_conversation_id(None)
 
 def _perform_llm_call(
     llm_client,

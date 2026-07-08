@@ -88,7 +88,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_pending_image_data_uri = None
         self._ai_cancel_event = threading.Event()
         self._ai_messages = []
-        self._ai_conversation_id = None
+        self._ai_conversation_id = uuid4().hex[:12]
         self._ai_history_popover = None
         self._ai_history_btn = None
         self._ai_history_btn_label = None
@@ -123,8 +123,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_tool_iteration = 0
         self._ai_render_timeout_id = 0
         self._ai_ask_user_state = None
-        self._ai_selected_subagents: Set[int] = set()
-        self._ai_subagent_blocks: Dict[int, Gtk.FlowBoxChild] = {}
+        self._ai_selected_subagents: Set[str] = set()
+        self._ai_subagent_blocks: Dict[str, tuple] = {}
         self._ai_current_reasoning_text = ""
         self._ai_pending_title_notification = False
 
@@ -608,7 +608,7 @@ class AIChatPanel(Gtk.Box):
 
     def _start_new_conversation(self, prompt_text: str):
         self._ai_messages = [{"role": "user", "content": prompt_text}]
-        self._ai_conversation_id = None
+        self._ai_conversation_id = uuid4().hex[:12]
         self._ai_assistant_buffer = ""
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
@@ -913,6 +913,7 @@ class AIChatPanel(Gtk.Box):
             reset_iteration_state_fn=reset_iteration_state,
             set_reasoning_text_fn=set_reasoning_callback,
             set_assistant_text_fn=set_assistant_callback,
+            conv_id=self._ai_conversation_id,
         )
 
     def _finalize_after_tool_loop(self, req_id: int):
@@ -1185,6 +1186,11 @@ class AIChatPanel(Gtk.Box):
         try:
             from tool_registry import get_subagent_status_map
             status_map = get_subagent_status_map()
+            active_conv_id = self._ai_conversation_id
+            status_map = {
+                sid: info for sid, info in status_map.items()
+                if info.get("conv_id") == active_conv_id
+            }
             current_ids = set(status_map.keys())
             existing_ids = set(self._ai_subagent_blocks.keys())
 
@@ -1203,11 +1209,14 @@ class AIChatPanel(Gtk.Box):
             print(f"[opencode-switcher] subagent poll error: {e}", file=sys.stderr)
         return True
 
-    def _create_subagent_block(self, sid: int, info: dict):
+    def _create_subagent_block(self, sid: Any, info: dict):
         """Create a FlowBoxChild for a sub-agent status block."""
         child = Gtk.FlowBoxChild.new()
         box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
-        label = Gtk.Label.new(f"  子代理 {sid}  ")
+        
+        # Option 2: Extract and show only the local numeric ID part in label
+        local_id = sid.split("-")[-1] if isinstance(sid, str) and "-" in sid else sid
+        label = Gtk.Label.new(f"  子代理 {local_id}  ")
         label.set_margin_start(4)
         label.set_margin_end(4)
         label.set_margin_top(2)
@@ -1218,21 +1227,25 @@ class AIChatPanel(Gtk.Box):
         status = info.get("status", "unknown")
         task = info.get("task", "")
         box_ctx = box.get_style_context()
+        
+        # Tooltip text shows full ID and task description
+        tooltip_text = f"ID: {sid}\n任务: {task}"
+        
         if status == "completed":
             box_ctx.add_class("subagent-block-done")
-            child.set_tooltip_text(task)
+            child.set_tooltip_text(tooltip_text)
         elif status == "running":
             box_ctx.add_class("subagent-block-running")
-            child.set_tooltip_text(f"运行中 — {task}")
+            child.set_tooltip_text(f"运行中 — {tooltip_text}")
         else:
             box_ctx.add_class("subagent-block-failed")
-            child.set_tooltip_text(task)
+            child.set_tooltip_text(tooltip_text)
 
         self._ai_subagent_bar.add(child)
         self._ai_subagent_blocks[sid] = (child, child, box)
         self._ai_subagent_bar.show_all()
 
-    def _update_subagent_block(self, sid: int, info: dict):
+    def _update_subagent_block(self, sid: Any, info: dict):
         """Update an existing block when sub-agent status changes."""
         entry = self._ai_subagent_blocks.get(sid)
         if entry is None:
@@ -1242,18 +1255,20 @@ class AIChatPanel(Gtk.Box):
         ctx = box.get_style_context()
         task = info.get("task", "")
 
+        tooltip_text = f"ID: {sid}\n任务: {task}"
+
         if status == "completed":
             ctx.remove_class("subagent-block-running")
             ctx.add_class("subagent-block-done")
-            event_box.set_tooltip_text(task)
+            event_box.set_tooltip_text(tooltip_text)
         elif status == "running":
             if ctx.has_class("subagent-block-done"):
                 ctx.remove_class("subagent-block-done")
                 self._ai_selected_subagents.discard(sid)
             ctx.add_class("subagent-block-running")
-            event_box.set_tooltip_text(f"运行中 — {task}")
+            event_box.set_tooltip_text(f"运行中 — {tooltip_text}")
 
-    def _remove_subagent_block(self, sid: int):
+    def _remove_subagent_block(self, sid: Any):
         """Remove a sub-agent block and clean up state."""
         self._ai_selected_subagents.discard(sid)
         entry = self._ai_subagent_blocks.pop(sid, None)
@@ -1261,7 +1276,15 @@ class AIChatPanel(Gtk.Box):
             child, _event_box, _box = entry
             self._ai_subagent_bar.remove(child)
 
-    def _on_subagent_block_click(self, sid: int):
+    def _clear_subagent_bar_instantly(self):
+        """Instantly clear all subagent blocks from the status bar UI."""
+        for child in self._ai_subagent_bar.get_children():
+            self._ai_subagent_bar.remove(child)
+        self._ai_subagent_blocks.clear()
+        self._ai_selected_subagents.clear()
+        self._ai_subagent_bar.set_visible(False)
+
+    def _on_subagent_block_click(self, sid: Any):
         """Toggle selection state of a completed sub-agent block."""
         with open("/tmp/subagent_debug.log", "a") as f:
             f.write(f"click sid={sid}, selected before={self._ai_selected_subagents}\n")
@@ -2201,6 +2224,8 @@ class AIChatPanel(Gtk.Box):
             except Exception as e:
                 print(f"Error saving before switch: {e}", flush=True)
 
+        self._clear_subagent_bar_instantly()
+
         # Cancel any pending render timeout
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
@@ -2224,6 +2249,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_messages.append(msg)
         self._ai_conversation_id = conv.id
         self._ai_conversation_created_at = conv.created_at
+        self._poll_subagent_status()
         self._ai_assistant_buffer = ""
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
@@ -2418,7 +2444,9 @@ class AIChatPanel(Gtk.Box):
         self._ai_cancel_event.set()
         self._update_send_button(False)
         self._ai_messages = []
-        self._ai_conversation_id = None
+        self._ai_conversation_id = uuid4().hex[:12]
+        self._clear_subagent_bar_instantly()
+        self._poll_subagent_status()
         self._ai_assistant_buffer = ""
         self._ai_markdown_text = ""
         self._ai_current_assistant_text = ""
