@@ -338,7 +338,10 @@ def execute_todo_list(id: Optional[str] = None,
     # Sort
     if sort_by == "priority":
         priority_order = {"high": 0, "medium": 1, "low": 2}
-        todos_to_show = sorted(todos_to_show, key=lambda t: priority_order.get(t.get("priority", "medium"), 1))
+        todos_to_show = sorted(todos_to_show, key=lambda t: (
+            priority_order.get(t.get("priority", "medium"), 1),
+            t.get("created_at", "")
+        ))
     elif sort_by == "updated_at":
         todos_to_show = sorted(todos_to_show, key=lambda t: t.get(sort_by, ""), reverse=True)
     else:
@@ -351,6 +354,8 @@ def execute_todo_list(id: Optional[str] = None,
     pending = sum(1 for t in todos if t.get("status") == "pending")
     blocked = sum(1 for t in todos if t.get("status") == "blocked")
 
+    priority_label = {"high": "[high]", "medium": "[med]", "low": "[low]"}
+
     lines = [
         f"📋 任务清单（共 {len(todos_to_show)} 项）",
         f"   统计: {completed}✅ {in_progress}🔄 {pending}⏳ {blocked}🔴 / {total}总计",
@@ -358,10 +363,12 @@ def execute_todo_list(id: Optional[str] = None,
     ]
     for t in todos_to_show:
         emoji = _status_emoji(t.get("status", "pending"))
+        prio = t.get("priority", "medium")
+        prio_tag = priority_label.get(prio, "")
         blocked_str = ""
         if t.get("blocked_by"):
             blocked_str = f" ⚠ 依赖: {', '.join(t['blocked_by'])}"
-        lines.append(f"{emoji} [{t['status']}]  {t['title']}（ID: {t['id']}）{blocked_str}")
+        lines.append(f"{emoji} [{t['status']}]  {prio_tag} {t['title']}（ID: {t['id']}）{blocked_str}")
 
     return "\n".join(lines)
 
