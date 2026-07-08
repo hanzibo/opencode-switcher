@@ -110,6 +110,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_assistant_buffer = ""
         self._ai_last_prompt_obj = None
         self._ai_active_model_info = None
+        self._ai_html_cache = {}
+        self._last_rendered_html = ""
         self._ai_conversation_created_at = 0
         self._ai_title_generated = False
         self._llm_client = _LLMHttpClient()
@@ -1072,6 +1074,9 @@ class AIChatPanel(Gtk.Box):
             f"<hr><pre><code>{text}</code></pre>"
         )
         html = _markdown_to_html_safe(text, fallback_content=fallback_msg)
+        self._last_rendered_html = html
+        if self._ai_conversation_id:
+            self._ai_html_cache[self._ai_conversation_id] = html
         
         import json
         js_code = f"updateContent({json.dumps(html)});"
@@ -1224,6 +1229,7 @@ class AIChatPanel(Gtk.Box):
             conv_id = self._ai_conversation_id
             if conv_id:
                 self._conversation_store.delete_conversation(conv_id)
+                self._ai_html_cache.pop(conv_id, None)
             self._reset_ai_panel_silent()
             return
         if text == "/retry":
@@ -1995,6 +2001,9 @@ class AIChatPanel(Gtk.Box):
                 )
             self._conversation_store.save_conversation(conv, bump_updated_at=not preserve_updated_at)
 
+        if self._ai_conversation_id:
+            self._ai_html_cache[self._ai_conversation_id] = getattr(self, "_last_rendered_html", "")
+
     def _switch_to_conversation(self, conv_id: str):
         """Switch AI panel to display a different conversation by ID."""
         if self._ai_streaming:
@@ -2039,9 +2048,17 @@ class AIChatPanel(Gtk.Box):
         self._ai_last_prompt_obj = None
         self._ai_active_model_info = conv.model_config_snapshot
 
-        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
-        self._prune_messages()
-        self._render_markdown(self._ai_markdown_text)
+        cached_html = self._ai_html_cache.get(conv_id)
+        if cached_html is not None:
+            self._last_rendered_html = cached_html
+            self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+            import json
+            js_code = f"updateContent({json.dumps(cached_html)});"
+            self._ai_webview.run_javascript(js_code, None, None)
+        else:
+            self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+            self._prune_messages()
+            self._render_markdown(self._ai_markdown_text)
 
         # Update model info display label
         _, _, _, display_name, _, _, _ = self._read_model_config(None, self._ai_active_model_info)
@@ -2357,6 +2374,7 @@ class AIChatPanel(Gtk.Box):
 
     def set_theme(self, name):
         self._theme = name
+        self._ai_html_cache.clear()
         pygments_css = self._get_pygments_css(name)
         html_content = ""
         if self._ai_markdown_text:
