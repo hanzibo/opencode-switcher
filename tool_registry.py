@@ -972,13 +972,30 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "function": {
             "name": "get_code_metrics",
             "description": "分析文件或目录的代码度量指标：总行数、代码行数、注释行数、空行数、"
-                           "函数/类数量。支持任何文本文件。对于 Python 文件额外提供函数和类计数。",
+                           "函数/类数量。支持任何文本文件。对于 Python 文件额外提供函数和类计数。"
+                           "可用 include 过滤文件类型（如 *.py），exclude 排除文件或目录，"
+                           "sort_by 控制排序方式。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
                         "description": "文件或目录的绝对路径。如果是目录，汇总其中所有文件的度量。"
+                    },
+                    "include": {
+                        "type": "string",
+                        "description": "文件通配过滤（逗号分隔多值），例如「*.py」只统计 Python 文件。默认包含常见代码文件类型。",
+                        "default": ""
+                    },
+                    "exclude": {
+                        "type": "string",
+                        "description": "排除的文件或目录（逗号分隔多值，支持通配），例如「*test*,node_modules」。默认已排除 .git、__pycache__、venv 等。",
+                        "default": ""
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "description": "目录模式的排序方式：total（按总行数降序）、code（按代码行降序）、name（按文件名升序）。默认 total。",
+                        "default": "total"
                     }
                 },
                 "required": ["path"]
@@ -3110,15 +3127,21 @@ def _count_file_lines(path: str) -> Optional[dict]:
         return None
 
 
-def _format_metrics_table(results: list, total: dict) -> str:
+def _format_metrics_table(results: list, total: dict, sort_by: str = "total") -> str:
     if not results:
         return "没有找到可分析的文件。"
+    if sort_by == "name":
+        sorted_results = sorted(results, key=lambda x: x.get("file", ""))
+    elif sort_by == "code":
+        sorted_results = sorted(results, key=lambda x: x["code_lines"], reverse=True)
+    else:
+        sorted_results = sorted(results, key=lambda x: x["total_lines"], reverse=True)
     lines = []
     if len(results) > 1:
         lines.append("📊 代码度量汇总")
         lines.append(f"{'文件':40s} {'总行数':>8s} {'代码行':>8s} {'注释行':>8s} {'空行':>8s}{' 函数':>6s}{' 类':>6s}")
         lines.append("─" * 90)
-        for r in sorted(results, key=lambda x: x["total_lines"], reverse=True):
+        for r in sorted_results:
             fn = r.get("file", "?")
             fn_trunc = fn[:38] + ".." if len(fn) > 38 else fn
             funcs = r.get("num_functions", "-")
@@ -3151,7 +3174,9 @@ def _format_metrics_table(results: list, total: dict) -> str:
     return "\n".join(lines)
 
 
-def execute_get_code_metrics(path: str) -> str:
+def execute_get_code_metrics(path: str, include: str = "",
+                              exclude: str = "",
+                              sort_by: str = "total") -> str:
     """Analyze code metrics for a file or directory.
 
     Supports Python (with ast-based function/class counting) and
@@ -3159,6 +3184,8 @@ def execute_get_code_metrics(path: str) -> str:
 
     Args:
         path: Absolute path to file or directory.
+        include: Glob pattern to filter files (e.g. "*.py"). Empty = all supported types.
+        exclude: Extra directory names to skip (comma-separated).
 
     Returns:
         Formatted metrics report with line counts and structure info.
@@ -3168,13 +3195,28 @@ def execute_get_code_metrics(path: str) -> str:
 
     resolved = os.path.realpath(path)
 
+    exclude_patterns = set()
+    if exclude:
+        for d in exclude.split(","):
+            d = d.strip()
+            if d:
+                exclude_patterns.add(d)
+
+    def _match_any(fname: str, patterns) -> bool:
+        for p in patterns:
+            if p == fname or fnmatch.fnmatch(fname, p):
+                return True
+        return False
+
     if os.path.isfile(resolved):
         if _is_binary(resolved):
             return f"❌ 跳过二进制文件: {os.path.basename(resolved)}"
+        if include and not _match_any(os.path.basename(resolved), include.split(",")):
+            return f"❌ 文件不匹配过滤条件: {include}"
         result = _count_file_lines(resolved)
         if result is None:
             return f"❌ 无法读取文件: {path}"
-        return _format_metrics_table([result], result)
+        return _format_metrics_table([result], result, sort_by)
 
     elif os.path.isdir(resolved):
         all_results = []
@@ -3182,10 +3224,15 @@ def execute_get_code_metrics(path: str) -> str:
                   "comment_lines": 0, "blank_lines": 0,
                   "num_functions": 0, "num_classes": 0}
         for root, dirs, files in os.walk(resolved):
-            dirs[:] = [d for d in dirs if d not in _METRICS_IGNORE_DIRS]
+            dirs[:] = [d for d in dirs if not _match_any(d, exclude_patterns)
+                       and d not in _METRICS_IGNORE_DIRS]
             for fname in sorted(files):
                 fpath = os.path.join(root, fname)
                 if _is_binary(fpath):
+                    continue
+                if include and not _match_any(fname, include.split(",")):
+                    continue
+                if _match_any(fname, exclude_patterns):
                     continue
                 ext = os.path.splitext(fname)[1].lower()
                 if ext not in (".py", ".js", ".ts", ".rs", ".go", ".java",
@@ -3206,7 +3253,7 @@ def execute_get_code_metrics(path: str) -> str:
                     totals["num_classes"] += result.get("num_classes", 0)
         if not all_results:
             return f"在目录中未找到可分析的代码文件: {path}"
-        return _format_metrics_table(all_results, totals)
+        return _format_metrics_table(all_results, totals, sort_by)
     else:
         return f"❌ 路径不存在: {path}"
 
