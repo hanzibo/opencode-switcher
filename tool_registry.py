@@ -422,7 +422,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "list_directory",
-            "description": "列出指定目录的内容。仅接受绝对路径。返回文件和子目录列表，每条显示类型标记、大小和修改时间（[DIR] 目录、[FILE] 文件、[LINK] 符号链接）。",
+            "description": "列出指定目录的内容。仅接受绝对路径。返回文件和子目录列表，每条显示类型标记、大小和修改时间（[DIR] 目录、[FILE] 文件、[LINK] 符号链接）。支持按名称/大小/时间排序。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -433,6 +433,17 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "include_hidden": {
                         "type": "boolean",
                         "description": "是否包含隐藏文件（以 . 开头），默认不包含",
+                        "default": False
+                    },
+                    "sort_by": {
+                        "type": "string",
+                        "enum": ["name", "size", "time"],
+                        "description": "排序方式：name（按名称字母序，默认）、size（按文件大小，目录排后）、time（按修改时间，最新在前）",
+                        "default": "name"
+                    },
+                    "reverse": {
+                        "type": "boolean",
+                        "description": "是否反向排序（默认 false）。例如 sort_by=time + reverse=true 则最早修改的排最前。",
                         "default": False
                     }
                 },
@@ -512,8 +523,13 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     },
                     "max_results": {
                         "type": "integer",
-                        "description": "最多返回的匹配行数（1-200，默认 30）",
-                        "default": 30
+                        "description": "最多返回的匹配行数（1-500，默认 50）",
+                        "default": 50
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "搜索结果总字符数上限（500-50000，默认 8000）。超出后截断并提示。与 max_results 双上限，任一先达即截断。",
+                        "default": 8000
                     },
                     "ignore_case": {
                         "type": "boolean",
@@ -604,7 +620,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "创建新文件或完全覆盖已有文件。仅接受绝对路径。默认不覆盖已有文件（需设置 force=True 覆盖）。"
+            "description": "创建新文件、完全覆盖已有文件、或追加内容。仅接受绝对路径。默认不覆盖已有文件（需设置 force=True 覆盖）。"
                            "对已有文件的局部修改请优先使用 edit_file，它只发送差异部分，更安全且不易误覆盖。"
                            "当父目录不存在时将自动创建。",
             "parameters": {
@@ -617,6 +633,12 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                     "content": {
                         "type": "string",
                         "description": "文件内容（文本格式）"
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["write", "append"],
+                        "description": "写入模式：write（覆盖写入，默认）、append（追加到文件末尾）。append 模式下 force 参数被忽略。",
+                        "default": "write"
                     },
                     "force": {
                         "type": "boolean",
@@ -632,8 +654,9 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "edit_file",
-            "description": "对已读取过的文件执行精确字符串替换。用 old_string 精确匹配原文（包括空格和缩进），替换为 new_string。"
-                           "old_string 在同一文件中必须唯一（除非设置 replace_all=True）。"
+            "description": "对已读取过的文件执行替换操作。支持两种互斥模式："
+                           "mode=string（默认）用 old_string 精确匹配原文替换为 new_string；"
+                           "mode=line 按行号范围替换。"
                            "修改前会校验文件自读取后是否被外部修改——若已过期则拒绝并提示重新读取。",
             "parameters": {
                 "type": "object",
@@ -642,21 +665,35 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                         "type": "string",
                         "description": "要编辑的文件的绝对路径"
                     },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["string", "line"],
+                        "description": "替换模式：string（精确字符串替换，默认）、line（行号范围替换）。两种模式互斥。",
+                        "default": "string"
+                    },
                     "old_string": {
                         "type": "string",
-                        "description": "要被替换的原文。必须精确匹配文件中的内容，包括空格和缩进。"
+                        "description": "【string 模式】要被替换的原文。必须精确匹配文件中的内容，包括空格和缩进。"
                     },
                     "new_string": {
                         "type": "string",
-                        "description": "替换后的新内容"
+                        "description": "替换后的新内容（两种模式均适用）"
                     },
                     "replace_all": {
                         "type": "boolean",
-                        "description": "是否替换所有匹配项。默认 false（只替换第一个匹配）。设为 true 替换所有。",
+                        "description": "【string 模式】是否替换所有匹配项。默认 false（只替换第一个匹配）。设为 true 替换所有。",
                         "default": False
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "【line 模式】起始行号（1-indexed，包含）。替换从此行开始。"
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "【line 模式】结束行号（1-indexed，包含）。替换到此行结束。省略则只替换 start_line 一行。"
                     }
                 },
-                "required": ["path", "old_string", "new_string"]
+                "required": ["path", "new_string"]
             }
         }
     },
@@ -1257,7 +1294,8 @@ def _resolve_write_path(path: str, force: bool = False) -> Optional[str]:
 _MAX_DIRECTORY_LISTING = 200
 
 
-def execute_list_directory(path: str, include_hidden: bool = False) -> str:
+def execute_list_directory(path: str, include_hidden: bool = False,
+                           sort_by: str = "name", reverse: bool = False) -> str:
     """List contents of a directory. Accepts absolute paths only."""
     resolved = _resolve_safe_path(path)
     if resolved is None:
@@ -1265,48 +1303,82 @@ def execute_list_directory(path: str, include_hidden: bool = False) -> str:
     if not os.path.isdir(resolved):
         return f"错误：路径不是目录「{resolved}」"
     try:
-        entries = sorted(os.listdir(resolved))
+        raw_names = os.listdir(resolved)
     except PermissionError:
         return f"错误：无权访问目录「{resolved}」"
     except OSError as e:
         return f"错误：访问目录时出错「{resolved}」: {e}"
 
-    filtered = []
-    for name in entries:
+    # Collect entries with metadata for sorting
+    entries = []
+    for name in raw_names:
         if not include_hidden and name.startswith("."):
             continue
         full = os.path.join(resolved, name)
         try:
             st = os.lstat(full)
-            if os.path.islink(full):
+            is_dir = stat.S_ISDIR(st.st_mode)
+            is_link = os.path.islink(full)
+            entries.append((name, full, st, is_dir, is_link))
+        except OSError:
+            entries.append((name, full, None, False, False))
+
+    # Sort by requested field
+    if sort_by == "name":
+        entries.sort(key=lambda e: (0 if e[3] else 1, e[0].lower()))
+    elif sort_by == "size":
+        entries.sort(key=lambda e: (
+            0 if e[3] else 1,  # dirs before files
+            -(e[2].st_size if e[2] is not None and not e[3] else 0)
+        ))
+    elif sort_by == "time":
+        entries.sort(key=lambda e: (
+            0 if e[3] else 1,
+            -(e[2].st_mtime if e[2] is not None else 0)
+        ))
+
+    if reverse:
+        entries.reverse()
+
+    # Format output
+    lines = []
+    for name, full, st, is_dir, is_link in entries:
+        try:
+            if is_link:
                 marker = "LINK"
                 target = os.readlink(full)
                 name_display = f"{name} → {target}"
-            elif os.path.isdir(full):
+            elif is_dir:
                 marker = "DIR"
                 name_display = name
             else:
                 marker = "FILE"
                 name_display = name
-            size = _format_file_size(st.st_size) if not stat.S_ISDIR(st.st_mode) else "—"
-            mtime = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%m-%d %H:%M")
+            if st is not None and not is_dir:
+                size = _format_file_size(st.st_size)
+            else:
+                size = "—"
+            if st is not None:
+                mtime = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%m-%d %H:%M")
+            else:
+                mtime = "?"
         except OSError:
             marker = "?"
             size = "?"
             mtime = "?"
             name_display = name
 
-        filtered.append(f"[{marker:4s}] {size:>8s}  {mtime}  {name_display}")
+        lines.append(f"[{marker:4s}] {size:>8s}  {mtime}  {name_display}")
 
-    if not filtered:
+    if not lines:
         return f"目录「{resolved}」为空。"
 
-    total = len(filtered)
+    total = len(lines)
     if total > _MAX_DIRECTORY_LISTING:
-        filtered = filtered[:_MAX_DIRECTORY_LISTING]
-        filtered.append(f"\n...（已截断，仅显示前 {_MAX_DIRECTORY_LISTING} 项，共 {total} 项）")
+        lines = lines[:_MAX_DIRECTORY_LISTING]
+        lines.append(f"\n...（已截断，仅显示前 {_MAX_DIRECTORY_LISTING} 项，共 {total} 项）")
 
-    return f"📁 目录列表: {resolved}\n\n" + "\n".join(filtered)
+    return f"📁 目录列表: {resolved}\n\n" + "\n".join(lines)
 
 
 def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1, end_line: Optional[int] = None) -> str:
@@ -1459,8 +1531,18 @@ def _find_line_numbers(content: str, old_string: str) -> List[int]:
     return lines
 
 
-def execute_edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
-    """Replace old_string with new_string in file. Requires prior full read_file call."""
+def execute_edit_file(path: str, old_string: str = "", new_string: str = "",
+                      replace_all: bool = False, mode: str = "string",
+                      start_line: Optional[int] = None,
+                      end_line: Optional[int] = None) -> str:
+    """Edit a file via string replacement or line-range replacement.
+
+    Two exclusive modes:
+      - "string": Replace old_string with new_string (default).
+      - "line": Replace lines [start_line, end_line] with new_string.
+
+    Requires prior full read_file call (staleness check).
+    """
     resolved = _resolve_safe_path(path)
     if resolved is None:
         return f"错误：文件不存在或路径无效「{path}」"
@@ -1471,8 +1553,8 @@ def execute_edit_file(path: str, old_string: str, new_string: str, replace_all: 
     if stale_err is not None:
         return stale_err
 
-    if not old_string:
-        return "错误：old_string 不能为空。"
+    if mode not in ("string", "line"):
+        return "错误：mode 必须是 'string' 或 'line'。"
 
     state = _READ_FILE_STATE.get(os.path.realpath(resolved))
     line_ending = state.get("line_ending", "LF") if state else "LF"
@@ -1486,6 +1568,57 @@ def execute_edit_file(path: str, old_string: str, new_string: str, replace_all: 
         return f"错误：无权读取文件「{resolved}」"
     except OSError as e:
         return f"错误：读取文件时出错「{resolved}」: {e}"
+
+    if mode == "line":
+        # Line-based replacement mode
+        lines = content.splitlines(keepends=True)
+        if start_line is None:
+            return "错误：line 模式下必须提供 start_line。"
+        if start_line < 1 or start_line > len(lines):
+            return f"错误：start_line {start_line} 超出文件范围（共 {len(lines)} 行）。"
+        if end_line is not None:
+            if end_line < start_line:
+                return f"错误：end_line（{end_line}）不能小于 start_line（{start_line}）。"
+            if end_line > len(lines):
+                return f"错误：end_line {end_line} 超出文件范围（共 {len(lines)} 行）。"
+        else:
+            end_line = start_line
+
+        # Preserve the original line ending of the last removed line
+        removed_lines = lines[start_line - 1:end_line]
+        trailing_ending = removed_lines[-1] if removed_lines else "\n"
+        if trailing_ending and not trailing_ending.endswith("\n"):
+            trailing_ending += "\n"
+
+        # Insert the new content (ensure it ends with the same line ending)
+        if new_string and not new_string.endswith("\n"):
+            new_string += "\n"
+
+        new_lines = lines[:start_line - 1] + [new_string] + lines[end_line:]
+        new_content = "".join(new_lines)
+        actual_changes = 1
+
+        diff = _generate_diff(content, new_content, path)
+        diff_block = f"\n{diff}" if diff else ""
+        try:
+            _atomic_write(resolved, new_content, line_ending)
+        except PermissionError:
+            return f"错误：无权写入文件「{path}」"
+        except OSError as e:
+            return f"错误：写入文件时出错「{path}」: {e}"
+
+        _READ_FILE_STATE[os.path.realpath(resolved)] = {
+            "content": new_content,
+            "mtime": os.path.getmtime(resolved),
+            "full_read": True,
+            "encoding": "utf-8",
+            "line_ending": line_ending,
+        }
+        return f"✅ 已编辑文件「{path}」\n   模式: line（L{start_line}-L{end_line}）\n   变更: {actual_changes} 处替换{diff_block}"
+
+    # ── String mode (default) ──
+    if not old_string:
+        return "错误：string 模式下 old_string 不能为空。"
 
     if old_string not in content:
         return (
@@ -1645,7 +1778,7 @@ def execute_get_current_time(timezone: str = "") -> str:
 
 # ── Grep Search ─────────────────────────────────────────────────────────────
 
-_MAX_GREP_RESULTS = 200
+_MAX_GREP_RESULTS = 500
 
 
 def _glob_match(filename: str, pattern: str) -> bool:
@@ -1665,7 +1798,8 @@ _MAX_LINES_PER_FILE = 50
 
 def _grep_with_ripgrep(pattern: str, resolved: str, max_results: int,
                        include: str = "", ignore_case: bool = False,
-                       literal: bool = False, context: int = 0) -> str:
+                       literal: bool = False, context: int = 0,
+                       max_chars: int = 8000) -> str:
     import subprocess as _sp
     import json as _json
 
@@ -1699,6 +1833,8 @@ def _grep_with_ripgrep(pattern: str, resolved: str, max_results: int,
     file_matches_map: Dict[str, List[str]] = {}
     file_total: Dict[str, int] = {}
     last_file = ""
+    char_count = 0
+    hit_char_limit = False
 
     for line in proc.stdout.splitlines():
         if not line.strip():
@@ -1722,8 +1858,17 @@ def _grep_with_ripgrep(pattern: str, resolved: str, max_results: int,
                 file_matches_map[fpath] = []
                 file_total[fpath] = 0
             if file_total[fpath] < max_lines_per_file:
-                file_matches_map[fpath].append(f"    L{lineno}: {text}")
-                file_total[fpath] += 1
+                line_str = f"    L{lineno}: {text}"
+                char_count += len(line_str)
+                if char_count > max_chars and not hit_char_limit:
+                    hit_char_limit = True
+                if not hit_char_limit or char_count <= max_chars:
+                    file_matches_map[fpath].append(line_str)
+                    file_total[fpath] += 1
+                else:
+                    if file_total[fpath] == 0 and not file_matches_map[fpath]:
+                        file_matches_map[fpath].append(line_str)
+                        file_total[fpath] += 1
             elif file_total[fpath] == max_lines_per_file:
                 file_matches_map[fpath].append(
                     f"    ...（该文件匹配超过 {max_lines_per_file} 行，已截断）")
@@ -1734,7 +1879,12 @@ def _grep_with_ripgrep(pattern: str, resolved: str, max_results: int,
             lineno = data.get("line_number", 0)
             text = data.get("lines", {}).get("text", "").rstrip("\n\r")
             if fpath in file_matches_map:
-                file_matches_map[fpath].append(f"    -{lineno}- {text}")
+                ctx_line = f"    -{lineno}- {text}"
+                char_count += len(ctx_line)
+                if char_count > max_chars and not hit_char_limit:
+                    hit_char_limit = True
+                if not hit_char_limit or char_count <= max_chars:
+                    file_matches_map[fpath].append(ctx_line)
 
     if not file_matches_map:
         return f"在目录「{resolved}」中没有找到匹配「{pattern}」的内容。"
@@ -1751,15 +1901,21 @@ def _grep_with_ripgrep(pattern: str, resolved: str, max_results: int,
               f"共 {len(all_files)} 个文件，{total_matches} 行匹配\n\n" +
               "\n".join(lines_out))
 
+    reasons = []
     if total_matches >= max_results:
-        result += f"\n\n...（已达到最大显示行数 {max_results}，可能还有更多匹配）"
+        reasons.append(f"行数上限 {max_results}")
+    if hit_char_limit:
+        reasons.append(f"字符数上限 {max_chars}")
+    if reasons:
+        result += f"\n\n⚠️ 结果已截断（触达上限：{'，'.join(reasons)}），存在更多匹配"
 
     return result
 
 
 def _grep_with_python(pattern: str, resolved: str, max_results: int,
                       include: str = "", ignore_case: bool = False,
-                      literal: bool = False, context: int = 0) -> str:
+                      literal: bool = False, context: int = 0,
+                      max_chars: int = 8000) -> str:
     max_lines_per_file = _MAX_LINES_PER_FILE
 
     try:
@@ -1775,6 +1931,8 @@ def _grep_with_python(pattern: str, resolved: str, max_results: int,
     matches: List[str] = []
     total_matches = 0
     file_count = 0
+    char_count = 0
+    hit_char_limit = False
 
     ignore_dirs = _get_ignore_dirs()
     for root, dirs, files in os.walk(resolved, topdown=True):
@@ -1816,10 +1974,12 @@ def _grep_with_python(pattern: str, resolved: str, max_results: int,
                     stripped = line.rstrip("\n\r")
                     if len(stripped) > 500:
                         stripped = stripped[:500] + "..."
-                    stripped = line.rstrip("\n\r")
-                    if len(stripped) > 500:
-                        stripped = stripped[:500] + "..."
-                    file_matches.append(f"    L{idx + 1}: {stripped}")
+                    line_str = f"    L{idx + 1}: {stripped}"
+                    char_count += len(line_str)
+                    if char_count > max_chars and not hit_char_limit:
+                        hit_char_limit = True
+                    if not hit_char_limit or char_count <= max_chars:
+                        file_matches.append(line_str)
 
             if file_matches:
                 relpath = os.path.relpath(fpath, resolved)
@@ -1829,6 +1989,9 @@ def _grep_with_python(pattern: str, resolved: str, max_results: int,
                                      if not m.startswith("    ..."))
                 file_count += 1
 
+        if hit_char_limit and char_count > max_chars:
+            break
+
     if not matches:
         return f"在目录「{resolved}」中没有找到匹配「{pattern}」的内容。"
 
@@ -1836,15 +1999,21 @@ def _grep_with_python(pattern: str, resolved: str, max_results: int,
               f"共 {file_count} 个文件，{total_matches} 行匹配\n\n" +
               "\n".join(matches))
 
+    reasons = []
     if total_matches >= max_results:
-        result += f"\n\n...（已达到最大显示行数 {max_results}，可能还有更多匹配）"
+        reasons.append(f"行数上限 {max_results}")
+    if hit_char_limit:
+        reasons.append(f"字符数上限 {max_chars}")
+    if reasons:
+        result += f"\n\n⚠️ 结果已截断（触达上限：{'，'.join(reasons)}），存在更多匹配"
 
     return result
 
 
 def execute_grep_search(pattern: str, path: str, include: str = "",
-                        max_results: int = 30, ignore_case: bool = False,
-                        literal: bool = False, context: int = 0) -> str:
+                        max_results: int = 50, ignore_case: bool = False,
+                        literal: bool = False, context: int = 0,
+                        max_chars: int = 8000) -> str:
     """Search file contents by regex/keyword in a directory tree.
 
     Auto-detects ripgrep for fast search; falls back to pure-Python impl.
@@ -1853,7 +2022,8 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
         pattern: Regex or keyword to search for.
         path: Absolute path of the root directory to search.
         include: Glob pattern to filter files (e.g. "*.py", "*.{ts,js}").
-        max_results: Maximum number of matching lines to return (1-200).
+        max_results: Maximum number of matching lines to return (1-500).
+        max_chars: Total character limit for search results (500-50000).
         ignore_case: Case-insensitive search (default: False).
         literal: Treat pattern as literal string (default: False).
         context: Lines of context before/after each match (0-10, default: 0).
@@ -1868,17 +2038,20 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
         return f"错误：路径不是目录「{resolved}」"
 
     max_results = max(1, min(_MAX_GREP_RESULTS, max_results))
+    max_chars = max(500, min(50000, max_chars))
 
     import shutil as _shutil
     if _shutil.which("rg"):
         return _grep_with_ripgrep(
             pattern, resolved, max_results,
             include=include, ignore_case=ignore_case,
-            literal=literal, context=context)
+            literal=literal, context=context,
+            max_chars=max_chars)
     return _grep_with_python(
         pattern, resolved, max_results,
         include=include, ignore_case=ignore_case,
-        literal=literal, context=context)
+        literal=literal, context=context,
+        max_chars=max_chars)
 
 
 # ── Glob Find ───────────────────────────────────────────────────────────────
@@ -2094,17 +2267,19 @@ def execute_ask_user_question(question: str) -> str:
 _MAX_WRITE_CHARS = 100000
 
 
-def execute_write_file(path: str, content: str, force: bool = False) -> str:
+def execute_write_file(path: str, content: str, force: bool = False,
+                       mode: str = "write") -> str:
     """Create a new file or overwrite an existing file's content.
 
     Only accepts absolute paths. By default, will NOT overwrite an existing
-    file — set force=True to allow overwriting.
+    file — set force=True to allow overwriting. Supports append mode.
 
     Args:
         path: Absolute path of the file to write.
         content: Text content to write to the file.
         force: If True, overwrite existing file without warning.
-               Defaults to False (safer).
+               Defaults to False (safer). Ignored when mode="append".
+        mode: "write" (overwrite, default) or "append" (append to end).
 
     Returns:
         Formatted string with result summary.
@@ -2112,6 +2287,40 @@ def execute_write_file(path: str, content: str, force: bool = False) -> str:
     if not path or not isinstance(path, str) or not os.path.isabs(path):
         return "错误：必须使用绝对路径！"
 
+    if mode == "append":
+        # Append mode: skip exists/force checks, just append
+        resolved = os.path.realpath(path)
+        parent_dir = os.path.dirname(resolved)
+        if not os.path.isdir(parent_dir):
+            try:
+                os.makedirs(parent_dir, exist_ok=True)
+            except OSError as e:
+                return f"错误：无法创建父目录「{parent_dir}」: {e}"
+        if not os.access(parent_dir, os.W_OK):
+            return f"错误：目录不可写「{parent_dir}」"
+
+        if len(content) > _MAX_WRITE_CHARS:
+            content = content[:_MAX_WRITE_CHARS]
+
+        try:
+            with open(resolved, "a", encoding="utf-8") as f:
+                f.write(content)
+        except PermissionError:
+            return f"错误：无权写入文件「{resolved}」"
+        except OSError as e:
+            return f"错误：追加写入时出错「{resolved}」: {e}"
+
+        size_bytes = len(content.encode("utf-8"))
+        size_str = _format_file_size(size_bytes)
+        line_count = content.count("\n") + 1 if content else 0
+        return (
+            f"✅ 已追加到文件末尾: {resolved}\n"
+            f"  写入: {size_str}\n"
+            f"  行数: {line_count}\n"
+            f"  字符数: {len(content)}"
+        )
+
+    # Write (overwrite) mode — original logic
     resolved = _resolve_write_path(path, force)
     if resolved is None:
         real_path = os.path.realpath(path)
