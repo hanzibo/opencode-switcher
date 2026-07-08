@@ -366,6 +366,17 @@ class AIChatPanel(Gtk.Box):
         self._ai_webview.connect("decide-policy", on_decide_policy)
         self._ai_webview.connect("context-menu", lambda *_: True)
         ai_scrolled.add(self._ai_webview)
+
+        # Synchronize background colors to prevent Wayland resize flickering/leaks
+        if self._theme == "dark":
+            bg_rgba = Gdk.RGBA(0.039, 0.043, 0.063, 1.0)  # #0a0b10
+        else:
+            bg_rgba = Gdk.RGBA(1.0, 1.0, 1.0, 1.0)  # #ffffff
+
+        self.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
+        ai_scrolled.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
+        self._ai_webview.set_background_color(Gdk.RGBA(0.0, 0.0, 0.0, 0.0))
+
         self.pack_start(ai_scrolled, True, True, 0)
 
         # Multi-turn conversation input area (hidden until first response)
