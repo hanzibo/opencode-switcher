@@ -12,7 +12,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ├── clipboard_panel.py      # Clipboard panel container (~2097 lines) — assembles subcomponents + event routing
 ├── ai_chat_panel.py        # AI assistant sidebar (~2354 lines) — WebView, LLM dialog, ReAct tool calls
 ├── clipboard_store.py      # Store: classification, categories, prompts, LLM config, conversations (~1032 lines, 12 classes, 7 dataclasses)
-├── tool_registry.py        # 23 AI tools, ReAct dispatcher, HTML formatting (~3249 lines, 79 functions)
+├── tool_registry.py        # 24 AI tools, ReAct dispatcher, HTML formatting (~3249 lines, 79 functions)
 ├── session_store.py        # SQLite reader + live-session detection (~202 lines)
 ├── launcher.py             # Terminal auto-detection + session spawner (~128 lines)
 ├── hotkey.py               # pynput (X11) + Unix socket (Wayland) — only 87 lines
@@ -114,7 +114,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ### AI Tool Calling (ReAct Loop)
 - **Architecture**: `llm_client.py` (`_LLMHttpClient`, `_ToolCallAccumulator` for SSE delta accumulation) → `ai_tool_loop.py` (`run_llm_react_loop` — max 25 iterations) → `tool_registry.py` (20 tool executors)
 - LLM streams → if `finish_reason: "tool_calls"`, accumulate deltas → execute synchronously via `tool_registry.execute_tool_call()` → feed result back as `role: "tool"` → repeat
-- **23 tools**: `web_search` / `web_fetch` (Obscura browser + trafilatura extraction), `list_directory` / `read_file` (supports line range) / `grep_search` / `glob_find` / `file_info` (safe-path guarded), `get_current_time`, `ask_user_question`, `write_file`, `edit_file` (exact-string replace with staleness check), `delete_file` / `rename_file` (file management), `todo_create` / `todo_update` / `todo_list` (persistent task management), `bash` (persistent bash session, supports `restart` and `timeout` params), `send_notification` (desktop notify-send), `sub_agent` (parallel isolated task execution), `get_subagent_status` (poll background sub-agent progress), `read_qq_mail` (IMAP QQ mailbox reader), `get_code_metrics` (code line count and structure analysis), `find_project_dependencies` (dependency graph and circular import detection)
+- **24 tools**: `web_search` / `web_fetch` (Obscura browser + trafilatura extraction), `list_directory` / `read_file` (supports line range) / `grep_search` / `glob_find` / `file_info` (safe-path guarded), `get_current_time`, `ask_user_question`, `write_file`, `edit_file` (exact-string replace with staleness check), `delete_file` / `rename_file` (file management), `todo_create` / `todo_update` / `todo_list` (persistent task management), `bash` (persistent bash session, supports `restart` and `timeout` params), `send_notification` (desktop notify-send), `sub_agent` (parallel isolated task execution), `get_subagent_status` (poll background sub-agent progress), `read_qq_mail` (IMAP QQ mailbox reader), `get_code_metrics` (code line count and structure analysis), `find_project_dependencies` (dependency graph and circular import detection), `parse_file_ast` (AST-based code structure analysis)
 - Tool results rendered as collapsible `<pre>` sections in WebView
 - `TOOL_CHOICE_AUTO` configurable per request
 

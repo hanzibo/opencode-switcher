@@ -1009,6 +1009,54 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "parse_file_ast",
+            "description": "解析代码文件的语法结构，提取类、函数、导入语句、全局变量等结构化信息。"
+                           "Python 项目使用 language=python（基于标准库 ast，推荐）。"
+                           "JS/TS/Go/Rust/Java/C++ 等项目请传入对应语言名称，将使用 Tree-sitter 解析"
+                           "（需安装 tree-sitter 及对应 grammar）。"
+                           "不指定 language 时自动从文件后缀检测。"
+                           "可通过 exclude_private 过滤私有函数，include_docstrings 显示文档摘要，"
+                           "include_imports 控制是否列出导入语句。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "文件绝对路径"
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "语言类型：python / javascript / typescript / go / rust / java / cpp / auto（自动检测）",
+                        "default": "auto"
+                    },
+                    "include_body": {
+                        "type": "boolean",
+                        "description": "是否包含函数/方法体源码（仅 Python 有效，默认 false）",
+                        "default": False
+                    },
+                    "include_imports": {
+                        "type": "boolean",
+                        "description": "是否列出导入语句（默认 true）",
+                        "default": True
+                    },
+                    "include_docstrings": {
+                        "type": "boolean",
+                        "description": "是否在函数/类旁显示文档字符串摘要（仅 Python，默认 false）",
+                        "default": False
+                    },
+                    "exclude_private": {
+                        "type": "boolean",
+                        "description": "是否过滤以 _ 开头的私有函数/方法（默认 false）",
+                        "default": False
+                    }
+                },
+                "required": ["path"]
+            }
+        }
+    },
 ]
 
 TOOL_CHOICE_AUTO = "auto"
@@ -3600,6 +3648,279 @@ def _find_circular_deps(modules: Dict[str, List[str]]) -> List[tuple]:
     return circles
 
 
+# ── Parse File AST ──────────────────────────────────────────────────────────
+
+_EXT_TO_LANG = {
+    ".py": "python", ".js": "javascript", ".ts": "typescript",
+    ".jsx": "javascript", ".tsx": "typescript",
+    ".go": "go", ".rs": "rust", ".java": "java",
+    ".cpp": "cpp", ".c": "cpp", ".h": "cpp", ".hpp": "cpp",
+    ".cs": "csharp", ".rb": "ruby", ".kt": "kotlin", ".swift": "swift",
+}
+
+
+def _parse_python_ast(path: str, include_body: bool = False,
+                      include_imports: bool = True,
+                      include_docstrings: bool = False,
+                      exclude_private: bool = False) -> str:
+    """Parse Python file using stdlib ast module."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            source = f.read()
+    except Exception as e:
+        return f"❌ 无法读取文件: {e}"
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        return f"❌ Python 语法错误: {e}"
+
+    source_lines = source.split("\n")
+    total_lines = len(source_lines)
+    code_lines = sum(1 for l in source_lines if l.strip())
+    blank_lines = total_lines - code_lines
+    filename = os.path.basename(path)
+
+    imports = []
+    classes = []
+    functions = []
+    constants = []
+
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imports.append(f"import {alias.name}" + (f" as {alias.asname}" if alias.asname else ""))
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            names = []
+            for alias in node.names:
+                n = alias.name + (f" as {alias.asname}" if alias.asname else "")
+                names.append(n)
+            imports.append(f"from {module} import {', '.join(names)}")
+        elif isinstance(node, ast.ClassDef):
+            if exclude_private and node.name.startswith("_"):
+                continue
+            bases = []
+            for b in node.bases:
+                try:
+                    bases.append(ast.unparse(b))
+                except Exception:
+                    bases.append("...")
+            cls_info = {
+                "name": node.name,
+                "line": node.lineno,
+                "end_line": getattr(node, "end_lineno", node.lineno),
+                "bases": bases,
+                "decorators": [],
+                "methods": [],
+            }
+            for dec in node.decorator_list:
+                try:
+                    cls_info["decorators"].append(ast.unparse(dec))
+                except Exception:
+                    cls_info["decorators"].append("...")
+            for child in node.body:
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if exclude_private and child.name.startswith("_"):
+                        continue
+                    args = []
+                    for arg in child.args.args:
+                        arg_str = arg.arg
+                        if arg.annotation:
+                            try:
+                                arg_str += f": {ast.unparse(arg.annotation)}"
+                            except Exception:
+                                arg_str += ": ?"
+                        args.append(arg_str)
+                    ret = ""
+                    if child.returns:
+                        try:
+                            ret = f" -> {ast.unparse(child.returns)}"
+                        except Exception:
+                            ret = " -> ?"
+                    m_info = {
+                        "name": child.name,
+                        "line": child.lineno,
+                        "end_line": getattr(child, "end_lineno", child.lineno),
+                        "args": args,
+                        "returns": ret,
+                        "is_async": isinstance(child, ast.AsyncFunctionDef),
+                        "decorators": [],
+                        "docstring": ast.get_docstring(child) or "",
+                    }
+                    if include_body:
+                        m_info["body"] = ast.get_source_segment(source, child) or ""
+                    for dec in child.decorator_list:
+                        try:
+                            m_info["decorators"].append(ast.unparse(dec))
+                        except Exception:
+                            m_info["decorators"].append("...")
+                    cls_info["methods"].append(m_info)
+            classes.append(cls_info)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if exclude_private and node.name.startswith("_"):
+                continue
+            args = []
+            for arg in node.args.args:
+                arg_str = arg.arg
+                if arg.annotation:
+                    try:
+                        arg_str += f": {ast.unparse(arg.annotation)}"
+                    except Exception:
+                        arg_str += ": ?"
+                args.append(arg_str)
+            ret = ""
+            if node.returns:
+                try:
+                    ret = f" -> {ast.unparse(node.returns)}"
+                except Exception:
+                    ret = " -> ?"
+            fn_info = {
+                "name": node.name,
+                "line": node.lineno,
+                "end_line": getattr(node, "end_lineno", node.lineno),
+                "args": args,
+                "returns": ret,
+                "is_async": isinstance(node, ast.AsyncFunctionDef),
+                "decorators": [],
+                "docstring": ast.get_docstring(node) or "",
+            }
+            for dec in node.decorator_list:
+                try:
+                    fn_info["decorators"].append(ast.unparse(dec))
+                except Exception:
+                    fn_info["decorators"].append("...")
+            if include_body:
+                fn_info["body"] = ast.get_source_segment(source, node) or ""
+            functions.append(fn_info)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                try:
+                    name = ast.unparse(target)
+                    if name.isupper() and name.isidentifier():
+                        constants.append(name)
+                except Exception:
+                    pass
+
+    # Meta summary line (P0)
+    func_count = len([f for f in functions if not (exclude_private and f["name"].startswith("_"))])
+    cls_count = len([c for c in classes if not (exclude_private and c["name"].startswith("_"))])
+    out = [
+        f"📦 {filename}  [Python | {total_lines} 行 | {func_count} 函数 | {cls_count} 类 | {len(imports)} 导入]",
+        "",
+    ]
+
+    if include_imports and imports:
+        out.append(f"📥 导入 ({len(imports)}):")
+        for imp in imports:
+            out.append(f"  · {imp}")
+        out.append("")
+
+    if classes:
+        out.append(f"📚 类 ({len(classes)}):")
+        for cls in classes:
+            base_str = f"({', '.join(cls['bases'])})" if cls['bases'] else ""
+            dec_str = f"@{' @'.join(cls['decorators'])} " if cls['decorators'] else ""
+            line_range = f"L{cls['line']}-{cls['end_line']}" if cls['end_line'] != cls['line'] else f"L{cls['line']}"
+            out.append(f"  📦 {dec_str}{cls['name']}{base_str}  ({line_range})")
+            for m in cls["methods"]:
+                if exclude_private and m["name"].startswith("_"):
+                    continue
+                async_str = "async " if m["is_async"] else ""
+                dec_str_m = f"@{' @'.join(m['decorators'])} " if m['decorators'] else ""
+                args_str = ", ".join(m["args"])
+                m_line_range = f"L{m['line']}-{m['end_line']}" if m['end_line'] != m['line'] else f"L{m['line']}"
+                sig = f"{dec_str_m}{async_str}def {m['name']}({args_str}){m['returns']}  ({m_line_range})"
+                if include_docstrings and m["docstring"]:
+                    doc_first = m["docstring"].split("\n")[0][:60]
+                    sig += f"  # {doc_first}"
+                out.append(f"    └ {sig}")
+                if include_body and m.get("body"):
+                    for body_line in m["body"].split("\n"):
+                        out.append(f"       {body_line}")
+        out.append("")
+
+    if functions:
+        out.append(f"📋 函数 ({len(functions)}):")
+        for fn in functions:
+            if exclude_private and fn["name"].startswith("_"):
+                continue
+            async_str = "async " if fn["is_async"] else ""
+            dec_str = f"@{' @'.join(fn['decorators'])} " if fn['decorators'] else ""
+            args_str = ", ".join(fn["args"])
+            line_range = f"L{fn['line']}-{fn['end_line']}" if fn['end_line'] != fn['line'] else f"L{fn['line']}"
+            sig = f"{dec_str}{async_str}def {fn['name']}({args_str}){fn['returns']}  ({line_range})"
+            if include_docstrings and fn["docstring"]:
+                doc_first = fn["docstring"].split("\n")[0][:60]
+                sig += f"  # {doc_first}"
+            out.append(f"  · {sig}")
+            if include_body and fn.get("body"):
+                for body_line in fn["body"].split("\n"):
+                    out.append(f"     {body_line}")
+        out.append("")
+
+    if constants:
+        out.append(f"📌 全局常量 ({len(constants)}):")
+        for c in constants:
+            out.append(f"  · {c}")
+        out.append("")
+
+    return "\n".join(out)
+
+
+def _parse_tree_sitter(path: str, language: str, include_body: bool) -> str:
+    """Parse non-Python file using Tree-sitter."""
+    try:
+        import tree_sitter
+    except ImportError:
+        msg = f"❌ 当前环境未安装 Tree-sitter，仅支持 Python 语言分析。\n\n如需分析"
+        if language == "unknown":
+            msg += "非 Python 文件，请安装 Tree-sitter：\n  pip install tree-sitter"
+        else:
+            msg += f" .{language} 文件，请安装：\n  pip install tree-sitter tree-sitter-{language}"
+        msg += "\n\n解析当前文件时请使用 language=python（仅对 Python 项目）。"
+        return msg
+    return f"❌ Tree-sitter 解析尚未实现（language={language}）"
+
+
+def execute_parse_file_ast(path: str, language: str = "auto",
+                           include_body: bool = False,
+                           include_imports: bool = True,
+                           include_docstrings: bool = False,
+                           exclude_private: bool = False) -> str:
+    """Parse a code file and extract its structure: classes, functions,
+    imports, constants, and other structural elements.
+
+    Uses Python's stdlib ast module for Python files (zero extra dependencies).
+    For other languages, requires tree-sitter to be installed.
+
+    Args:
+        path: Absolute path to the file to parse.
+        language: Language hint ("python", "javascript", "go", etc. or "auto").
+        include_body: If True, include function/method body source.
+        include_imports: If True, list import statements.
+        include_docstrings: If True, show docstring summary after signatures.
+        exclude_private: If True, filter out _-prefixed private functions.
+
+    Returns:
+        Formatted structural overview of the file.
+    """
+    if not path or not os.path.isabs(path):
+        return "❌ 错误：必须使用绝对路径！"
+    if not os.path.isfile(path):
+        return f"❌ 文件不存在: {path}"
+
+    if language == "auto":
+        ext = os.path.splitext(path)[1].lower()
+        language = _EXT_TO_LANG.get(ext, "unknown")
+
+    if language == "python":
+        return _parse_python_ast(path, include_body, include_imports,
+                                 include_docstrings, exclude_private)
+    else:
+        return _parse_tree_sitter(path, language, include_body)
+
+
 # ── Sub-Agent Tool ─────────────────────────────────────────────────────────
 
 _MAX_SUBAGENT_TURNS = 15
@@ -3875,6 +4196,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "read_qq_mail": execute_read_qq_mail,
     "get_code_metrics": execute_get_code_metrics,
     "find_project_dependencies": execute_find_dependencies,
+    "parse_file_ast": execute_parse_file_ast,
     "sub_agent": execute_sub_agent,
 }
 
@@ -4101,6 +4423,14 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             parts.append(
                 f'<div class="tool-call-info">📧 <b>读取QQ邮件：</b>'
                 f'{count} 封，文件夹: {safe_folder}，条件: {safe_criteria}</div>'
+            )
+        elif name == "parse_file_ast":
+            fpath = args.get("path", "")
+            lang = args.get("language", "auto")
+            safe_path = html.escape(fpath)
+            safe_lang = html.escape(lang)
+            parts.append(
+                f'<div class="tool-call-info">📦 <b>解析AST：</b>{safe_path} ({safe_lang})</div>'
             )
         elif name == "get_code_metrics":
             fpath = args.get("path", "")
