@@ -941,23 +941,32 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "子代理要完成的任务描述。应包含明确的目标和可验证的交付物。"
+                        "description": "子代理要完成的任务描述。必须包含明确的目标和可验证的交付物（避免模糊指令，例如：应写成 '分析 /src 下的 Python 文件，找出未使用的 import，并输出包含文件名和行号的报告'，而非 '帮我看看代码'）。"
                     },
                     "max_turns": {
                         "type": "integer",
-                        "description": "子代理最大工具调用轮数（1-20，默认 10）",
+                        "description": "子代理最大工具调用轮数（1-20，默认 10）。对于复杂的多步骤分析或开发任务，建议配置为 20 轮以防轮数超限。",
                         "default": 10
                     },
                     "agent_type": {
                         "type": "string",
                         "enum": ["general", "explore", "bash"],
-                        "description": "子代理类型：general（通用全能，默认）、explore（只读探索）、bash（仅命令执行）",
+                        "description": "子代理类型。请根据任务所需的工具权限进行选择："
+                                       "1. general（通用开发，默认）：可调用读写/编辑/删除/重命名文件、AST语法解析、依赖分析、代码度量、Bash执行、网络搜索与网页抓取、待办管理等几乎所有开发工具。完全禁用 ask_user_question（禁止提问以防后台挂起）、sub_agent（禁止递归创建子代理）和 read_qq_mail。"
+                                       "2. explore（只读探索）：闭集白名单，仅 9 个只读工具可用（read_file/grep_search/glob_find/list_directory/file_info/parse_file_ast/get_code_metrics/find_project_dependencies/get_current_time），彻底隔离一切写操作和终端命令执行，安全性极高。"
+                                       "3. bash（纯命令执行）：闭集，仅 2 个工具可用（bash/get_current_time），不支持 API 级文件读写。仅限用于无交互的命令行操作（如安装依赖或编译测试），同样完全禁止 ask_user_question。",
                         "default": "general"
                     },
                     "run_in_background": {
                         "type": "boolean",
-                        "description": "设为 true 在后台运行，不阻塞当前对话。完成后将通过通知提醒。",
-                        "default": False
+                        "description": "设为 true 在后台运行，不阻塞当前对话（完成后将通过通知提醒）。"
+                                       "【⚠️ 强制行为准则：由于子代理执行耗时较长，无论是用户要求还是主代理自行开启子代理，除非用户明确要求前台同步/阻塞执行，否则均必须将此参数设为 true。在后台运行时，主代理必须立即回复用户任务已启动，严禁调用 bash 工具的 sleep/loop 等命令强行等待或轮询。】",
+                        "default": True
+                    },
+                    "max_tokens": {
+                        "type": "integer",
+                        "description": "子代理单次回复的最大 token 数。默认采用当前活跃模型配置的 max_tokens（如 4096）。调用者必须根据任务复杂度显式配置：简单任务建议 4096，复杂任务（如多文件代码重构、深层架构分析、生成长篇方案）建议 8192 或 16384，配置过低会导致输出被 API 强行截断。",
+                        "default": 4096
                     }
                 },
                 "required": ["task"]
@@ -1153,12 +1162,14 @@ def _get_llm_config() -> "LLMModelConfig":
 def _build_subagent_tools(agent_type: str = "general") -> list:
     """Build filtered tool definitions list for sub-agent use."""
     if agent_type == "explore":
-        allowed = {"read_file", "grep_search", "glob_find", "list_directory", "file_info",
-                    "get_current_time"}
+        allowed = {
+            "read_file", "grep_search", "glob_find", "list_directory", "file_info",
+            "get_current_time", "get_code_metrics", "find_project_dependencies", "parse_file_ast"
+        }
         return [t for t in TOOL_DEFINITIONS
                 if t.get("function", {}).get("name") in allowed]
     if agent_type == "bash":
-        allowed = {"bash", "get_current_time", "ask_user_question"}
+        allowed = {"bash", "get_current_time"}
         return [t for t in TOOL_DEFINITIONS
                 if t.get("function", {}).get("name") in allowed]
     # general: all tools except blocked
@@ -4226,7 +4237,8 @@ _SUBAGENT_TYPES = {
 
 def execute_sub_agent(task: str, max_turns: int = 10,
                       agent_type: str = "general",
-                      run_in_background: bool = False) -> str:
+                      run_in_background: bool = True,
+                      max_tokens: Optional[int] = None) -> str:
     """Spawn an isolated sub-agent to complete a task independently.
 
     The sub-agent gets its own bash session, a clean file-read state,
@@ -4237,6 +4249,7 @@ def execute_sub_agent(task: str, max_turns: int = 10,
         max_turns: Maximum tool-calling iterations (1-15, default 10).
         agent_type: "general" (full tools), "explore" (read-only), or "bash" (shell only).
         run_in_background: If True, run in background thread and return immediately.
+        max_tokens: Maximum tokens for the sub-agent's response.
 
     Returns:
         The sub-agent's final text response, or an error message.
@@ -4256,13 +4269,16 @@ def execute_sub_agent(task: str, max_turns: int = 10,
             "status": "running",
             "conv_id": conv_id,
         }
-        _run_subagent_background(task, max_turns, agent_type, subagent_id)
+        _run_subagent_background(task, max_turns, agent_type, subagent_id, max_tokens)
         return f"⏳ 子代理已启动（任务ID: {subagent_id}，类型: {agent_type}）。" \
                f"完成后结果将保存至 /tmp/opencode_subagent_{subagent_id}_result.txt，" \
                f"可让主代理使用 read_file 读取。"
 
-    sync_result = _execute_subagent_sync(task, max_turns, agent_type)
-    return html.unescape(sync_result)
+    sync_result = _execute_subagent_sync(task, max_turns, agent_type, max_tokens)
+    unescaped = html.unescape(sync_result)
+    if len(unescaped) > MAX_TOOL_RESULT_CHARS:
+        return unescaped[:MAX_TOOL_RESULT_CHARS] + f"\n\n...（结果已截断，共 {len(unescaped)} 字符，详细内容建议使用后台运行查看）"
+    return unescaped
 
 
 
@@ -4338,11 +4354,11 @@ def check_background_subagents(conv_id: Optional[str] = None) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _run_subagent_background(task: str, max_turns: int, agent_type: str, subagent_id: str):
+def _run_subagent_background(task: str, max_turns: int, agent_type: str, subagent_id: str, max_tokens: Optional[int] = None):
     """Run a sub-agent in a background daemon thread."""
     def _run():
         global _background_subagent_results, _background_subagent_status
-        raw_result = _execute_subagent_sync(task, max_turns, agent_type)
+        raw_result = _execute_subagent_sync(task, max_turns, agent_type, max_tokens)
         result = html.unescape(raw_result)
         _background_subagent_status[subagent_id] = {
             "task": task[:100],
@@ -4374,7 +4390,7 @@ def _run_subagent_background(task: str, max_turns: int, agent_type: str, subagen
     t.start()
 
 
-def _execute_subagent_sync(task: str, max_turns: int, agent_type: str) -> str:
+def _execute_subagent_sync(task: str, max_turns: int, agent_type: str, max_tokens: Optional[int] = None) -> str:
     """Synchronous sub-agent execution (internal)."""
     sub_tools = _build_subagent_tools(agent_type)
     type_info = _SUBAGENT_TYPES[agent_type]
@@ -4419,6 +4435,8 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str) -> str:
         {"role": "user", "content": task},
     ]
 
+    subagent_max_tokens = max_tokens if max_tokens is not None else config.max_tokens
+
     try:
         llm = _LLMHttpClient()
         final_text = ""
@@ -4433,7 +4451,7 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str) -> str:
                     timeout=_SUBAGENT_TIMEOUT_PER_TURN,
                     tools=sub_tools,
                     tool_choice=TOOL_CHOICE_AUTO,
-                    max_tokens=config.max_tokens,
+                    max_tokens=subagent_max_tokens,
                 )
             except _LLMHttpError as e:
                 return f"子代理 LLM 请求失败：{e}"
@@ -4483,8 +4501,9 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str) -> str:
             else:
                 final_text = "(子代理已完成任务)"
 
-        if len(final_text) > MAX_TOOL_RESULT_CHARS:
-            final_text = final_text[:MAX_TOOL_RESULT_CHARS] + f"\n\n...（结果已截断，共 {len(final_text)} 字符）"
+        MAX_SUBAGENT_RESULT_CHARS = 100000
+        if len(final_text) > MAX_SUBAGENT_RESULT_CHARS:
+            final_text = final_text[:MAX_SUBAGENT_RESULT_CHARS] + f"\n\n...（结果因超出 100k 字符而被截断，共 {len(final_text)} 字符）"
         return final_text
 
     finally:
@@ -4783,9 +4802,11 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
             stask = args.get("task", "")
             safe_task = html.escape(stask[:120])
             max_t = args.get("max_turns", 10)
+            max_tok = args.get("max_tokens")
+            tok_str = f"，最大 Token: {max_tok}" if max_tok is not None else ""
             parts.append(
                 f'<div class="tool-call-info">🔄 <b>子代理任务：</b>{safe_task}'
-                f'<span style="color:#888;font-size:11px;margin-left:8px;">最多 {max_t} 轮</span></div>'
+                f'<span style="color:#888;font-size:11px;margin-left:8px;">最多 {max_t} 轮{tok_str}</span></div>'
             )
         elif name == "bash":
             cmd = args.get("command", "")
