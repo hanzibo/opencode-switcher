@@ -4326,13 +4326,18 @@ def unregister_subagent_status_listener(callback):
 
 
 def _notify_subagent_status_change(subagent_id: str, status_info: Optional[dict]):
-    """Notify all registered listeners of a subagent status change.
-    Using GLib.idle_add to ensure thread-safety for GTK UI operations.
-    """
+    """Notify all registered listeners of a subagent status change."""
     try:
-        from gi.repository import GLib
+        try:
+            from gi.repository import GLib
+            has_glib = True
+        except ImportError:
+            has_glib = False
         for cb in list(_subagent_status_listeners):
-            GLib.idle_add(cb, subagent_id, status_info)
+            if has_glib:
+                GLib.idle_add(cb, subagent_id, status_info)
+            else:
+                cb(subagent_id, status_info)
     except Exception as e:
         import sys
         print(f"[opencode-switcher] Error notifying subagent status change: {e}", file=sys.stderr)
