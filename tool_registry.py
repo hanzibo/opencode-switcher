@@ -4269,6 +4269,7 @@ def execute_sub_agent(task: str, max_turns: int = 10,
             "status": "running",
             "conv_id": conv_id,
         }
+        _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])
         _run_subagent_background(task, max_turns, agent_type, subagent_id, max_tokens)
         return f"⏳ 子代理已启动（任务ID: {subagent_id}，类型: {agent_type}）。" \
                f"完成后结果将保存至 /tmp/opencode_subagent_{subagent_id}_result.txt，" \
@@ -4307,6 +4308,34 @@ _background_subagent_results: Dict[str, str] = {}
 Cleared once consumed by check_background_subagents()."""
 _background_subagent_status: Dict[str, Dict[str, Any]] = {}
 """Tracks running/background sub-agents: {id: {"task": str, "started_at": float, "status": str}}"""
+_subagent_status_listeners = []
+
+
+def register_subagent_status_listener(callback):
+    """Register a callback to be notified when subagent status changes."""
+    global _subagent_status_listeners
+    if callback not in _subagent_status_listeners:
+        _subagent_status_listeners.append(callback)
+
+
+def unregister_subagent_status_listener(callback):
+    """Unregister a callback."""
+    global _subagent_status_listeners
+    if callback in _subagent_status_listeners:
+        _subagent_status_listeners.remove(callback)
+
+
+def _notify_subagent_status_change(subagent_id: str, status_info: Optional[dict]):
+    """Notify all registered listeners of a subagent status change.
+    Using GLib.idle_add to ensure thread-safety for GTK UI operations.
+    """
+    try:
+        from gi.repository import GLib
+        for cb in list(_subagent_status_listeners):
+            GLib.idle_add(cb, subagent_id, status_info)
+    except Exception as e:
+        import sys
+        print(f"[opencode-switcher] Error notifying subagent status change: {e}", file=sys.stderr)
 
 
 def get_subagent_status_map() -> Dict[str, Dict[str, Any]]:
@@ -4318,6 +4347,7 @@ def remove_subagent_status(subagent_id: str):
     """从后台子代理状态字典中删除特定 ID 的子代理记录。"""
     global _background_subagent_status
     _background_subagent_status.pop(subagent_id, None)
+    _notify_subagent_status_change(subagent_id, None)
 
 
 def check_background_subagents(conv_id: Optional[str] = None) -> str:
@@ -4367,6 +4397,7 @@ def _run_subagent_background(task: str, max_turns: int, agent_type: str, subagen
             "completed_at": time.time(),
             "conv_id": _background_subagent_status.get(subagent_id, {}).get("conv_id"),
         }
+        _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])
         result_path = f"/tmp/opencode_subagent_{subagent_id}_result.txt"
         try:
             with open(result_path, "w", encoding="utf-8") as f:
@@ -4568,6 +4599,7 @@ def execute_get_subagent_status(id: Optional[Any] = None,
                 to_remove.append(sid)
     for sid in to_remove:
         del _background_subagent_status[sid]
+        _notify_subagent_status_change(sid, None)
 
     # Clear completed on demand
     if clear_completed:
@@ -4575,6 +4607,7 @@ def execute_get_subagent_status(id: Optional[Any] = None,
                     if info.get("status") == "completed"]
         for sid in to_clear:
             del _background_subagent_status[sid]
+            _notify_subagent_status_change(sid, None)
         if not _background_subagent_status:
             return "✅ 已清除所有已完成的后台子代理记录。"
         return f"✅ 已清除 {len(to_clear)} 个已完成的后台子代理记录。"
