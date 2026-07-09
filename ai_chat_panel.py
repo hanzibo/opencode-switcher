@@ -61,6 +61,14 @@ AI_BTN_LABEL_STOP = "暂停"
 MAX_TOOL_ITERATIONS = 25
 
 
+def _to_chat_messages(msgs: List[Dict]) -> List[ChatMessage]:
+    from clipboard_store import ChatMessage
+    return [ChatMessage(role=m["role"], content=m["content"], 
+                        tool_call_id=m.get("tool_call_id"),
+                        name=m.get("name"),
+                        tool_calls=m.get("tool_calls")) for m in msgs]
+
+
 class AIChatPanel(Gtk.Box):
     # Slash commands available in the AI chat input box (command, description)
     _AI_COMMANDS = [
@@ -996,11 +1004,7 @@ class AIChatPanel(Gtk.Box):
                 self._ai_html_cache[conv_id] = html
                 try:
                     conv = self._conversation_store.load_conversation(conv_id)
-                    from clipboard_store import ChatMessage
-                    messages_objs = [ChatMessage(role=m["role"], content=m["content"], 
-                                                 tool_call_id=m.get("tool_call_id"),
-                                                 name=m.get("name"),
-                                                 tool_calls=m.get("tool_calls")) for m in state["messages"]]
+                    messages_objs = _to_chat_messages(state["messages"])
                     if conv:
                         conv.messages = messages_objs
                     else:
@@ -1237,7 +1241,6 @@ class AIChatPanel(Gtk.Box):
         if self._ai_conversation_id:
             self._ai_html_cache[self._ai_conversation_id] = html
         
-        import json
         js_code = f"updateContent({json.dumps(html)});"
         self._ai_webview.run_javascript(js_code, None, None)
 
@@ -1304,11 +1307,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_html_cache[conv_id] = html
             try:
                 conv = self._conversation_store.load_conversation(conv_id)
-                from clipboard_store import ChatMessage
-                messages_objs = [ChatMessage(role=m["role"], content=m["content"], 
-                                             tool_call_id=m.get("tool_call_id"),
-                                             name=m.get("name"),
-                                             tool_calls=m.get("tool_calls")) for m in target_messages]
+                messages_objs = _to_chat_messages(target_messages)
                 if conv:
                     conv.messages = messages_objs
                 else:
@@ -2481,7 +2480,6 @@ class AIChatPanel(Gtk.Box):
             if cached_html is not None:
                 self._last_rendered_html = cached_html
                 self._ai_markdown_text = st["ai_markdown_text"]
-                import json
                 js_code = f"updateContent({json.dumps(cached_html)});"
                 self._ai_webview.run_javascript(js_code, None, None)
             else:
@@ -2526,7 +2524,6 @@ class AIChatPanel(Gtk.Box):
             if cached_html is not None:
                 self._last_rendered_html = cached_html
                 self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
-                import json
                 js_code = f"updateContent({json.dumps(cached_html)});"
                 self._ai_webview.run_javascript(js_code, None, None)
             else:
@@ -2559,7 +2556,6 @@ class AIChatPanel(Gtk.Box):
         """Return all conversations sorted by updated_at descending (newest first)."""
         summaries = self._conversation_store.list_conversations()
         existing_ids = {s.get("id") for s in summaries}
-        import time
 
         # Add active conversation if not on disk
         active_id = self._ai_conversation_id
