@@ -4435,7 +4435,12 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str, max_token
         {"role": "user", "content": task},
     ]
 
-    subagent_max_tokens = max_tokens if max_tokens is not None else config.max_tokens
+    try:
+        subagent_max_tokens = int(max_tokens) if max_tokens is not None else config.max_tokens
+        if subagent_max_tokens is not None and subagent_max_tokens <= 0:
+            subagent_max_tokens = 4096
+    except (ValueError, TypeError):
+        subagent_max_tokens = 4096
 
     try:
         llm = _LLMHttpClient()
