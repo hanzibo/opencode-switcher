@@ -15,6 +15,14 @@ from .common import _get_ignore_dirs
 from .filesystem import _format_file_size, _resolve_safe_path
 
 
+# ============================================================
+# SECTION 1: Code Metrics
+# 提取目标：tool_registry/analysis/metrics.py
+# 导入依赖：from .common import _get_ignore_dirs
+#           from .filesystem import _format_file_size
+# TOOL_SCHEMAS 中对应的条目需随迁
+# ============================================================
+
 # ── Code Metrics ────────────────────────────────────────────────────────────
 
 _METRICS_BINARY_EXTS = frozenset({
@@ -206,6 +214,14 @@ def execute_get_code_metrics(path: str, include: str = "",
     else:
         return f"❌ 路径不存在: {path}"
 
+
+# ============================================================
+# SECTION 2: Project Dependencies
+# 提取目标：tool_registry/analysis/dependencies.py
+# 导入依赖：from .common import _get_ignore_dirs
+#           from .filesystem import _resolve_safe_path
+# TOOL_SCHEMAS 中对应的条目需随迁
+# ============================================================
 
 # ── Project Dependencies ────────────────────────────────────────────────────
 
@@ -639,6 +655,13 @@ def _find_circular_deps(modules: Dict[str, List[str]]) -> List[tuple]:
                 circles.append((name_a, name_b))
     return circles
 
+
+# ============================================================
+# SECTION 3: Parse File AST
+# 提取目标：tool_registry/analysis/ast_parser.py
+# 导入依赖：无（仅标准库）
+# TOOL_SCHEMAS 中对应的条目需随迁
+# ============================================================
 
 # ── Parse File AST ──────────────────────────────────────────────────────────
 
