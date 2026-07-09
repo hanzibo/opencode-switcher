@@ -151,7 +151,8 @@ install_files() {
     cp "$SCRIPT_DIR/settings_dialog.py"          "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/clipboard_store.py"          "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/clipboard_panel.py"          "$INSTALL_DIR/"
-    cp "$SCRIPT_DIR/tool_registry.py"            "$INSTALL_DIR/"
+    # Copy tool_registry package directory (replaces monolithic tool_registry.py)
+    cp -r "$SCRIPT_DIR/tool_registry"              "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/migrate_history.py"          "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/utils.py"                    "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/ai_text_utils.py"            "$INSTALL_DIR/"
