@@ -5,12 +5,9 @@ Extracted from tool_registry.py to reduce module size.
 """
 
 import ast
-import datetime
 import fnmatch
-import json
 import os
 import re
-import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
