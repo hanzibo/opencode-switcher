@@ -8,22 +8,23 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ```
 ./                          # Flat root — no __init__.py, not a package
 ├── main.py                 # Entrypoint: flock lock, App(), Gtk.main() (~281 lines)
-├── panel.py                # Search panel (~1382 lines) — tab switcher, slash cmds, CSS, evdev injection
-├── clipboard_panel.py      # Clipboard panel container (~2097 lines) — assembles subcomponents + event routing
-├── ai_chat_panel.py        # AI assistant sidebar (~2354 lines) — WebView, LLM dialog, ReAct tool calls
-├── clipboard_store.py      # Store: classification, categories, prompts, LLM config, conversations (~1032 lines, 12 classes, 7 dataclasses)
-├── tool_registry.py        # 24 AI tools, ReAct dispatcher, HTML formatting (~3249 lines, 79 functions)
+├── panel.py                # Search panel (~1387 lines) — tab switcher, slash cmds, CSS, evdev injection
+├── clipboard_panel.py      # Clipboard panel container (~2161 lines) — assembles subcomponents + event routing
+├── ai_chat_panel.py        # AI assistant sidebar (~2890 lines) — WebView, LLM dialog, ReAct tool calls
+├── clipboard_store.py      # Store: classification, categories, prompts, LLM config, conversations (~1069 lines, 12 classes, 7 dataclasses)
+├── tool_registry.py        # 24 AI tools, ReAct dispatcher, HTML formatting (~4960 lines, 91 functions)
 ├── session_store.py        # SQLite reader + live-session detection (~202 lines)
 ├── launcher.py             # Terminal auto-detection + session spawner (~128 lines)
 ├── hotkey.py               # pynput (X11) + Unix socket (Wayland) — only 87 lines
 ├── utils.py                # is_wayland(), relative_time(), request_window_focus(), dirs (~49 lines)
 ├── llm_client.py           # LLM HTTP client + _ToolCallAccumulator (~349 lines)
-├── ai_tool_loop.py         # ReAct tool calling loop (~204 lines), MAX_TOOL_ITERATIONS=25
+├── ai_tool_loop.py         # ReAct tool calling loop (~218 lines), MAX_TOOL_ITERATIONS=25
 ├── ai_html_template.py     # WebView HTML + KaTeX inline embedding + lightbox/zoom (~1183 lines)
-├── ai_text_utils.py        # Pure markdown/math/vision helpers, zero GTK dep (~808 lines)
+├── ai_text_utils.py        # Pure markdown/math/vision helpers, zero GTK dep (~839 lines)
 ├── ai_popovers.py          # AI command autocomplete + history popovers (~522 lines)
 ├── prompts_config_dialog.py # Prompts/LLM-config dialog (~910 lines)
 ├── prompt_dialog.py        # Create/edit prompt dialog (~77 lines)
+├── settings_dialog.py      # Tabbed settings dialog (~217 lines) — QQ Mail credential config, extensible
 ├── dynamic_copy_dialog.py  # Template placeholder dialog (~320 lines)
 ├── sort_dialog.py          # Sort items DnD dialog (~277 lines)
 ├── sort_cats_dialog.py     # Sort categories DnD dialog (~329 lines)
@@ -34,7 +35,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ├── katex/                  # KaTeX CSS/JS/fonts for math in AI WebView
 ├── gnome-extension/        # GNOME Shell extension (Wayland clipboard + focus IPC)
 │   ├── extension.js        # ~350 lines — clipboard + focus + classification (duplicated from clipboard_store.py)
-│   ├── metadata.json       # shell-version [48,49,50]
+│   ├── metadata.json       # shell-version ["48", "49", "50"]
 │   └── AGENTS.md           # GNOME extension-specific agent instructions
 ├── clipboard_store/        # Empty dir — possible package migration target
 ├── docs/usage.md           # Chinese-language usage guide
@@ -48,8 +49,8 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ### Tribal Knowledge
 | Path | Contents |
 |------|----------|
-| `.hzb-agents/experience/` | ~98 per-feature postmortems — pitfalls, solutions, reasoning |
-| `.omo/plans/` | 38 structured work plans from past development |
+| `.hzb-agents/experience/` | ~105 per-feature postmortems — pitfalls, solutions, reasoning |
+| `.omo/plans/` | 41 structured work plans from past development |
 | `.omo/evidence/` | 2 verification artifacts |
 
 ## COMMANDS
@@ -66,7 +67,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 
 **System deps** (beyond pip): `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard xclip xdotool gir1.2-webkit2-4.1` — webkit2gtk is NOT in install.sh but required at runtime (AI panel crashes without it).
 
-**Commit convention**: `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `optimize(area):`, `perf(area):`, `style(area):`, `docs(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`, `tool-registry`, `clipboard`, `session-store`, `experience`). ~223 commits follow this pattern. Most cluster around `ai-panel` (~150) and `tool-registry` (~31).
+**Commit convention**: `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `optimize(area):`, `perf(area):`, `style(area):`, `docs(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`, `tool-registry`, `clipboard`, `session-store`, `experience`, `settings`). ~418 commits follow this pattern, all by single author. Most cluster around `ai-panel` and `tool-registry`.
 
 ## KEY FEATURES
 
@@ -103,6 +104,12 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 - `\${&}` → literal `${&}` (escape via backslash)
 - `TEMPLATE_REGEX` in `dynamic_copy_dialog.py`, `clipboard_panel.py`, and `ai_chat_panel.py` (duplicated — must keep in sync)
 
+### Settings Dialog
+- Tabbed `Gtk.Notebook` container, extensible via `_tabs` registry.
+- Currently one tab: QQ Mail credential configuration.
+- Pattern: factory function `show_settings_dialog()` + private `SettingsDialog` class.
+- Follows same dialog focus-guard pattern as `prompts_config_dialog.py`.
+
 ### AI Assistant (WebKit2 WebView)
 - Multi-turn with LLM (OpenAI-compatible API). Markdown + code highlighting (pygments CodeHilite) + KaTeX math + `pymdown-extensions` (details, def_list)
 - Config: `~/.config/opencode-switcher/llm_settings.json` — **saved with `0o600`** (contains API keys)
@@ -110,11 +117,14 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 - Conversations: `~/.cache/opencode-switcher/conversations/` (JSON files)
 - WebKit settings: WebGL/HTML5 DBs/localStorage disabled (memory optimization)
 - `/cd <path>` command switches the AI panel's active bash working directory
+- Subagent status bar: real-time status blocks with click-selection, adaptive polling lifecycle, event-driven updates
+- Conversation HTML caching: history switching renders from cached HTML instead of re-rendering
 
 ### AI Tool Calling (ReAct Loop)
-- **Architecture**: `llm_client.py` (`_LLMHttpClient`, `_ToolCallAccumulator` for SSE delta accumulation) → `ai_tool_loop.py` (`run_llm_react_loop` — max 25 iterations) → `tool_registry.py` (20 tool executors)
+- **Architecture**: `llm_client.py` (`_LLMHttpClient`, `_ToolCallAccumulator` for SSE delta accumulation) → `ai_tool_loop.py` (`run_llm_react_loop` — max 25 iterations) → `tool_registry.py` (24 tool executors)
 - LLM streams → if `finish_reason: "tool_calls"`, accumulate deltas → execute synchronously via `tool_registry.execute_tool_call()` → feed result back as `role: "tool"` → repeat
-- **24 tools**: `web_search` / `web_fetch` (Obscura browser + trafilatura extraction), `list_directory` / `read_file` (supports line range) / `grep_search` / `glob_find` / `file_info` (safe-path guarded), `get_current_time`, `ask_user_question`, `write_file`, `edit_file` (exact-string replace with staleness check), `delete_file` / `rename_file` (file management), `todo_create` / `todo_update` / `todo_list` (persistent task management), `bash` (persistent bash session, supports `restart` and `timeout` params), `send_notification` (desktop notify-send), `sub_agent` (parallel isolated task execution), `get_subagent_status` (poll background sub-agent progress), `read_qq_mail` (IMAP QQ mailbox reader), `get_code_metrics` (code line count and structure analysis), `find_project_dependencies` (dependency graph and circular import detection), `parse_file_ast` (AST-based code structure analysis)
+- Tool calls support cancellation via `cancel_event` propagated through all executors
+- **24 tools**: `web_search` / `web_fetch` (Obscura browser + trafilatura extraction), `list_directory` / `read_file` (supports line range) / `grep_search` / `glob_find` / `file_info` (safe-path guarded), `get_current_time`, `ask_user_question`, `write_file`, `edit_file` (exact-string replace with staleness check), `delete_file` / `rename_file` (file management), `todo_create` / `todo_update` / `todo_list` (persistent task management, priority display, secondary sort), `bash` (persistent bash session, supports `restart` and `timeout` params), `send_notification` (desktop notify-send), `sub_agent` (parallel isolated task execution with `max_tokens` param), `get_subagent_status` (poll/filter/auto-cleanup/clear_completed), `read_qq_mail` (IMAP QQ mailbox reader), `get_code_metrics` (code line count and structure analysis with include/exclude/sort_by), `find_project_dependencies` (dependency graph, circular import detection, module layering, unused export detection), `parse_file_ast` (AST-based analysis with meta summary, line ranges, include_body for class methods)
 - Tool results rendered as collapsible `<pre>` sections in WebView
 - `TOOL_CHOICE_AUTO` configurable per request
 
@@ -151,6 +161,12 @@ systemd/.desktop → run.sh → main.py (flock lock)
 ```
 
 Note: `KillMode=process` in the service file means systemd only kills the script process, not its children. This is deliberate — restart must clean up properly.
+
+## SETTINGS DIALOG ARCHITECTURE
+
+- `settings_dialog.py` uses a factory pattern: `show_settings_dialog(parent, on_dialog_shown, on_dialog_hidden)` creates and shows a `SettingsDialog`.
+- Internally uses `Gtk.Notebook` with tabs registered in a `_tabs` list. Currently one tab (QQ Mail credentials), extend by appending to `_tabs`.
+- Reuses dialog focus-guard pattern (`_dialog_active` flag) from `prompts_config_dialog.py` and `sort_cats_dialog.py`.
 
 ## SQLITE DATABASE COUPLING
 
@@ -190,10 +206,10 @@ Note: `KillMode=process` in the service file means systemd only kills the script
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
-- **`add_provider_for_screen`** in both panels (`panel.py:101`, `clipboard_panel.py:203`) — leaks CSS globally per GTK docs (accepted tradeoff).
+- **`add_provider_for_screen`** in 3 files (`panel.py:102`, `clipboard_panel.py:206`, `ai_chat_panel.py:533`) — leaks CSS globally per GTK docs (accepted tradeoff).
 - **`opencode-switcher-toggle`**: Python code inside shell script via `exec python3 -c "..."` — fragile quoting.
 - **`run.sh` sources NVM**: Couples tray app runtime to user's shell Node.js env.
-- **`--system-site-packages` venv**: Breaks isolation. Required for system PyGObject.
+- **`--system-site-packages` venv**: Breaks isolation. Required for system PyGObject).
 - **Hardcoded version** (`VERSION="1.0.0"` in `install.sh`) — no git tags or version automation.
 - **WebKit2 dependency** not in `install.sh` but required at runtime — AI panel crashes without it.
 - **GNOME extension duplicates Python classification** — ~150 lines of heuristic scoring in both Python and JS.
@@ -205,23 +221,24 @@ Note: `KillMode=process` in the service file means systemd only kills the script
 
 | File | Lines | Nature |
 |------|-------|--------|
-| `ai_chat_panel.py` | 2354 | AIChatPanel UI, WebView, LLM orchestration, stream+tool rendering, round nav, lightbox |
-| `clipboard_panel.py` | 2097 | Large — was 7713 before extracting 11 modules + ai_chat_panel.py |
-| `tool_registry.py` | 3249 | 20 tools, 3 classes + HTML formatting — verbose OpenAI JSON schemas account for size |
-| `panel.py` | 1382 | Gatekeeper — 25+ event handlers. CSS-in-code (~140 lines template string). |
-| `clipboard_store.py` | 1032 | God module — 12 classes (7 dataclasses, 5 stores): classification, clipboard storage, categories, conversation persistence, LLM settings, prompts. |
+| `tool_registry.py` | 4960 | 24 tools, 3 classes + HTML formatting — verbose OpenAI JSON schemas account for size; grew with get_code_metrics, find_project_dependencies, parse_file_ast, read_qq_mail, sub_agent status |
+| `ai_chat_panel.py` | 2890 | AIChatPanel UI, WebView, LLM orchestration, stream+tool rendering, round nav, lightbox, subagent status bar, conversation caching |
+| `clipboard_panel.py` | 2161 | Large — was 7713 before extracting 11 modules + ai_chat_panel.py |
+| `panel.py` | 1387 | Gatekeeper — 25+ event handlers. CSS-in-code (~140 lines template string). |
 | `ai_html_template.py` | 1183 | WebView HTML template + KaTeX + lightbox JS + round nav CSS — grew significantly with visual features |
-| `prompts_config_dialog.py` | 910 | 910-line single dialog class. |
-| `gnome-extension/extension.js` | 350 | Compact but duplicates ~150 lines of classification logic. |
+| `clipboard_store.py` | 1069 | God module — 12 classes (7 dataclasses, 5 stores): classification, clipboard storage, categories, conversation persistence, LLM settings, prompts |
+| `prompts_config_dialog.py` | 910 | 910-line single dialog class |
+| `ai_text_utils.py` | 839 | Pure markdown/math/vision helpers, zero GTK dep |
+| `gnome-extension/extension.js` | 350 | Compact but duplicates ~150 lines of classification logic |
 
-**Remaining refactoring candidates**: (1) `ClipboardPanel` still co-located with `clipboard_panel.py` (2097 lines) — worth extracting to own module. (2) Extract shared `classify_text()` module for Python and JS. (3) Prompts config dialog is standalone but 910 lines. (4) `clipboard_store/` dir exists empty — possible package migration target.
+**Remaining refactoring candidates**: (1) `ClipboardPanel` still co-located with `clipboard_panel.py` (2161 lines) — worth extracting to own module. (2) Extract shared `classify_text()` module for Python and JS. (3) Prompts config dialog is standalone but 910 lines. (4) `clipboard_store/` dir exists empty — possible package migration target. (5) `settings_dialog.py` factory pattern works but the QQ Mail tab is the first user of this extensibility — future tabs should follow same `_tabs` registry.
 
 ## CRITICAL GTK & PYGObject QUIRKS (Crash Guards)
 
 - **Signal callback safety**: Never modify widget tree hierarchy inside GTK event callbacks (destroy, rebuild, popup menus) — destroys C-level signal source → SIGSEGV. Defer via `GLib.idle_add()`.
 - **Focused widget safety**: Never destroy/remove a focused `Entry`. Call `window.set_focus(None)` first.
 - **Dialog destruction trap**: Read `dialog.get_filename()` *before* `dialog.destroy()` — destroy returns None.
-- **CSS Provider scope**: Use `widget.get_style_context().add_provider(...)`. `add_provider_for_screen` leaks globally (codebase uses it anyway).
+- **CSS Provider scope**: Use `widget.get_style_context().add_provider(...)`. `add_provider_for_screen` leaks globally (codebase uses it anyway in 3 files).
 - **Nested dialog focus guard**: `_dialog_active` flag managed via `on_dialog_shown`/`on_dialog_hidden` callbacks. Inner dialogs must NOT trigger `on_dialog_hidden()`.
 - **GTK3 CSS limits**: No `!important`. Higher specificity required. Clear default gradients via `background-image: none; box-shadow: none;`.
 - **Wayland focus flashing**: Use `load_cached()` (JSON cache), not `load_data()` (xclip/wl-paste).
