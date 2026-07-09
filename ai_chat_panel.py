@@ -111,6 +111,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_last_prompt_obj = None
         self._ai_active_model_info = None
         self._ai_html_cache = {}
+        self._ai_running_convs = {}
         self._last_rendered_html = ""
         self._ai_conversation_created_at = 0
         self._ai_title_generated = False
@@ -720,22 +721,26 @@ class AIChatPanel(Gtk.Box):
             self._render_markdown(self._ai_markdown_text)
             return
 
-        GLib.timeout_add(100, self._poll_stream_queue, current_req_id)
+        GLib.timeout_add(100, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
 
         self._ai_cancel_event.clear()
         self._update_send_button(True)
         self._ai_entry.placeholder_text = "等待回复中..."
         threading.Thread(
             target=self._run_llm_api_request,
-            args=(base_url, api_key, model_name, self._ai_messages, current_req_id,
-                  temperature, max_tokens, top_p),
+            args=(base_url, api_key, model_name, list(self._ai_messages), current_req_id,
+                  temperature, max_tokens, top_p, self._ai_markdown_text, self._ai_conversation_id),
             daemon=True
         ).start()
 
     def _retry_response(self, assistant_index: int):
         """删除指定的 assistant 回复并重新请求 LLM（丢弃该回复之后的所有消息）。"""
         if self._ai_streaming:
-            self._ai_cancel_event.set()
+            active_state = self._ai_running_convs.get(self._ai_conversation_id)
+            if active_state:
+                active_state["cancel_event"].set()
+                self._ai_running_convs.pop(self._ai_conversation_id, None)
+            self._ai_cancel_event.set()  # fallback
             self._llm_client.cancel_active_request()
             self._flush_stream_queue()
             self._update_send_button(False)
@@ -772,7 +777,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_assistant_html_base = ""
         with self._ai_stream_lock:
             self._ai_stream_queue = []
-        GLib.timeout_add(100, self._poll_stream_queue, current_req_id)
+        GLib.timeout_add(100, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
 
         self._ai_spinner.show()
         self._ai_spinner.start()
@@ -786,8 +791,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_cancel_event.clear()
         threading.Thread(
             target=self._run_llm_api_request,
-            args=(base_url, api_key, model_name, self._ai_messages, current_req_id,
-                  temperature, max_tokens, top_p),
+            args=(base_url, api_key, model_name, list(self._ai_messages), current_req_id,
+                  temperature, max_tokens, top_p, self._ai_markdown_text, self._ai_conversation_id),
             daemon=True
         ).start()
 
@@ -811,8 +816,6 @@ class AIChatPanel(Gtk.Box):
         self._ai_assistant_html_base = ""
         with self._ai_stream_lock:
             self._ai_stream_queue = []
-        GLib.timeout_add(100, self._poll_stream_queue, current_req_id)
-
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
             self._ai_render_timeout_id = 0
@@ -860,54 +863,91 @@ class AIChatPanel(Gtk.Box):
 
         self._ai_cancel_event.clear()
         self._update_send_button(True)
+        GLib.timeout_add(100, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
         threading.Thread(
             target=self._run_llm_api_request,
-            args=(base_url, api_key, model_name, self._ai_messages, current_req_id,
-                  temperature, max_tokens, top_p),
+            args=(base_url, api_key, model_name, list(self._ai_messages), current_req_id,
+                  temperature, max_tokens, top_p, self._ai_markdown_text, self._ai_conversation_id),
             daemon=True
         ).start()
 
     def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, messages: list,
                               req_id: int, temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
-                              top_p: float = DEFAULT_TOP_P):
+                              top_p: float = DEFAULT_TOP_P, markdown_text: str = "", conv_id: str = ""):
         """Start the ReAct loop by delegating execution to the run_llm_react_loop orchestrator."""
-        # Event-driven status updates, no polling timer needed
+        cancel_event = threading.Event()
+        
+        # Initialize conversation background state
+        state = {
+            "streaming": True,
+            "messages": list(messages),  # Create a shallow copy of messages list
+            "cancel_event": cancel_event,
+            "current_assistant_text": "",
+            "current_reasoning_text": "",
+            "response_div_added": False,
+            "ai_markdown_text": markdown_text,
+            "req_id": req_id,
+        }
+        self._ai_running_convs[conv_id] = state
+
         def reset_iteration_state():
-            self._ai_assistant_buffer = ""
-            self._ai_current_assistant_text = ""
-            self._ai_response_div_added = False
-            self._ai_assistant_html_base = ""
-            self._ai_current_reasoning_text = ""
-            self._ai_dirty_stream = False
+            st = self._ai_running_convs.get(conv_id)
+            if st:
+                st["current_assistant_text"] = ""
+                st["current_reasoning_text"] = ""
+                st["response_div_added"] = False
+            if self._ai_conversation_id == conv_id:
+                self._ai_assistant_buffer = ""
+                self._ai_current_assistant_text = ""
+                self._ai_response_div_added = False
+                self._ai_assistant_html_base = ""
+                self._ai_current_reasoning_text = ""
+                self._ai_dirty_stream = False
 
         def append_message_callback(msg):
-            self._ai_messages.append(msg)
-            GLib.idle_add(self._render_current_assistant_message, req_id)
+            st = self._ai_running_convs.get(conv_id)
+            if st:
+                st["messages"].append(msg)
+            if self._ai_conversation_id == conv_id:
+                self._ai_messages = st["messages"] if st else self._ai_messages
+                GLib.idle_add(self._render_current_assistant_message, req_id)
 
         def set_reasoning_callback(text):
-            self._ai_current_reasoning_text = text
-            self._ai_dirty_stream = True
+            st = self._ai_running_convs.get(conv_id)
+            if st:
+                st["current_reasoning_text"] = text
+            if self._ai_conversation_id == conv_id:
+                self._ai_current_reasoning_text = text
+                self._ai_dirty_stream = True
 
         def set_assistant_callback(text):
-            self._ai_current_assistant_text = text
-            self._ai_dirty_stream = True
+            st = self._ai_running_convs.get(conv_id)
+            if st:
+                st["current_assistant_text"] = text
+            if self._ai_conversation_id == conv_id:
+                self._ai_current_assistant_text = text
+                self._ai_dirty_stream = True
+
+        def append_html_callback(html):
+            if self._ai_conversation_id == conv_id:
+                GLib.idle_add(self.append_html_to_webview, html)
 
         run_llm_react_loop(
             llm_client=self._llm_client,
             base_url=base_url,
             api_key=api_key,
             model_name=model_name,
-            messages=messages,
+            messages=state["messages"],
             req_id=req_id,
             temperature=temperature,
             max_tokens=max_tokens,
             top_p=top_p,
-            cancel_event=getattr(self, "_ai_cancel_event", None),
+            cancel_event=cancel_event,
             stream_lock=self._ai_stream_lock,
             stream_queue=self._ai_stream_queue,
-            get_current_request_id_fn=lambda: getattr(self, "_ai_request_id", 0),
+            get_current_request_id_fn=lambda: req_id,
             append_message_fn=append_message_callback,
-            append_html_to_webview_fn=self.append_html_to_webview,
+            append_html_to_webview_fn=append_html_callback,
             flush_stream_queue_fn=self._flush_stream_queue,
             append_to_stream_queue_fn=lambda text: self._ai_stream_queue.append(text),
             handle_ask_user_question_fn=self._handle_ask_user_question,
@@ -917,19 +957,90 @@ class AIChatPanel(Gtk.Box):
             reset_iteration_state_fn=reset_iteration_state,
             set_reasoning_text_fn=set_reasoning_callback,
             set_assistant_text_fn=set_assistant_callback,
-            conv_id=self._ai_conversation_id,
+            conv_id=conv_id,
         )
 
     def _finalize_after_tool_loop(self, req_id: int):
         """Finalize after tool loop ends (used when tool iteration limit hit)."""
-        if getattr(self, "_ai_request_id", 0) != req_id:
-            return
-        self._flush_stream_queue()
-        # Rebuild full markdown from messages (which now include tool call/results)
-        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
-        self._render_markdown(self._ai_markdown_text)
-        self._ai_spinner.stop()
-        self._ai_spinner.hide()
+        conv_id = None
+        for cid, st in self._ai_running_convs.items():
+            if st.get("req_id") == req_id:
+                conv_id = cid
+                break
+
+        if not conv_id:
+            conv_id = self._ai_conversation_id
+            state = None
+        else:
+            state = self._ai_running_convs.get(conv_id)
+
+        if state:
+            state["streaming"] = False
+
+        if self._ai_conversation_id == conv_id:
+            self._flush_stream_queue()
+            target_messages = state["messages"] if state else self._ai_messages
+            self._ai_messages = target_messages
+            # Rebuild full markdown from messages (which now include tool call/results)
+            self._ai_markdown_text = self._rebuild_markdown_from_messages(target_messages)
+            self._render_markdown(self._ai_markdown_text)
+            self._ai_spinner.stop()
+            self._ai_spinner.hide()
+            self._ai_streaming = False
+            self._update_send_button(False)
+            self._ai_entry.placeholder_text = ""
+        else:
+            if state:
+                rebuilt_markdown = self._rebuild_markdown_from_messages(state["messages"])
+                html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
+                self._ai_html_cache[conv_id] = html
+                try:
+                    conv = self._conversation_store.load_conversation(conv_id)
+                    from clipboard_store import ChatMessage
+                    messages_objs = [ChatMessage(role=m["role"], content=m["content"], 
+                                                 tool_call_id=m.get("tool_call_id"),
+                                                 name=m.get("name"),
+                                                 tool_calls=m.get("tool_calls")) for m in state["messages"]]
+                    if conv:
+                        conv.messages = messages_objs
+                    else:
+                        local_title = "New Conversation"
+                        if state["messages"]:
+                            local_title = _extract_local_title(state["messages"][0].get("content", ""))
+                        model_snapshot = self._build_model_snapshot()
+                        conv = Conversation(
+                            id=conv_id,
+                            title=local_title,
+                            system_prompt="",
+                            messages=messages_objs,
+                            model_config_snapshot=model_snapshot,
+                            created_at=int(time.time() * 1000),
+                            updated_at=int(time.time() * 1000),
+                        )
+                    self._conversation_store.save_conversation(conv, bump_updated_at=True)
+                    
+                    # Generate title for background conversation if untitled
+                    if conv.title in ("New Conversation", "(untitled)") and state["messages"]:
+                        first_msg = state["messages"][0].get("content", "")
+                        if first_msg:
+                            title_cfg = self._get_title_model_config()
+                            if title_cfg:
+                                base_url, api_key, model_name, temperature, max_tokens, top_p = title_cfg
+                            else:
+                                base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+                                    None, getattr(self, "_ai_active_model_info", None)
+                                )
+                            if base_url and api_key:
+                                threading.Thread(
+                                    target=self._generate_conversation_title,
+                                    args=(first_msg, conv_id, base_url, api_key, model_name,
+                                          temperature, max_tokens, top_p),
+                                    daemon=True
+                                ).start()
+                except Exception as e:
+                    print(f"Error saving background finished conversation (finalize): {e}", flush=True)
+
+        self._ai_running_convs.pop(conv_id, None)
         self._handle_stream_end(req_id)
 
     def _handle_ask_user_question(self, tool_call: dict) -> str:
@@ -1046,28 +1157,41 @@ class AIChatPanel(Gtk.Box):
                 self._ai_stream_queue = []
         return len(new_text_list) > 0
 
-    def _poll_stream_queue(self, req_id: int) -> bool:
-        if getattr(self, "_ai_request_id", 0) != req_id:
+    def _poll_stream_queue(self, req_id: int, conv_id: str) -> bool:
+        if self._ai_conversation_id != conv_id:
             return False
         
+        st = self._ai_running_convs.get(conv_id)
+        if not st or st.get("req_id") != req_id:
+            return False
+
         self._flush_stream_queue()
         if getattr(self, "_ai_dirty_stream", False):
             self._ai_dirty_stream = False
             self._render_current_assistant_message(req_id)
             
-        return self._ai_streaming
+        return st.get("streaming", False)
 
     def _render_current_assistant_message(self, req_id: int):
-        if getattr(self, "_ai_request_id", 0) != req_id:
+        conv_id = None
+        for cid, st in self._ai_running_convs.items():
+            if st.get("req_id") == req_id:
+                conv_id = cid
+                break
+        if not conv_id or self._ai_conversation_id != conv_id:
             return
-        if not getattr(self, "_ai_streaming", False):
+
+        st = self._ai_running_convs.get(conv_id)
+        if not st or not st.get("streaming", False):
             return
         
         msg_id = f"msg-{req_id}"
-        if not self._ai_response_div_added:
+        if not st.get("response_div_added", False):
             js_append = f"appendMessageContainer('{msg_id}');"
             self._ai_webview.run_javascript(js_append, None, None)
-            self._ai_response_div_added = True
+            st["response_div_added"] = True
+            if self._ai_conversation_id == conv_id:
+                self._ai_response_div_added = True
             
         # Find messages for the current active turn
         last_user_idx = -1
@@ -1081,8 +1205,8 @@ class AIChatPanel(Gtk.Box):
         # Render the turn's html
         html_content = _render_active_turn_to_html(
             turn_msgs,
-            streaming_reasoning=getattr(self, "_ai_current_reasoning_text", ""),
-            streaming_content=getattr(self, "_ai_current_assistant_text", ""),
+            streaming_reasoning=st.get("current_reasoning_text", ""),
+            streaming_content=st.get("current_assistant_text", ""),
             is_streaming=True
         )
         
@@ -1119,41 +1243,112 @@ class AIChatPanel(Gtk.Box):
 
     def _on_llm_api_finished(self, req_id: int):
         """Called when LLM stream completes with a pure text response (no tool_calls)."""
-        if getattr(self, "_ai_request_id", 0) != req_id:
-            return
+        conv_id = None
+        for cid, st in self._ai_running_convs.items():
+            if st.get("req_id") == req_id:
+                conv_id = cid
+                break
 
-        self._flush_stream_queue()
+        if not conv_id:
+            conv_id = self._ai_conversation_id
+            state = None
+        else:
+            state = self._ai_running_convs.get(conv_id)
 
-        # Append assistant text response to messages, preserving reasoning_content
-        self._ai_assistant_buffer = self._ai_current_assistant_text
-        assistant_msg = {"role": "assistant", "content": self._ai_assistant_buffer}
-        reasoning = getattr(self, "_ai_current_reasoning_text", "")
+        if self._ai_conversation_id == conv_id:
+            self._flush_stream_queue()
+
+        assistant_text = state["current_assistant_text"] if state else self._ai_current_assistant_text
+        reasoning = state["current_reasoning_text"] if state else self._ai_current_reasoning_text
+        assistant_msg = {"role": "assistant", "content": assistant_text}
         if reasoning:
             assistant_msg["reasoning_content"] = reasoning
-        self._ai_current_reasoning_text = ""
 
-        if self._ai_messages and self._ai_messages[-1].get("role") == "user":
-            self._ai_messages.append(assistant_msg)
-        elif self._ai_messages and self._ai_assistant_buffer:
-            # If last is tool role (happens after tool call loop → final text), append normally
-            self._ai_messages.append(assistant_msg)
-        self._ai_assistant_buffer = ""
-        self._ai_current_assistant_text = ""
-        self._ai_response_div_added = False
-        self._ai_assistant_html_base = ""
-        self._ai_dirty_stream = False
+        target_messages = state["messages"] if state else self._ai_messages
+        if target_messages and target_messages[-1].get("role") == "user":
+            target_messages.append(assistant_msg)
+        elif target_messages and assistant_text:
+            target_messages.append(assistant_msg)
 
-        if getattr(self, "_ai_render_timeout_id", 0) != 0:
-            GLib.source_remove(self._ai_render_timeout_id)
-            self._ai_render_timeout_id = 0
+        if state:
+            state["current_assistant_text"] = ""
+            state["current_reasoning_text"] = ""
+            state["response_div_added"] = False
+            state["streaming"] = False
 
-        # Full rebuild from messages list
-        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
-        self._render_markdown(self._ai_markdown_text)
+        if self._ai_conversation_id == conv_id:
+            self._ai_messages = target_messages
+            self._ai_assistant_buffer = ""
+            self._ai_current_assistant_text = ""
+            self._ai_current_reasoning_text = ""
+            self._ai_response_div_added = False
+            self._ai_assistant_html_base = ""
+            self._ai_dirty_stream = False
+            self._ai_streaming = False
 
-        self._ai_spinner.stop()
-        self._ai_spinner.hide()
+            if getattr(self, "_ai_render_timeout_id", 0) != 0:
+                GLib.source_remove(self._ai_render_timeout_id)
+                self._ai_render_timeout_id = 0
 
+            # Full rebuild from messages list
+            self._ai_markdown_text = self._rebuild_markdown_from_messages(target_messages)
+            self._render_markdown(self._ai_markdown_text)
+
+            self._ai_spinner.stop()
+            self._ai_spinner.hide()
+            self._update_send_button(False)
+            self._ai_entry.placeholder_text = ""
+        else:
+            rebuilt_markdown = self._rebuild_markdown_from_messages(target_messages)
+            html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
+            self._ai_html_cache[conv_id] = html
+            try:
+                conv = self._conversation_store.load_conversation(conv_id)
+                from clipboard_store import ChatMessage
+                messages_objs = [ChatMessage(role=m["role"], content=m["content"], 
+                                             tool_call_id=m.get("tool_call_id"),
+                                             name=m.get("name"),
+                                             tool_calls=m.get("tool_calls")) for m in target_messages]
+                if conv:
+                    conv.messages = messages_objs
+                else:
+                    local_title = "New Conversation"
+                    if target_messages:
+                        local_title = _extract_local_title(target_messages[0].get("content", ""))
+                    model_snapshot = self._build_model_snapshot()
+                    conv = Conversation(
+                        id=conv_id,
+                        title=local_title,
+                        system_prompt="",
+                        messages=messages_objs,
+                        model_config_snapshot=model_snapshot,
+                        created_at=int(time.time() * 1000),
+                        updated_at=int(time.time() * 1000),
+                    )
+                self._conversation_store.save_conversation(conv, bump_updated_at=True)
+                
+                # Generate title for background conversation if untitled
+                if conv.title in ("New Conversation", "(untitled)") and target_messages:
+                    first_msg = target_messages[0].get("content", "")
+                    if first_msg:
+                        title_cfg = self._get_title_model_config()
+                        if title_cfg:
+                            base_url, api_key, model_name, temperature, max_tokens, top_p = title_cfg
+                        else:
+                            base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+                                None, getattr(self, "_ai_active_model_info", None)
+                            )
+                        if base_url and api_key:
+                            threading.Thread(
+                                target=self._generate_conversation_title,
+                                args=(first_msg, conv_id, base_url, api_key, model_name,
+                                      temperature, max_tokens, top_p),
+                                daemon=True
+                            ).start()
+            except Exception as e:
+                print(f"Error saving background finished conversation: {e}", flush=True)
+
+        self._ai_running_convs.pop(conv_id, None)
         self._handle_stream_end(req_id)
 
     def _adjust_ai_entry_height(self):
@@ -1406,13 +1601,18 @@ class AIChatPanel(Gtk.Box):
             return
 
         if self._ai_streaming:
-            self._ai_cancel_event.set()
+            active_state = self._ai_running_convs.get(self._ai_conversation_id)
+            if active_state:
+                active_state["cancel_event"].set()
+                self._ai_running_convs.pop(self._ai_conversation_id, None)
+            self._ai_cancel_event.set()  # fallback
             self._llm_client.cancel_active_request()
             self._flush_stream_queue()
             self._update_send_button(False, sensitive=False)
             self._ai_entry.placeholder_text = "正在中止..."
             self._ai_spinner.stop()
             self._ai_spinner.hide()
+            self._ai_streaming = False
             return
         buf = self._ai_entry.get_buffer()
         start = buf.get_start_iter()
@@ -2244,16 +2444,19 @@ class AIChatPanel(Gtk.Box):
 
     def _switch_to_conversation(self, conv_id: str):
         """Switch AI panel to display a different conversation by ID."""
-        if self._ai_streaming:
-            return  # block switching while streaming is in progress
+        if not hasattr(self, "_ai_request_id"):
+            self._ai_request_id = 0
+        self._ai_request_id += 1
 
-        # Save current conversation if it has content
+        # Save current conversation if it has content and is not streaming
         if self._ai_messages and self._ai_conversation_id:
-            try:
-                model_snapshot = self._build_model_snapshot()
-                self._save_current_conversation(model_snapshot, preserve_updated_at=True)
-            except Exception as e:
-                print(f"Error saving before switch: {e}", flush=True)
+            is_currently_running = self._ai_running_convs.get(self._ai_conversation_id, {}).get("streaming", False)
+            if not is_currently_running:
+                try:
+                    model_snapshot = self._build_model_snapshot()
+                    self._save_current_conversation(model_snapshot, preserve_updated_at=True)
+                except Exception as e:
+                    print(f"Error saving before switch: {e}", flush=True)
 
         self._clear_subagent_bar_instantly()
 
@@ -2268,38 +2471,70 @@ class AIChatPanel(Gtk.Box):
             return
 
         # Restore state from loaded conversation (preserve tool call fields)
-        self._ai_messages = []
-        for m in conv.messages:
-            msg = {"role": m.role, "content": m.content}
-            if m.tool_call_id:
-                msg["tool_call_id"] = m.tool_call_id
-            if m.name:
-                msg["name"] = m.name
-            if m.tool_calls:
-                msg["tool_calls"] = m.tool_calls
-            self._ai_messages.append(msg)
-        self._ai_conversation_id = conv.id
-        self._ai_conversation_created_at = conv.created_at
-        self._refresh_subagent_bar()
-        self._ai_assistant_buffer = ""
-        self._ai_current_assistant_text = ""
-        self._ai_response_div_added = False
-        self._ai_assistant_html_base = ""
-        self._ai_title_generated = True  # already generated (if ever), skip re-generation
-        self._ai_last_prompt_obj = None
-        self._ai_active_model_info = conv.model_config_snapshot
+        st = self._ai_running_convs.get(conv_id)
+        if st and st.get("streaming"):
+            self._ai_messages = st["messages"]
+            self._ai_conversation_id = conv_id
+            self._ai_conversation_created_at = conv.created_at
+            
+            cached_html = self._ai_html_cache.get(conv_id)
+            if cached_html is not None:
+                self._last_rendered_html = cached_html
+                self._ai_markdown_text = st["ai_markdown_text"]
+                import json
+                js_code = f"updateContent({json.dumps(cached_html)});"
+                self._ai_webview.run_javascript(js_code, None, None)
+            else:
+                self._ai_markdown_text = st["ai_markdown_text"]
+                self._render_markdown(self._ai_markdown_text)
 
-        cached_html = self._ai_html_cache.get(conv_id)
-        if cached_html is not None:
-            self._last_rendered_html = cached_html
-            self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
-            import json
-            js_code = f"updateContent({json.dumps(cached_html)});"
-            self._ai_webview.run_javascript(js_code, None, None)
+            self._ai_current_assistant_text = st.get("current_assistant_text", "")
+            self._ai_current_reasoning_text = st.get("current_reasoning_text", "")
+            self._ai_response_div_added = st.get("response_div_added", False)
+            self._ai_streaming = True
+            
+            self._update_send_button(True)
+            self._ai_entry.placeholder_text = "等待回复中..."
+            self._ai_spinner.show()
+            self._ai_spinner.start()
+            
+            GLib.timeout_add(100, self._poll_stream_queue, st["req_id"], conv_id)
         else:
-            self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
-            self._prune_messages()
-            self._render_markdown(self._ai_markdown_text)
+            self._ai_messages = []
+            for m in conv.messages:
+                msg = {"role": m.role, "content": m.content}
+                if m.tool_call_id:
+                    msg["tool_call_id"] = m.tool_call_id
+                if m.name:
+                    msg["name"] = m.name
+                if m.tool_calls:
+                    msg["tool_calls"] = m.tool_calls
+                self._ai_messages.append(msg)
+            self._ai_conversation_id = conv.id
+            self._ai_conversation_created_at = conv.created_at
+            self._ai_current_assistant_text = ""
+            self._ai_current_reasoning_text = ""
+            self._ai_response_div_added = False
+            self._ai_streaming = False
+            
+            self._update_send_button(False)
+            self._ai_entry.placeholder_text = ""
+            self._ai_spinner.stop()
+            self._ai_spinner.hide()
+
+            cached_html = self._ai_html_cache.get(conv_id)
+            if cached_html is not None:
+                self._last_rendered_html = cached_html
+                self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+                import json
+                js_code = f"updateContent({json.dumps(cached_html)});"
+                self._ai_webview.run_javascript(js_code, None, None)
+            else:
+                self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+                self._prune_messages()
+                self._render_markdown(self._ai_markdown_text)
+        
+        self._refresh_subagent_bar()
 
         # Update model info display label
         _, _, _, display_name, _, _, _ = self._read_model_config(None, self._ai_active_model_info)
@@ -2323,6 +2558,42 @@ class AIChatPanel(Gtk.Box):
     def _get_sorted_conversations(self) -> List[Dict[str, Any]]:
         """Return all conversations sorted by updated_at descending (newest first)."""
         summaries = self._conversation_store.list_conversations()
+        existing_ids = {s.get("id") for s in summaries}
+        import time
+
+        # Add active conversation if not on disk
+        active_id = self._ai_conversation_id
+        if active_id and active_id not in existing_ids:
+            if self._ai_messages:
+                first_msg = self._ai_messages[0].get("content", "")
+                if isinstance(first_msg, list):
+                    first_msg = next((p["text"] for p in first_msg if isinstance(p, dict) and p.get("type") == "text"), "")
+                title = first_msg[:30] if first_msg else "New Conversation"
+                summaries.append({
+                    "id": active_id,
+                    "title": title,
+                    "message_count": len(self._ai_messages),
+                    "updated_at": int(time.time() * 1000),
+                })
+                existing_ids.add(active_id)
+
+        # Add any running background conversations not on disk
+        for cid, st in self._ai_running_convs.items():
+            if cid not in existing_ids:
+                msgs = st.get("messages", [])
+                if msgs:
+                    first_msg = msgs[0].get("content", "")
+                    if isinstance(first_msg, list):
+                        first_msg = next((p["text"] for p in first_msg if isinstance(p, dict) and p.get("type") == "text"), "")
+                    title = first_msg[:30] if first_msg else "New Conversation"
+                    summaries.append({
+                        "id": cid,
+                        "title": title,
+                        "message_count": len(msgs),
+                        "updated_at": int(time.time() * 1000),
+                    })
+                    existing_ids.add(cid)
+
         summaries.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
         return summaries
 
@@ -2333,8 +2604,7 @@ class AIChatPanel(Gtk.Box):
             direction: +1 for next (Down arrow → older in DESC list),
                        -1 for previous (Up arrow → newer in DESC list).
         """
-        if self._ai_streaming:
-            return
+        # Allow navigation during streaming
 
         summaries = self._get_sorted_conversations()
         if not summaries:
@@ -2462,7 +2732,6 @@ class AIChatPanel(Gtk.Box):
         return self.get_visible()
 
     def hide_panel(self):
-        self._ai_cancel_event.set()
         self._update_send_button(False)
         self.set_no_show_all(True)
         self.hide()
@@ -2472,8 +2741,12 @@ class AIChatPanel(Gtk.Box):
         self.queue_resize()
 
     def _reset_ai_panel_silent(self):
-        self._ai_cancel_event.set()
+        self._ai_spinner.stop()
+        self._ai_spinner.hide()
         self._update_send_button(False)
+        self._ai_streaming = False
+        self._ai_entry.placeholder_text = ""
+        self._last_rendered_html = ""
         self._ai_messages = []
         self._ai_conversation_id = uuid4().hex[:12]
         self._clear_subagent_bar_instantly()
@@ -2501,27 +2774,22 @@ class AIChatPanel(Gtk.Box):
 
     def start_new_conversation(self):
         """保存当前对话（若有内容），确保 AI 看盘面板可见，并启动一个全新的空白对话。"""
-        # 1. 若当前正在流式输出，取消之并追加已接收的片段
-        if self._ai_streaming:
-            self._ai_cancel_event.set()
-            self._flush_stream_queue()
-            if self._ai_messages and self._ai_messages[-1].get("role") == "user" and self._ai_assistant_buffer:
-                self._ai_messages.append({"role": "assistant", "content": self._ai_assistant_buffer})
-            self._update_send_button(False)
-            self._ai_streaming = False
-            self._ai_spinner.stop()
-            self._ai_spinner.hide()
-
-        # 2. 若当前已有对话内容，自动保存当前对话
-        if self._ai_messages:
-            try:
-                model_snapshot = self._build_model_snapshot()
-                self._save_current_conversation(model_snapshot, preserve_updated_at=True)
-            except Exception as e:
-                print(f"Error saving before new conversation: {e}", flush=True)
-
-        # 3. 递增请求 ID，阻断被取消线程的后续延迟回调
+        if not hasattr(self, "_ai_request_id"):
+            self._ai_request_id = 0
         self._ai_request_id += 1
+
+        if self._ai_conversation_id:
+            self._ai_html_cache[self._ai_conversation_id] = getattr(self, "_last_rendered_html", "")
+
+        # 2. 若当前已有对话内容并且不在运行中，自动保存当前对话
+        if self._ai_messages and self._ai_conversation_id:
+            is_currently_running = self._ai_running_convs.get(self._ai_conversation_id, {}).get("streaming", False)
+            if not is_currently_running:
+                try:
+                    model_snapshot = self._build_model_snapshot()
+                    self._save_current_conversation(model_snapshot, preserve_updated_at=True)
+                except Exception as e:
+                    print(f"Error saving before new conversation: {e}", flush=True)
 
         # 4. 确保 AI 面板显示
         self.separator.set_no_show_all(False)
