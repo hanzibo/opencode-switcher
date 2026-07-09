@@ -4261,7 +4261,8 @@ def execute_sub_agent(task: str, max_turns: int = 10,
                f"完成后结果将保存至 /tmp/opencode_subagent_{subagent_id}_result.txt，" \
                f"可让主代理使用 read_file 读取。"
 
-    return _execute_subagent_sync(task, max_turns, agent_type)
+    sync_result = _execute_subagent_sync(task, max_turns, agent_type)
+    return html.unescape(sync_result)
 
 
 
@@ -4337,11 +4338,12 @@ def check_background_subagents(conv_id: Optional[str] = None) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _run_subagent_background(task: str, max_turns: int, agent_type: str, subagent_id: int):
+def _run_subagent_background(task: str, max_turns: int, agent_type: str, subagent_id: str):
     """Run a sub-agent in a background daemon thread."""
     def _run():
         global _background_subagent_results, _background_subagent_status
-        result = _execute_subagent_sync(task, max_turns, agent_type)
+        raw_result = _execute_subagent_sync(task, max_turns, agent_type)
+        result = html.unescape(raw_result)
         _background_subagent_status[subagent_id] = {
             "task": task[:100],
             "started_at": _background_subagent_status.get(subagent_id, {}).get("started_at", 0),
