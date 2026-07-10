@@ -16,35 +16,117 @@ _MAX_BASH_OUTPUT_CHARS = 20000
 _BASH_TIMEOUT_DEFAULT = 120
 _BASH_SHELL = "/bin/bash"
 
-_ALWAYS_INTERACTIVE: Final[frozenset] = frozenset({
+_HARD_BLOCK: Final[frozenset] = frozenset({
     "vi", "vim", "nvim", "nano", "emacs", "vimdiff",
     "less", "more", "most",
     "top", "htop", "btop", "iftop", "iotop",
+    "ssh", "telnet", "rlogin", "sftp",
+    "screen", "tmux",
+    "watch",
 })
 
-_DUAL_MODE: Final[frozenset] = frozenset({
+_BARE_REPL: Final[frozenset] = frozenset({
     "python", "python3", "ipython",
     "node", "irb",
     "bash", "zsh", "sh", "dash", "fish",
+    "mysql", "mariadb", "psql", "sqlite3",
+    "redis-cli", "mongo", "mongosh",
+    "clickhouse-client", "cqlsh", "cockroach",
+    "bc", "dc",
 })
+
+_CONDITIONAL: Final[dict] = {
+    "ssh-keygen": {
+        "safe_flags": ("-b", "-f", "-t"),
+        "message": "请提供 -b 或 -f 参数避免交互式提问",
+    },
+    "openssl": {
+        "safe_flags": ("-subj", "-pass", "-k"),
+        "message": "请提供 -subj（证书请求）或 -pass（加密）参数避免交互",
+    },
+    "gpg": {
+        "safe_flags": ("--batch",),
+        "message": "建议使用 --batch 参数避免交互",
+    },
+    "adduser": {
+        "safe_flags": (),
+        "message": "该命令无法在非交互模式下运行，请直接使用 useradd 并指定完整参数",
+    },
+    "useradd": {
+        "safe_flags": (),
+        "message": "请提供 -m -s -u 等完整参数避免交互",
+    },
+    "passwd": {
+        "safe_flags": (),
+        "message": "该命令无法在非交互模式下运行",
+    },
+    "htpasswd": {
+        "safe_flags": ("-b",),
+        "message": "请使用 -b 参数提供密码避免交互",
+    },
+}
 
 
 def _check_interactive(command: str) -> Optional[str]:
+    """Check if command is interactive and should be blocked.
+
+    Three severity levels:
+      1. _HARD_BLOCK — always blocked (needs TTY)
+      2. _BARE_REPL  — blocked only when run without arguments
+      3. _CONDITIONAL — blocked when safe flags are absent
+    """
     if not command or not command.strip():
         return None
     parts = command.strip().split(maxsplit=1)
     first_word = parts[0].strip()
-    has_args = len(parts) > 1 and parts[1].strip()
+    has_args = len(parts) > 1 and bool(parts[1].strip())
 
-    if first_word in _ALWAYS_INTERACTIVE:
+    if first_word in _HARD_BLOCK:
         return (f"错误：不支持交互式命令「{first_word}」。\n"
                 f"   该命令需要 TTY 终端，无法在后台管道模式下执行。")
 
-    if first_word in _DUAL_MODE and not has_args:
+    if first_word in _BARE_REPL and not has_args:
         return (f"错误：裸启动「{first_word}」会进入交互模式。\n"
                 f"   如需执行脚本，请提供参数，例如: {first_word} script.py")
 
+    if first_word in _CONDITIONAL:
+        entry = _CONDITIONAL[first_word]
+        if entry["safe_flags"]:
+            args_part = parts[1] if len(parts) > 1 else ""
+            if not any(flag in args_part for flag in entry["safe_flags"]):
+                return (f"⚠️ 警告：检测到可能交互的命令「{first_word}」。\n"
+                        f"   {entry['message']}")
+        else:
+            return (f"⚠️ 警告：检测到可能交互的命令「{first_word}」。\n"
+                    f"   {entry['message']}")
+
     return None
+
+
+_HARDENED_ENV: Final[dict] = {
+    # Disable pagers — prevents `less`/`more` from hanging on TTY-less pipe
+    "PAGER": "cat",
+    "GIT_PAGER": "cat",
+    "MANPAGER": "cat",
+    "SYSTEMD_PAGER": "cat",
+    "LESS": "FRXMK",
+    # Suppress editor prompts — prevents git/others from waiting for editor
+    "EDITOR": "true",
+    "GIT_EDITOR": "true",
+    "GIT_SEQUENCE_EDITOR": "true",
+    "GIT_MERGE_AUTOEDIT": "no",
+    # Suppress interactive auth prompts
+    "GIT_TERMINAL_PROMPT": "0",
+    "SSH_ASKPASS": "/usr/bin/false",
+    "SSH_ASKPASS_REQUIRE": "never",
+    # Prevent package managers from prompting
+    "DEBIAN_FRONTEND": "noninteractive",
+    "APT_LISTCHANGES_FRONTEND": "none",
+    "NEEDRESTART_MODE": "a",
+    # Mark as non-interactive CI context
+    "CI": "1",
+    "TERM": "dumb",
+}
 
 
 _SESSION_BREAKER_PATTERNS = [
@@ -112,6 +194,7 @@ class _BashSession:
 
     def start(self):
         """Spawn a new persistent bash subprocess (binary pipe mode)."""
+        merged_env = {**os.environ, **_HARDENED_ENV}
         self.process = subprocess.Popen(
             [_BASH_SHELL],
             stdin=subprocess.PIPE,
@@ -119,6 +202,7 @@ class _BashSession:
             stderr=subprocess.PIPE,
             bufsize=0,
             cwd=_bash_state.cwd,
+            env=merged_env,
             preexec_fn=os.setsid if hasattr(os, "setsid") else None,
         )
         self._started = True
@@ -393,7 +477,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "bash",
-            "description": "执行 shell 命令。使用持久化 bash 会话，命令之间的工作目录和上下文不重置。自动检测并阻止交互式命令。超时会自动重启会话。",
+            "description": "执行 shell 命令。使用持久化 bash 会话，命令之间的工作目录和上下文不重置。自动检测并阻止交互式命令（编辑器、REPL、数据库客户端、网络工具等），环境已预硬化（禁用翻页器/交互提示）。超时会自动重启会话。",
             "parameters": {
                 "type": "object",
                 "properties": {
