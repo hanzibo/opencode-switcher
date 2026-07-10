@@ -10,7 +10,21 @@ class _BashState:
         # Compute project root: tool_registry/_state.py → parent is project root
         self.default_cwd: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.cwd: str = self.default_cwd
-        self.session: Optional[Any] = None  # _BashSession instance, set by bash.py
+        # Dict-based session storage (future: multi-session support).
+        # The .session attribute is preserved as a backward-compat shortcut
+        # that delegates to _sessions["default"].
+        self._sessions: Dict[str, Any] = {}
+
+    @property
+    def session(self):
+        return self._sessions.get("default")
+
+    @session.setter
+    def session(self, val):
+        if val is None:
+            self._sessions.pop("default", None)
+        else:
+            self._sessions["default"] = val
 
 
 class _FileReadState:

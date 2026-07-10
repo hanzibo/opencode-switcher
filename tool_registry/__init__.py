@@ -65,6 +65,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "web_fetch": web.execute_web_fetch,
     # bash
     "bash": bash.execute_bash,
+    "bash_get_session_info": bash.execute_bash_get_session_info,
     # notification
     "send_notification": notification.execute_send_notification,
     # mail
@@ -139,4 +140,4 @@ remove_subagent_status = subagent.remove_subagent_status
 
 # ── Re-export web constants ─────────────────────────────────────────
 
-MAX_TOOL_RESULT_CHARS = 5000
+MAX_TOOL_RESULT_CHARS = 20000

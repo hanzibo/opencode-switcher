@@ -13,7 +13,7 @@ import requests
 
 
 # Max characters in a single tool result (to prevent token overflow)
-MAX_TOOL_RESULT_CHARS = 5000
+MAX_TOOL_RESULT_CHARS = 20000
 
 # Obscura headless browser binary (pre-installed)
 _OBSCURA_BIN = os.environ.get("OBSCURA_BIN") or os.path.expanduser("~/.local/bin/obscura")
