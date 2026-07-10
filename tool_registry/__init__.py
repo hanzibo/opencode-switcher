@@ -141,4 +141,5 @@ remove_subagent_status = subagent.remove_subagent_status
 
 # ── Re-export web constants ─────────────────────────────────────────
 
+from .web import _TOOL_CANCELLED as TOOL_CANCELLED  # noqa: F401
 MAX_TOOL_RESULT_CHARS = 20000

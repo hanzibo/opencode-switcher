@@ -20,19 +20,44 @@ MAX_TOOL_RESULT_CHARS = 20000
 _TOOL_CANCELLED = "工具调用已被用户取消"
 
 
+def _run_request_cancellable(url, headers, timeout, cancel_event,
+                             result_validator=None):
+    """Run requests.get with cancel_event support.
+    Returns (response, False) on success, or (None, True) if cancelled.
+    Raises requests.RequestException on HTTP errors."""
+    result_box = []
+    exc_box = []
+    def _do():
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            result_box.append(resp)
+        except requests.RequestException as e:
+            exc_box.append(e)
+    thread = threading.Thread(target=_do, daemon=True)
+    thread.start()
+    while thread.is_alive():
+        if cancel_event and cancel_event.is_set():
+            return None, True
+        thread.join(timeout=0.5)
+    if exc_box:
+        raise exc_box[0]
+    return result_box[0], False
+
+
 def _run_subprocess_cancellable(args, cancel_event, timeout, **kwargs):
     """Run subprocess with cancel_event support.
-    Returns (stdout_text, False) on success, or (None, True) if cancelled."""
+    Returns (stdout, False, returncode) on success, or (None, True, -1) if cancelled."""
     deadline = time.monotonic() + timeout
     process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs)
     try:
         while time.monotonic() < deadline:
             if cancel_event and cancel_event.is_set():
                 process.kill()
-                return None, True
+                return None, True, -1
             try:
                 stdout, _stderr = process.communicate(timeout=0.5)
-                return stdout, False
+                return stdout, False, process.returncode or 0
             except subprocess.TimeoutExpired:
                 continue
         process.kill()
@@ -101,13 +126,13 @@ def _execute_obscura_search(query: str, max_results: int,
     url = f"https://html.duckduckgo.com/html/?q={encoded}"
     js = _OBSCURA_EVAL_TPL % max_results
     try:
-        stdout, cancelled = _run_subprocess_cancellable(
+        stdout, cancelled, returncode = _run_subprocess_cancellable(
             [_OBSCURA_BIN, "fetch", url, "--quiet", "--eval", js, "--timeout", "20"],
             cancel_event, timeout=30,
         )
         if cancelled:
             return _TOOL_CANCELLED
-        if not stdout:
+        if returncode != 0 or not stdout:
             return None
         output = stdout.strip()
         if not output:
@@ -233,22 +258,12 @@ def _execute_duckduckgo_search(query: str, max_results: int,
                        "Chrome/145.0.0.0 Safari/537.36")
     }
     # Run HTTP request in a thread so cancel_event can be polled
-    result_box = []
-    exc_box = []
-    def _request():
-        try:
-            result_box.append(requests.get(url, headers=headers, timeout=15))
-        except requests.RequestException as e:
-            exc_box.append(e)
-    thread = threading.Thread(target=_request, daemon=True)
-    thread.start()
-    while thread.is_alive():
-        if cancel_event and cancel_event.is_set():
+    try:
+        resp, cancelled = _run_request_cancellable(url, headers, 15, cancel_event)
+        if cancelled:
             return _TOOL_CANCELLED
-        thread.join(timeout=0.5)
-    if exc_box:
-        return f"搜索失败：{exc_box[0]}"
-    resp = result_box[0]
+    except requests.RequestException as e:
+        return f"搜索失败：{e}"
     if _is_duckduckgo_captcha(resp.text):
         return ("DuckDuckGo 搜索暂时被拦截（CAPTCHA 验证）。\n"
                 "当前为直连请求回退路径，搜索会被 CAPTCHA 拦截。")
@@ -327,22 +342,12 @@ def _try_requests_fetch(url: str, max_chars: int, timeout: int = 20,
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
                        "Chrome/145.0.0.0 Safari/537.36")
     }
-    result_box = []
-    exc_box = []
-    def _req():
-        try:
-            result_box.append(requests.get(url, headers=headers, timeout=timeout))
-        except requests.RequestException as e:
-            exc_box.append(e)
-    thread = threading.Thread(target=_req, daemon=True)
-    thread.start()
-    while thread.is_alive():
-        if cancel_event and cancel_event.is_set():
+    try:
+        resp, cancelled = _run_request_cancellable(url, headers, timeout, cancel_event)
+        if cancelled:
             return None
-        thread.join(timeout=0.5)
-    if exc_box:
+    except requests.RequestException:
         return None
-    resp = result_box[0]
 
     trafilatura_text = _extract_with_trafilatura(resp.text)
     if trafilatura_text:
@@ -374,12 +379,14 @@ def _try_obscura_fetch(url: str, max_chars: int, timeout: int = 20,
         return "获取页面失败：Obscura 不可用"
     obs_timeout = max(10, timeout)
     try:
-        stdout, cancelled = _run_subprocess_cancellable(
+        stdout, cancelled, returncode = _run_subprocess_cancellable(
             [_OBSCURA_BIN, "fetch", url, "--dump", "markdown", "--quiet", "--timeout", str(obs_timeout)],
             cancel_event, timeout=obs_timeout + 10,
         )
         if cancelled:
             return _TOOL_CANCELLED
+        if returncode != 0:
+            return f"获取页面失败：Obscura 返回错误码 {returncode}"
         text = stdout.strip() if stdout else ""
         if not text:
             return "获取页面失败：Obscura 返回空内容"

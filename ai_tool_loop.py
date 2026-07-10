@@ -200,7 +200,7 @@ def _perform_llm_call(
                             "role": "tool",
                             "tool_call_id": remaining_tc.get("id", ""),
                             "name": remaining_tc.get("function", {}).get("name", ""),
-                            "content": "工具调用已被用户取消",
+                            "content": tool_registry.TOOL_CANCELLED,
                         })
                     return False
                 append_message_fn({

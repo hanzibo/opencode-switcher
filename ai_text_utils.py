@@ -670,7 +670,7 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
     
     if tool_result_msg:
         content = tool_result_msg.get("content", "")
-        if content.strip() == "工具调用已被用户取消":
+        if content.strip() == tool_registry.TOOL_CANCELLED:
             status_icon = "⚠️"
         elif content.strip().startswith(tool_registry.ERROR_PREFIXES):
             status_icon = "❌"
