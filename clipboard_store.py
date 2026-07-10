@@ -744,6 +744,9 @@ class ConversationStore:
             return None
 
     def delete_conversation(self, conv_id: str):
+        # Kill the corresponding bash session before removing data
+        from tool_registry import close_bash_session
+        close_bash_session(conv_id)
         path = self._path(conv_id)
         try:
             if os.path.isfile(path):

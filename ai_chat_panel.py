@@ -1678,7 +1678,7 @@ class AIChatPanel(Gtk.Box):
             buf.set_text("")
             arg = text[len("/cd "):].strip()
             from tool_registry import set_bash_cwd
-            result = set_bash_cwd(arg)
+            result = set_bash_cwd(arg, session_key=self._ai_conversation_id)
             self.append_html_to_webview(
                 f'<div style="color: #38bdf8; padding: 8px 12px; margin: 4px 0; '
                 f'border: 1px solid #38bdf8; border-radius: 6px; font-size: 13px;">'
@@ -2857,7 +2857,7 @@ class AIChatPanel(Gtk.Box):
 
         # Set initial folder to current bash CWD if valid
         from tool_registry import get_bash_cwd
-        current_cwd = get_bash_cwd()
+        current_cwd = get_bash_cwd(session_key=self._ai_conversation_id)
         if os.path.isdir(current_cwd):
             dialog.set_current_folder(current_cwd)
 
@@ -2867,7 +2867,7 @@ class AIChatPanel(Gtk.Box):
                 dlg.destroy()
                 if chosen:
                     from tool_registry import set_bash_cwd
-                    result = set_bash_cwd(chosen)
+                    result = set_bash_cwd(chosen, session_key=self._ai_conversation_id)
                     self.append_html_to_webview(
                         f'<div style="color: #38bdf8; padding: 8px 12px; margin: 4px 0; '
                         f'border: 1px solid #38bdf8; border-radius: 6px; font-size: 13px;">'
