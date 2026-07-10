@@ -748,7 +748,6 @@ class AIChatPanel(Gtk.Box):
             if active_state:
                 active_state["cancel_event"].set()
                 self._ai_running_convs.pop(self._ai_conversation_id, None)
-            self._ai_cancel_event.set()  # fallback
             self._llm_client.cancel_active_request()
             self._flush_stream_queue()
             self._update_send_button(False)
@@ -917,7 +916,14 @@ class AIChatPanel(Gtk.Box):
             if st:
                 st["messages"].append(msg)
             if self._ai_conversation_id == conv_id:
-                self._ai_messages = st["messages"] if st else self._ai_messages
+                if st:
+                    self._ai_messages = st["messages"]
+                else:
+                    # State was popped (e.g. pause during tool execution).
+                    # Append directly to keep message history valid.
+                    self._ai_messages.append(msg)
+                    if msg.get("role") == "tool" and self._ai_streaming is False:
+                        GLib.idle_add(self._re_render_after_tool_cancel)
                 GLib.idle_add(self._render_current_assistant_message, req_id)
 
         def set_reasoning_callback(text):
@@ -1604,7 +1610,6 @@ class AIChatPanel(Gtk.Box):
             if active_state:
                 active_state["cancel_event"].set()
                 self._ai_running_convs.pop(self._ai_conversation_id, None)
-            self._ai_cancel_event.set()  # fallback
             self._llm_client.cancel_active_request()
             self._flush_stream_queue()
             self._update_send_button(False, sensitive=False)
@@ -1779,6 +1784,17 @@ class AIChatPanel(Gtk.Box):
             self._ai_streaming = False
             self._ai_spinner.stop()
             self._ai_spinner.hide()
+
+    def _re_render_after_tool_cancel(self):
+        """Re-render and save conversation after tool result appended post-cancel."""
+        if self._ai_streaming:
+            return
+        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+        self._render_markdown(self._ai_markdown_text)
+        try:
+            self._save_current_conversation(self._build_model_snapshot())
+        except Exception:
+            pass
 
     def _build_conversation_rounds(self, msgs: list) -> list:
         """将消息列表聚合为以 user 提问为起点的轮次结构列表。
