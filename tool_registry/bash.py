@@ -3,6 +3,7 @@
 import os
 import re
 import select
+import shlex
 import subprocess
 import tempfile
 import time
@@ -42,6 +43,10 @@ _CONDITIONAL: Final[dict] = {
     },
     "openssl": {
         "safe_flags": ("-subj", "-pass", "-k"),
+        "safe_subcommands": ("version", "help", "enc", "dgst", "rand",
+                             "speed", "prime", "genrsa", "genpkey",
+                             "x509", "pkcs12", "pkey",
+                             "verify", "list", "ciphers", "ecparam"),
         "message": "请提供 -subj（证书请求）或 -pass（加密）参数避免交互",
     },
     "gpg": {
@@ -91,14 +96,31 @@ def _check_interactive(command: str) -> Optional[str]:
 
     if first_word in _CONDITIONAL:
         entry = _CONDITIONAL[first_word]
-        if entry["safe_flags"]:
+        safe_flags = entry.get("safe_flags", ())
+        safe_subcmds = entry.get("safe_subcommands", ())
+
+        # If command has a subcommand that is known safe, let it through
+        if safe_subcmds and len(parts) > 1:
+            subcmd = parts[1].strip().split(maxsplit=1)[0]
+            if subcmd in safe_subcmds:
+                return None
+
+        # Check whether safe flags are present (token-level match)
+        if safe_flags:
             args_part = parts[1] if len(parts) > 1 else ""
-            if not any(flag in args_part for flag in entry["safe_flags"]):
-                return (f"⚠️ 警告：检测到可能交互的命令「{first_word}」。\n"
-                        f"   {entry['message']}")
-        else:
+            if has_args:
+                try:
+                    args_tokens = shlex.split(args_part)
+                except ValueError:
+                    args_tokens = args_part.split()
+                if any(flag in args_tokens for flag in safe_flags):
+                    return None
             return (f"⚠️ 警告：检测到可能交互的命令「{first_word}」。\n"
                     f"   {entry['message']}")
+
+        # No safe_flags defined — always intercept
+        return (f"⚠️ 警告：检测到可能交互的命令「{first_word}」。\n"
+                f"   {entry['message']}")
 
     return None
 
@@ -346,7 +368,6 @@ class _BashSession:
 
 def set_bash_cwd(path: str) -> str:
     """Set the working directory for the bash session."""
-    import shlex
     path = os.path.abspath(os.path.expanduser(path.strip()))
     if not os.path.exists(path):
         return f"❌ 路径不存在：{path}"
@@ -465,11 +486,21 @@ def execute_bash_get_session_info() -> str:
     session = _bash_state.session
     active = (session is not None and session._started
               and session.process is not None and session.process.poll() is None)
-    return (
-        f"📋 Bash 会话信息\n"
-        f"  工作目录: {cwd}\n"
-        f"  会话状态: {'活跃' if active else '未启动/已终止'}"
-    )
+    pid = session.process.pid if active else None
+    parts = [
+        f"📋 Bash 会话信息",
+        f"  工作目录: {cwd}",
+    ]
+    if active and pid is not None:
+        parts.append(f"  会话状态: 活跃")
+        parts.append(f"  进程 PID: {pid}")
+        parts.append("")
+        parts.append("💡 如有必要请使用 `kill <PID>` 精确终止此会话，")
+        parts.append("   切勿使用 pkill -9 -f \"bash\" 或 killall bash，")
+        parts.append("   否则会误杀系统上其他 bash 进程。")
+    else:
+        parts.append(f"  会话状态: {'未启动/已终止'}")
+    return "\n".join(parts)
 
 
 TOOL_SCHEMAS = [
@@ -494,7 +525,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "bash_get_session_info",
-            "description": "获取当前 Bash 会话的状态信息，包括工作目录和会话是否活跃。帮助 AI 感知当前执行环境。",
+            "description": "获取当前 Bash 会话的状态信息，包括工作目录、进程 PID 和会话是否活跃。返回信息包含安全提示：如需终止会话应使用 kill <PID> 而非 pkill/pkill -f，防止误杀。",
             "parameters": {
                 "type": "object",
                 "properties": {}
