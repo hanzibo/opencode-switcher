@@ -176,7 +176,7 @@ def _perform_llm_call(
 
             flush_stream_queue_fn()
 
-            for tc in tool_calls_found:
+            for tc_idx, tc in enumerate(tool_calls_found):
                 if get_current_request_id_fn() != req_id:
                     return False
                 tc_name = tc.get("function", {}).get("name", "")
@@ -186,14 +186,29 @@ def _perform_llm_call(
                     result = tool_registry.execute_tool_call(tc, cancel_event=cancel_event)
                 if get_current_request_id_fn() != req_id:
                     return False
+                if cancel_event and cancel_event.is_set():
+                    # Append result for the cancelled tool itself
+                    append_message_fn({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "name": tc_name,
+                        "content": result,
+                    })
+                    # Then append cancelled results for remaining unexecuted tools
+                    for remaining_tc in tool_calls_found[tc_idx + 1:]:
+                        append_message_fn({
+                            "role": "tool",
+                            "tool_call_id": remaining_tc.get("id", ""),
+                            "name": remaining_tc.get("function", {}).get("name", ""),
+                            "content": "工具调用已被用户取消",
+                        })
+                    return False
                 append_message_fn({
                     "role": "tool",
                     "tool_call_id": tc.get("id", ""),
                     "name": tc_name,
                     "content": result,
                 })
-                if cancel_event and cancel_event.is_set():
-                    return False
 
             if cancel_event and cancel_event.is_set():
                 return False

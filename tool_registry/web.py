@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 import urllib.parse
 from html.parser import HTMLParser
@@ -14,6 +15,32 @@ import requests
 
 # Max characters in a single tool result (to prevent token overflow)
 MAX_TOOL_RESULT_CHARS = 20000
+
+# Returned when user cancels during tool execution
+_TOOL_CANCELLED = "工具调用已被用户取消"
+
+
+def _run_subprocess_cancellable(args, cancel_event, timeout, **kwargs):
+    """Run subprocess with cancel_event support.
+    Returns (stdout_text, False) on success, or (None, True) if cancelled."""
+    deadline = time.monotonic() + timeout
+    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kwargs)
+    try:
+        while time.monotonic() < deadline:
+            if cancel_event and cancel_event.is_set():
+                process.kill()
+                return None, True
+            try:
+                stdout, _stderr = process.communicate(timeout=0.5)
+                return stdout, False
+            except subprocess.TimeoutExpired:
+                continue
+        process.kill()
+        raise subprocess.TimeoutExpired(args, timeout)
+    finally:
+        if process.returncode is None:
+            process.kill()
+            process.wait()
 
 # Obscura headless browser binary (pre-installed)
 _OBSCURA_BIN = os.environ.get("OBSCURA_BIN") or os.path.expanduser("~/.local/bin/obscura")
@@ -66,20 +93,23 @@ def _format_search_results(results: List[Dict[str, str]], query: str) -> str:
     return result_text
 
 
-def _execute_obscura_search(query: str, max_results: int) -> Optional[str]:
+def _execute_obscura_search(query: str, max_results: int,
+                            cancel_event: Optional[threading.Event] = None) -> Optional[str]:
     if not os.path.isfile(_OBSCURA_BIN):
         return None
     encoded = urllib.parse.quote(query)
     url = f"https://html.duckduckgo.com/html/?q={encoded}"
     js = _OBSCURA_EVAL_TPL % max_results
     try:
-        result = subprocess.run(
+        stdout, cancelled = _run_subprocess_cancellable(
             [_OBSCURA_BIN, "fetch", url, "--quiet", "--eval", js, "--timeout", "20"],
-            capture_output=True, text=True, timeout=30,
+            cancel_event, timeout=30,
         )
-        if result.returncode != 0:
+        if cancelled:
+            return _TOOL_CANCELLED
+        if not stdout:
             return None
-        output = result.stdout.strip()
+        output = stdout.strip()
         if not output:
             return None
         parsed = json.loads(output)
@@ -193,7 +223,8 @@ def _is_duckduckgo_captcha(html_text: str) -> bool:
     return "anomaly-modal" in html_text or "challenge-form" in html_text
 
 
-def _execute_duckduckgo_search(query: str, max_results: int) -> str:
+def _execute_duckduckgo_search(query: str, max_results: int,
+                               cancel_event: Optional[threading.Event] = None) -> str:
     encoded = urllib.parse.quote(query)
     url = f"https://html.duckduckgo.com/html/?q={encoded}"
     headers = {
@@ -201,11 +232,23 @@ def _execute_duckduckgo_search(query: str, max_results: int) -> str:
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
                        "Chrome/145.0.0.0 Safari/537.36")
     }
-    try:
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        return f"搜索失败：{e}"
+    # Run HTTP request in a thread so cancel_event can be polled
+    result_box = []
+    exc_box = []
+    def _request():
+        try:
+            result_box.append(requests.get(url, headers=headers, timeout=15))
+        except requests.RequestException as e:
+            exc_box.append(e)
+    thread = threading.Thread(target=_request, daemon=True)
+    thread.start()
+    while thread.is_alive():
+        if cancel_event and cancel_event.is_set():
+            return _TOOL_CANCELLED
+        thread.join(timeout=0.5)
+    if exc_box:
+        return f"搜索失败：{exc_box[0]}"
+    resp = result_box[0]
     if _is_duckduckgo_captcha(resp.text):
         return ("DuckDuckGo 搜索暂时被拦截（CAPTCHA 验证）。\n"
                 "当前为直连请求回退路径，搜索会被 CAPTCHA 拦截。")
@@ -218,14 +261,19 @@ def _execute_duckduckgo_search(query: str, max_results: int) -> str:
     return _format_search_results(results, query)
 
 
-def execute_web_search(query: str, max_results: int = 5) -> str:
+def execute_web_search(query: str, max_results: int = 5,
+                       cancel_event: Optional[threading.Event] = None) -> str:
     """Execute a web search. Uses direct DuckDuckGo HTTP as primary path (fast),
     falls back to Obscura headless browser if DuckDuckGo is blocked."""
     max_results = max(1, min(10, max_results))
-    result = _execute_duckduckgo_search(query, max_results)
+    result = _execute_duckduckgo_search(query, max_results, cancel_event=cancel_event)
+    if result == _TOOL_CANCELLED:
+        return result
     if not result.startswith(("DuckDuckGo", "搜索失败")):
         return result
-    result = _execute_obscura_search(query, max_results)
+    result = _execute_obscura_search(query, max_results, cancel_event=cancel_event)
+    if result == _TOOL_CANCELLED:
+        return result
     if result is not None:
         return result
     return "搜索失败：所有搜索路径均不可用。"
@@ -272,17 +320,29 @@ def _extract_with_trafilatura(html_text: str) -> Optional[str]:
     return None
 
 
-def _try_requests_fetch(url: str, max_chars: int, timeout: int = 20) -> Optional[str]:
+def _try_requests_fetch(url: str, max_chars: int, timeout: int = 20,
+                        cancel_event: Optional[threading.Event] = None) -> Optional[str]:
     headers = {
         "User-Agent": ("Mozilla/5.0 (X11; Linux x86_64) "
                        "AppleWebKit/537.36 (KHTML, like Gecko) "
                        "Chrome/145.0.0.0 Safari/537.36")
     }
-    try:
-        resp = requests.get(url, headers=headers, timeout=timeout)
-        resp.raise_for_status()
-    except requests.RequestException:
+    result_box = []
+    exc_box = []
+    def _req():
+        try:
+            result_box.append(requests.get(url, headers=headers, timeout=timeout))
+        except requests.RequestException as e:
+            exc_box.append(e)
+    thread = threading.Thread(target=_req, daemon=True)
+    thread.start()
+    while thread.is_alive():
+        if cancel_event and cancel_event.is_set():
+            return None
+        thread.join(timeout=0.5)
+    if exc_box:
         return None
+    resp = result_box[0]
 
     trafilatura_text = _extract_with_trafilatura(resp.text)
     if trafilatura_text:
@@ -308,18 +368,19 @@ def _try_requests_fetch(url: str, max_chars: int, timeout: int = 20) -> Optional
     return text
 
 
-def _try_obscura_fetch(url: str, max_chars: int, timeout: int = 20) -> str:
+def _try_obscura_fetch(url: str, max_chars: int, timeout: int = 20,
+                       cancel_event: Optional[threading.Event] = None) -> str:
     if not os.path.isfile(_OBSCURA_BIN):
         return "获取页面失败：Obscura 不可用"
     obs_timeout = max(10, timeout)
     try:
-        result = subprocess.run(
+        stdout, cancelled = _run_subprocess_cancellable(
             [_OBSCURA_BIN, "fetch", url, "--dump", "markdown", "--quiet", "--timeout", str(obs_timeout)],
-            capture_output=True, text=True, timeout=obs_timeout + 10,
+            cancel_event, timeout=obs_timeout + 10,
         )
-        if result.returncode != 0:
-            return f"获取页面失败：Obscura 返回错误码 {result.returncode}"
-        text = result.stdout.strip()
+        if cancelled:
+            return _TOOL_CANCELLED
+        text = stdout.strip() if stdout else ""
         if not text:
             return "获取页面失败：Obscura 返回空内容"
     except (subprocess.TimeoutExpired, subprocess.CalledProcessError,
@@ -331,7 +392,8 @@ def _try_obscura_fetch(url: str, max_chars: int, timeout: int = 20) -> str:
     return text
 
 
-def execute_web_fetch(url: str, max_chars: int = 5000, timeout: int = 20) -> str:
+def execute_web_fetch(url: str, max_chars: int = 5000, timeout: int = 20,
+                      cancel_event: Optional[threading.Event] = None) -> str:
     """Fetch a page's content as plain text.
     Tries plain HTTP requests fast first; falls back to Obscura headless browser."""
     max_chars = max(500, min(20000, max_chars))
@@ -341,12 +403,14 @@ def execute_web_fetch(url: str, max_chars: int = 5000, timeout: int = 20) -> str
     if cached is not None:
         return cached
 
-    result = _try_requests_fetch(url, max_chars, timeout)
+    result = _try_requests_fetch(url, max_chars, timeout, cancel_event=cancel_event)
     if result is not None:
         _set_cached_fetch(url, result)
         return result
+    if cancel_event and cancel_event.is_set():
+        return _TOOL_CANCELLED
 
-    result = _try_obscura_fetch(url, max_chars, timeout)
+    result = _try_obscura_fetch(url, max_chars, timeout, cancel_event=cancel_event)
     _set_cached_fetch(url, result)
     return result
 
