@@ -10,18 +10,31 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ├── main.py                 # Entrypoint: flock lock, App(), Gtk.main() (~281 lines)
 ├── panel.py                # Search panel (~1387 lines) — tab switcher, slash cmds, CSS, evdev injection
 ├── clipboard_panel.py      # Clipboard panel container (~2161 lines) — assembles subcomponents + event routing
-├── ai_chat_panel.py        # AI assistant sidebar (~2890 lines) — WebView, LLM dialog, ReAct tool calls
-├── clipboard_store.py      # Store: classification, categories, prompts, LLM config, conversations (~1069 lines, 12 classes, 7 dataclasses)
-├── tool_registry.py        # 24 AI tools, ReAct dispatcher, HTML formatting (~4960 lines, 91 functions)
+├── ai_chat_panel.py        # AI assistant sidebar (~2906 lines) — WebView, LLM dialog, ReAct tool calls
+├── clipboard_store.py      # Store: classification, categories, prompts, LLM config, conversations (~1072 lines, 12 classes, 7 dataclasses)
+├── trojan_registry/        # Split into package — 25 tools across 12 modules
+│   ├── __init__.py         # Assembles TOOL_DEFINITIONS, TOOL_EXECUTORS dispatch dict (~145 lines)
+│   ├── bash.py             # Bash execution — persistent session, sentinel protocol, multi-session isolation (~554 lines)
+│   ├── web.py              # web_search/web_fetch — Obscura + DuckDuckGo, cancel_event support (~457 lines)
+│   ├── filesystem.py       # File read/write/edit/delete/rename — safe-path guarded (~743 lines)
+│   ├── code_analysis.py    # get_code_metrics, find_project_dependencies, parse_file_ast (~1049 lines)
+│   ├── subagent.py         # sub_agent, get_subagent_status — parallel isolated execution (~487 lines)
+│   ├── search.py           # grep_search, glob_find — ripgrep/glob wrappers (~399 lines)
+│   ├── todo.py             # todo_create/update/list — persistent task management (~322 lines)
+│   ├── mail.py             # read_qq_mail — IMAP QQ mailbox reader (~263 lines)
+│   ├── display.py          # format_tool_calls_for_display, render_collapsible_tool_result (~235 lines)
+│   ├── common.py           # get_current_time, ask_user_question (~126 lines)
+│   ├── notification.py     # send_notification — desktop notify-send (~102 lines)
+│   └── _state.py           # Shared module-level state (bash session, file read state) (~48 lines)
+├── ai_tool_loop.py         # ReAct tool calling loop (~238 lines), MAX_TOOL_ITERATIONS=25
+├── ai_html_template.py     # WebView HTML + KaTeX inline embedding + lightbox/zoom (~1183 lines)
+├── ai_text_utils.py        # Pure markdown/math/vision helpers, zero GTK dep (~847 lines)
+├── ai_popovers.py          # AI command autocomplete + history popovers (~522 lines)
 ├── session_store.py        # SQLite reader + live-session detection (~202 lines)
 ├── launcher.py             # Terminal auto-detection + session spawner (~128 lines)
 ├── hotkey.py               # pynput (X11) + Unix socket (Wayland) — only 87 lines
 ├── utils.py                # is_wayland(), relative_time(), request_window_focus(), dirs (~49 lines)
 ├── llm_client.py           # LLM HTTP client + _ToolCallAccumulator (~349 lines)
-├── ai_tool_loop.py         # ReAct tool calling loop (~218 lines), MAX_TOOL_ITERATIONS=25
-├── ai_html_template.py     # WebView HTML + KaTeX inline embedding + lightbox/zoom (~1183 lines)
-├── ai_text_utils.py        # Pure markdown/math/vision helpers, zero GTK dep (~839 lines)
-├── ai_popovers.py          # AI command autocomplete + history popovers (~522 lines)
 ├── prompts_config_dialog.py # Prompts/LLM-config dialog (~910 lines)
 ├── prompt_dialog.py        # Create/edit prompt dialog (~77 lines)
 ├── settings_dialog.py      # Tabbed settings dialog (~217 lines) — QQ Mail credential config, extensible
@@ -49,7 +62,7 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 ### Tribal Knowledge
 | Path | Contents |
 |------|----------|
-| `.hzb-agents/experience/` | ~105 per-feature postmortems — pitfalls, solutions, reasoning |
+| `.hzb-agents/experience/` | ~108 per-feature postmortems — pitfalls, solutions, reasoning |
 | `.omo/plans/` | 41 structured work plans from past development |
 | `.omo/evidence/` | 2 verification artifacts |
 
@@ -121,10 +134,13 @@ Python 3 + GTK3 + AyatanaAppIndicator. No CI/linter/formatter/typechecker. No au
 - Conversation HTML caching: history switching renders from cached HTML instead of re-rendering
 
 ### AI Tool Calling (ReAct Loop)
-- **Architecture**: `llm_client.py` (`_LLMHttpClient`, `_ToolCallAccumulator` for SSE delta accumulation) → `ai_tool_loop.py` (`run_llm_react_loop` — max 25 iterations) → `tool_registry.py` (24 tool executors)
+- **Architecture**: `llm_client.py` (`_LLMHttpClient`, `_ToolCallAccumulator` for SSE delta accumulation) → `ai_tool_loop.py` (`run_llm_react_loop` — max 25 iterations) → `tool_registry/` (25 tool executors across 12 modules)
 - LLM streams → if `finish_reason: "tool_calls"`, accumulate deltas → execute synchronously via `tool_registry.execute_tool_call()` → feed result back as `role: "tool"` → repeat
-- Tool calls support cancellation via `cancel_event` propagated through all executors
-- **24 tools**: `web_search` / `web_fetch` (Obscura browser + trafilatura extraction), `list_directory` / `read_file` (supports line range) / `grep_search` / `glob_find` / `file_info` (safe-path guarded), `get_current_time`, `ask_user_question`, `write_file`, `edit_file` (exact-string replace with staleness check), `delete_file` / `rename_file` (file management), `todo_create` / `todo_update` / `todo_list` (persistent task management, priority display, secondary sort), `bash` (persistent bash session, supports `restart` and `timeout` params), `send_notification` (desktop notify-send), `sub_agent` (parallel isolated task execution with `max_tokens` param), `get_subagent_status` (poll/filter/auto-cleanup/clear_completed), `read_qq_mail` (IMAP QQ mailbox reader), `get_code_metrics` (code line count and structure analysis with include/exclude/sort_by), `find_project_dependencies` (dependency graph, circular import detection, module layering, unused export detection), `parse_file_ast` (AST-based analysis with meta summary, line ranges, include_body for class methods)
+- Tool calls support cancellation via `cancel_event` propagated through all executors. Cancel behavior varies:
+  - **bash**: `select.poll(50ms)` detects cancel → kills process group immediately
+  - **web_search/web_fetch**: `thread.join(500ms)` or `Popen.communicate(500ms)` — cancels within 500ms
+  - **other tools**: no cancel check (instant operations)
+- **25 tools**: `web_search` / `web_fetch` (Obscura browser + trafilatura extraction), `list_directory` / `read_file` (supports line range) / `grep_search` / `glob_find` / `file_info` (safe-path guarded), `get_current_time`, `ask_user_question`, `write_file`, `edit_file` (exact-string replace with staleness check), `delete_file` / `rename_file` (file management), `todo_create` / `todo_update` / `todo_list` (persistent task management, priority display, secondary sort), `bash` (persistent bash session, supports `restart` and `timeout` params), `bash_get_session_info`, `send_notification` (desktop notify-send), `sub_agent` (parallel isolated task execution with `max_tokens` param), `get_subagent_status` (poll/filter/auto-cleanup/clear_completed), `read_qq_mail` (IMAP QQ mailbox reader), `get_code_metrics` (code line count and structure analysis with include/exclude/sort_by), `find_project_dependencies` (dependency graph, circular import detection, module layering, unused export detection), `parse_file_ast` (AST-based analysis with meta summary, line ranges, include_body for class methods)
 - Tool results rendered as collapsible `<pre>` sections in WebView
 - `TOOL_CHOICE_AUTO` configurable per request
 
@@ -221,14 +237,14 @@ Note: `KillMode=process` in the service file means systemd only kills the script
 
 | File | Lines | Nature |
 |------|-------|--------|
-| `tool_registry.py` | 4960 | 24 tools, 3 classes + HTML formatting — verbose OpenAI JSON schemas account for size; grew with get_code_metrics, find_project_dependencies, parse_file_ast, read_qq_mail, sub_agent status |
-| `ai_chat_panel.py` | 2890 | AIChatPanel UI, WebView, LLM orchestration, stream+tool rendering, round nav, lightbox, subagent status bar, conversation caching |
+| `tool_registry/` | 4930 | 25 tools across 12 modules — split from monolithic tool_registry.py; code_analysis (1049), filesystem (743), bash (554), subagent (487), web (457), search (399), todo (322), mail (263), display (235) |
+| `ai_chat_panel.py` | 2906 | AIChatPanel UI, WebView, LLM orchestration, stream+tool rendering, round nav, lightbox, subagent status bar, conversation caching |
 | `clipboard_panel.py` | 2161 | Large — was 7713 before extracting 11 modules + ai_chat_panel.py |
 | `panel.py` | 1387 | Gatekeeper — 25+ event handlers. CSS-in-code (~140 lines template string). |
 | `ai_html_template.py` | 1183 | WebView HTML template + KaTeX + lightbox JS + round nav CSS — grew significantly with visual features |
-| `clipboard_store.py` | 1069 | God module — 12 classes (7 dataclasses, 5 stores): classification, clipboard storage, categories, conversation persistence, LLM settings, prompts |
+| `clipboard_store.py` | 1072 | God module — 12 classes (7 dataclasses, 5 stores): classification, clipboard storage, categories, conversation persistence, LLM settings, prompts |
 | `prompts_config_dialog.py` | 910 | 910-line single dialog class |
-| `ai_text_utils.py` | 839 | Pure markdown/math/vision helpers, zero GTK dep |
+| `ai_text_utils.py` | 847 | Pure markdown/math/vision helpers, zero GTK dep |
 | `gnome-extension/extension.js` | 350 | Compact but duplicates ~150 lines of classification logic |
 
 **Remaining refactoring candidates**: (1) `ClipboardPanel` still co-located with `clipboard_panel.py` (2161 lines) — worth extracting to own module. (2) Extract shared `classify_text()` module for Python and JS. (3) Prompts config dialog is standalone but 910 lines. (4) `clipboard_store/` dir exists empty — possible package migration target. (5) `settings_dialog.py` factory pattern works but the QQ Mail tab is the first user of this extensibility — future tabs should follow same `_tabs` registry.
