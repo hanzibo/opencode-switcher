@@ -1,6 +1,7 @@
 """Bash execution tool — persistent bash session with command execution."""
 
 import os
+import re
 import select
 import subprocess
 import tempfile
@@ -58,8 +59,7 @@ def _check_session_breaker(command: str) -> Optional[str]:
     if not command or not command.strip():
         return None
     for pattern, msg in _SESSION_BREAKER_PATTERNS:
-        import re as _re
-        if _re.search(pattern, command):
+        if re.search(pattern, command):
             return f"⚠️ 检测到可能中断会话的命令：{msg}"
     return None
 
