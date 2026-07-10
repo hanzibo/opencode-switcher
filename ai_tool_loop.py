@@ -192,6 +192,11 @@ def _perform_llm_call(
                     "name": tc_name,
                     "content": result,
                 })
+                if cancel_event and cancel_event.is_set():
+                    return False
+
+            if cancel_event and cancel_event.is_set():
+                return False
 
             if iteration + 1 >= MAX_TOOL_ITERATIONS:
                 append_message_fn({

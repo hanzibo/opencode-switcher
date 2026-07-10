@@ -27,7 +27,7 @@ from . import code_analysis as _code_analysis
 
 TOOL_CHOICE_AUTO = "auto"
 
-ERROR_PREFIXES = ("❌", "错误：", "执行工具「", "搜索失败", "获取页面失败", "子代理")
+ERROR_PREFIXES = ("❌", "⚠️", "错误：", "执行工具「", "搜索失败", "获取页面失败", "子代理")
 
 
 # ── Assemble TOOL_DEFINITIONS from per-module TOOL_SCHEMAS ──────────
