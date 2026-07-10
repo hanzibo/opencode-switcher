@@ -248,16 +248,21 @@ def _strip_ai_markup(text: str) -> str:
 
 def _escape_tool_results(text: str) -> Tuple[str, List[str]]:
     """Scan the text for tool result box HTML chunks and escape them using placeholders."""
-    # Matches the outer tool-result-box up to the marker comment, anchored to start/end of line
-    pattern = re.compile(r'(?:^|\n)(<div class="tool-result-box">.*?<!-- tool-result-marker -->)(?=\n|$)', re.DOTALL)
     placeholders = []
 
-    def repl(match):
+    def _repl(match):
         placeholder = f"\n<!--TOOL_RESULT_PLACEHOLDER_{len(placeholders)}-->"
         placeholders.append(match.group(1))
         return placeholder
 
-    escaped_text = pattern.sub(repl, text)
+    # Pattern 1: tool-result-box (collapsible preview from display.py)
+    pattern1 = re.compile(r'(?:^|\n)(<div class="tool-result-box">.*?<!-- tool-result-marker -->)(?=\n|$)', re.DOTALL)
+    escaped_text = pattern1.sub(_repl, text)
+
+    # Pattern 2: tool-step-details (tool execution steps from conversation HTML)
+    # Protects tool step HTML from being mangled by the markdown renderer.
+    pattern2 = re.compile(r'(?:^|\n)(<details class="tool-step-details">.*?<!-- tool-step-marker -->)(?=\n|$)', re.DOTALL)
+    escaped_text = pattern2.sub(_repl, escaped_text)
     return escaped_text, placeholders
 
 
@@ -695,6 +700,7 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
         f'{result_html}'
         f'</div>\n'
         f'</details>\n'
+        f'<!-- tool-step-marker -->\n'
     )
 
 
