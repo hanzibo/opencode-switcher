@@ -14,6 +14,8 @@ class _BashState:
         # The .session attribute is preserved as a backward-compat shortcut
         # that delegates to _sessions["default"].
         self._sessions: Dict[str, Any] = {}
+        # Per-session working directories.
+        self._cwds: Dict[str, str] = {}
 
     @property
     def session(self):
@@ -25,6 +27,15 @@ class _BashState:
             self._sessions.pop("default", None)
         else:
             self._sessions["default"] = val
+
+    def get_cwd(self, key: str) -> str:
+        """Return the working directory for a given session key."""
+        return self._cwds.get(key, self.default_cwd)
+
+    def set_cwd(self, key: str, path: str):
+        """Set the working directory for a given session key."""
+        self._cwds[key] = path
+        self.cwd = path
 
 
 class _FileReadState:

@@ -125,6 +125,7 @@ format_tool_result_for_display = display.format_tool_result_for_display
 
 set_bash_cwd = bash.set_bash_cwd
 get_bash_cwd = bash.get_bash_cwd
+close_bash_session = bash.close_bash_session
 
 
 # ── Re-export subagent status functions ─────────────────────────────

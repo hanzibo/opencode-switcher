@@ -214,7 +214,7 @@ class _BashSession:
         self._started = False
         self._auto_recover_count = 0
 
-    def start(self):
+    def start(self, cwd: Optional[str] = None):
         """Spawn a new persistent bash subprocess (binary pipe mode)."""
         merged_env = {**os.environ, **_HARDENED_ENV}
         self.process = subprocess.Popen(
@@ -223,7 +223,7 @@ class _BashSession:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,
-            cwd=_bash_state.cwd,
+            cwd=cwd or _bash_state.cwd,
             env=merged_env,
             preexec_fn=os.setsid if hasattr(os, "setsid") else None,
         )
@@ -366,20 +366,51 @@ class _BashSession:
         self.start()
 
 
-def set_bash_cwd(path: str) -> str:
-    """Set the working directory for the bash session."""
+def _resolve_session_key(session_key: Optional[str] = None) -> str:
+    """Resolve session_key from explicit param, or from conversation context, or default."""
+    if session_key is not None:
+        return session_key
+    from .subagent import get_current_conversation_id
+    conv_id = get_current_conversation_id()
+    return conv_id if conv_id else "default"
+
+
+def _get_session(session_key: str = "default") -> _BashSession:
+    """Get or create the bash session for the given key."""
+    if session_key not in _bash_state._sessions:
+        session = _BashSession()
+        cwd = _bash_state.get_cwd(session_key)
+        session.start(cwd=cwd)
+        _bash_state._sessions[session_key] = session
+        _bash_state._cwds.setdefault(session_key, cwd)
+    return _bash_state._sessions[session_key]
+
+
+def close_bash_session(session_key: str):
+    """Kill the bash process for a given session key and remove it."""
+    if session_key == "default":
+        return  # never close the default session
+    session = _bash_state._sessions.pop(session_key, None)
+    if session:
+        session.stop()
+
+
+def set_bash_cwd(path: str, session_key: Optional[str] = None) -> str:
+    """Set the working directory for the bash session (or a specific session)."""
     path = os.path.abspath(os.path.expanduser(path.strip()))
     if not os.path.exists(path):
         return f"❌ 路径不存在：{path}"
     if not os.path.isdir(path):
         return f"❌ 路径不是一个目录：{path}"
 
-    _bash_state.cwd = path
-    if _bash_state.session is not None and _bash_state.session._started and _bash_state.session.process is not None:
-        if _bash_state.session.process.poll() is None:
+    key = _resolve_session_key(session_key)
+    _bash_state.set_cwd(key, path)
+    session = _bash_state._sessions.get(key)
+    if session is not None and session._started and session.process is not None:
+        if session.process.poll() is None:
             try:
                 cmd = f"cd {shlex.quote(path)}"
-                res = _bash_state.session.execute(cmd, timeout=5)
+                res = session.execute(cmd, timeout=5)
                 if res.get("timed_out", False):
                     return f"⚠️ 目录切换命令超时，已更新全局配置。新路径：{path}"
             except Exception as e:
@@ -387,9 +418,10 @@ def set_bash_cwd(path: str) -> str:
     return f"✅ Bash 工作路径已切换至：{path}"
 
 
-def get_bash_cwd() -> str:
-    """Get the current working directory of the bash session."""
-    return _bash_state.cwd
+def get_bash_cwd(session_key: Optional[str] = None) -> str:
+    """Get the current working directory for the bash session (or a specific session)."""
+    key = _resolve_session_key(session_key)
+    return _bash_state.get_cwd(key)
 
 
 _EXIT_CODE_HINTS = {
@@ -423,30 +455,26 @@ def execute_bash(command: str, restart: bool = False,
     if breaker_err is not None:
         return breaker_err
 
+    session_key = _resolve_session_key()
+
     if restart:
-        if _bash_state.session is not None:
-            _bash_state.session.stop()
-        _bash_state.session = _BashSession()
-        _bash_state.session.start()
-        if not command or not command.strip():
-            return "🔄 Bash session 已重启。"
+        close_bash_session(session_key)
+        _bash_state._sessions.pop(session_key, None)
+        _get_session(session_key)
 
     timeout = max(1, min(120, timeout))
     max_chars = max(500, min(_MAX_BASH_OUTPUT_CHARS, max_chars))
 
-    if _bash_state.session is None:
-        _bash_state.session = _BashSession()
-        _bash_state.session.start()
+    session = _get_session(session_key)
 
     try:
-        result = _bash_state.session.execute(command, timeout=timeout, cancel_event=cancel_event)
+        result = session.execute(command, timeout=timeout, cancel_event=cancel_event)
     except RuntimeError:
-        if _bash_state.session is not None:
-            _bash_state.session.stop()
-        _bash_state.session = _BashSession()
-        _bash_state.session.start()
+        close_bash_session(session_key)
+        _bash_state._sessions.pop(session_key, None)
+        session = _get_session(session_key)
         try:
-            result = _bash_state.session.execute(command, timeout=timeout, cancel_event=cancel_event)
+            result = session.execute(command, timeout=timeout, cancel_event=cancel_event)
         except RuntimeError as e:
             return f"错误：{e}"
 
@@ -459,10 +487,7 @@ def execute_bash(command: str, restart: bool = False,
         output = output[:max_chars] + f"\n\n...（输出已截断，共 {len(output)} 字符）"
 
     if timed_out:
-        if _bash_state.session is not None:
-            _bash_state.session.stop()
-        _bash_state.session = _BashSession()
-        _bash_state.session.start()
+        close_bash_session(session_key)
         parts = ["⚠️ 命令执行超时，已自动重启 bash session"]
         if output:
             parts.append("")
@@ -480,26 +505,20 @@ def execute_bash(command: str, restart: bool = False,
     return "\n".join(parts)
 
 
-def execute_bash_get_session_info() -> str:
-    """获取当前 Bash 会话的基本信息。"""
-    cwd = get_bash_cwd()
-    session = _bash_state.session
-    active = (session is not None and session._started
-              and session.process is not None and session.process.poll() is None)
-    pid = session.process.pid if active else None
-    parts = [
-        f"📋 Bash 会话信息",
-        f"  工作目录: {cwd}",
-    ]
-    if active and pid is not None:
+def execute_bash_get_session_info(session_key: Optional[str] = None) -> str:
+    """获取当前对话的 Bash 会话状态信息。"""
+    key = _resolve_session_key(session_key)
+    session = _bash_state._sessions.get(key)
+    parts = [f"📋 Bash 会话信息"]
+    if session is not None and session._started and session.process is not None and session.process.poll() is None:
         parts.append(f"  会话状态: 活跃")
-        parts.append(f"  进程 PID: {pid}")
+        parts.append(f"  进程 PID: {session.process.pid}")
         parts.append("")
         parts.append("💡 如有必要请使用 `kill <PID>` 精确终止此会话，")
         parts.append("   切勿使用 pkill -9 -f \"bash\" 或 killall bash，")
         parts.append("   否则会误杀系统上其他 bash 进程。")
     else:
-        parts.append(f"  会话状态: {'未启动/已终止'}")
+        parts.append(f"  会话状态: 未启动/已终止")
     return "\n".join(parts)
 
 
@@ -525,7 +544,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "bash_get_session_info",
-            "description": "获取当前 Bash 会话的状态信息，包括工作目录、进程 PID 和会话是否活跃。返回信息包含安全提示：如需终止会话应使用 kill <PID> 而非 pkill/pkill -f，防止误杀。",
+            "description": "获取当前 Bash 会话的状态信息，包括进程 PID 和会话是否活跃。如需获取工作目录请执行 pwd 命令。返回信息包含安全提示：如需终止会话应使用 kill <PID> 而非 pkill/pkill -f，防止误杀。",
             "parameters": {
                 "type": "object",
                 "properties": {}
