@@ -17,7 +17,7 @@ from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, Web
 from typing import Optional, Callable, List, Dict, Any, Tuple, Set
 from copy import deepcopy
 from uuid import uuid4
-from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P, CONFIG_DIR
+from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, AISettingsStore, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P, CONFIG_DIR
 from settings_dialog import show_settings_dialog
 import time
 import requests
@@ -54,8 +54,6 @@ from ai_popovers import AICommandPopover, HistoryPopover
 from ai_tool_loop import run_llm_react_loop
 from ai_chat_panel import AIChatPanel
 
-AI_MESSAGES_SOFT_LIMIT = 200
-AI_MESSAGES_TRIM_TARGET = 100
 AI_BTN_LABEL_SEND = "发送"
 AI_BTN_LABEL_STOP = "暂停"
 MAX_TOOL_ITERATIONS = 25  # ReAct loop safety limit
@@ -192,6 +190,7 @@ class ClipboardPanel(Gtk.Box):
         self._last_rendered_item_ids = None
         self._loading_data = False
         self._conversation_store = ConversationStore()
+        self._ai_settings_store = AISettingsStore()
         self._pygments_css_cache: Dict[str, str] = {}
 
         self._bg_color = Gdk.RGBA()
@@ -335,6 +334,7 @@ class ClipboardPanel(Gtk.Box):
         self._ai_chat_panel = AIChatPanel(
             conversation_store=self._conversation_store,
             llm_settings_store=self._llm_settings_store,
+            ai_settings_store=self._ai_settings_store,
             theme="dark",
             ai_commands=self._AI_COMMANDS,
             pygments_css_cache=self._pygments_css_cache
@@ -1376,6 +1376,7 @@ class ClipboardPanel(Gtk.Box):
     def _on_settings_clicked(self, _btn):
         show_settings_dialog(
             parent_window=self.get_toplevel(),
+            ai_settings_store=self._ai_settings_store,
             on_dialog_shown=self.on_dialog_shown,
             on_dialog_hidden=self.on_dialog_hidden
         )

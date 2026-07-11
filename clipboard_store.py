@@ -1070,3 +1070,39 @@ class QQMailCredentialsStore:
         except Exception as e:
             print(f"Error saving QQ mail credentials: {e}", flush=True)
 
+
+
+# ── AI Conversation Truncation Settings ─────────────────────────────────────
+
+AI_SETTINGS_PATH = os.path.join(CONFIG_DIR, "ai_settings.json")
+
+
+class AISettingsStore:
+    """AI 对话截断设置存储，遵循 QQMailCredentialsStore 模式。"""
+
+    def __init__(self):
+        self.soft_limit: int = 200      # 触发截断的消息数
+        self.trim_target: int = 100     # 裁剪后保留的消息数
+        self._load()
+
+    def _load(self):
+        try:
+            with open(AI_SETTINGS_PATH) as f:
+                data = json.load(f)
+            self.soft_limit = data.get("soft_limit", 200)
+            self.trim_target = data.get("trim_target", 100)
+        except Exception:
+            pass  # 使用默认值
+
+    def save(self):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        try:
+            fd = os.open(AI_SETTINGS_PATH, flags, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump({
+                    "soft_limit": self.soft_limit,
+                    "trim_target": self.trim_target,
+                }, f, indent=2)
+        except Exception as e:
+            print(f"Error saving AI settings: {e}", flush=True)

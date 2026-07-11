@@ -15,14 +15,15 @@ gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk
 from typing import Optional, Callable
 
-from clipboard_store import QQMailCredentialsStore
+from clipboard_store import QQMailCredentialsStore, AISettingsStore
 
 
 def show_settings_dialog(parent_window: Gtk.Window,
+                         ai_settings_store: Optional[AISettingsStore] = None,
                          on_dialog_shown: Optional[Callable[[], None]] = None,
                          on_dialog_hidden: Optional[Callable[[], None]] = None):
     """Factory: create and show the Settings dialog."""
-    SettingsDialog(parent_window, on_dialog_shown, on_dialog_hidden)
+    SettingsDialog(parent_window, ai_settings_store, on_dialog_shown, on_dialog_hidden)
 
 
 class SettingsDialog:
@@ -34,6 +35,7 @@ class SettingsDialog:
     """
 
     def __init__(self, parent_window: Gtk.Window,
+                 ai_settings_store: Optional[AISettingsStore] = None,
                  on_dialog_shown: Optional[Callable[[], None]] = None,
                  on_dialog_hidden: Optional[Callable[[], None]] = None):
         self.parent_window = parent_window
@@ -43,9 +45,11 @@ class SettingsDialog:
         # ── Tab registry: extend here for future tabs ──
         self._tabs = [
             ("QQ邮箱", self._build_qq_mail_tab),
+            ("AI 对话", self._build_ai_settings_tab),
         ]
 
         self._qq_store = QQMailCredentialsStore()
+        self._ai_settings_store = ai_settings_store or AISettingsStore()
         self._dialog = None
         self.build_ui()
 
@@ -204,6 +208,65 @@ class SettingsDialog:
 
         return outer_sw
 
+    # ── Tab: AI 对话 ───────────────────────────────────────────────────
+
+    def _build_ai_settings_tab(self):
+        """Build the AI conversation truncation settings tab page.
+
+        Returns a Gtk.ScrolledWindow ready for notebook.append_page().
+        """
+        outer_sw = Gtk.ScrolledWindow.new()
+        outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        outer_sw.set_vexpand(True)
+
+        vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+        vbox.set_margin_start(16)
+        vbox.set_margin_end(16)
+        vbox.set_margin_top(12)
+        vbox.set_margin_bottom(12)
+        outer_sw.add(vbox)
+
+        # ── Soft limit (triggering threshold) ──
+        soft_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        soft_lbl = Gtk.Label.new("触发截断的消息数:")
+        soft_lbl.set_size_request(150, -1)
+        soft_lbl.set_xalign(0)
+        self._soft_spin = Gtk.SpinButton.new_with_range(50, 500, 10)
+        self._soft_spin.set_value(self._ai_settings_store.soft_limit)
+        soft_hbox.pack_start(soft_lbl, False, False, 0)
+        soft_hbox.pack_start(self._soft_spin, False, False, 0)
+        vbox.pack_start(soft_hbox, False, False, 0)
+
+        # ── Trim target ──
+        trim_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        trim_lbl = Gtk.Label.new("裁剪后保留的消息数:")
+        trim_lbl.set_size_request(150, -1)
+        trim_lbl.set_xalign(0)
+        self._trim_spin = Gtk.SpinButton.new_with_range(10, 400, 10)
+        self._trim_spin.set_value(self._ai_settings_store.trim_target)
+        trim_hbox.pack_start(trim_lbl, False, False, 0)
+        trim_hbox.pack_start(self._trim_spin, False, False, 0)
+        vbox.pack_start(trim_hbox, False, False, 0)
+
+        # ── Help text ──
+        hint = Gtk.Label.new()
+        hint.set_markup(
+            "<span size='small' foreground='#888888'>"
+            "当消息数超过「触发截断的消息数」时，自动裁剪到「裁剪后保留的消息数」。\n"
+            "首条消息始终保留，从最旧的开始丢弃。"
+            "</span>"
+        )
+        hint.set_xalign(0)
+        hint.set_margin_top(12)
+        vbox.pack_start(hint, False, False, 0)
+
+        # ── Spacer ──
+        spacer = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        spacer.set_vexpand(True)
+        vbox.pack_start(spacer, True, True, 0)
+
+        return outer_sw
+
     # ── Save logic ──────────────────────────────────────────────────────
 
     def _on_save(self):
@@ -212,6 +275,11 @@ class SettingsDialog:
         self._qq_store.email = self._email_entry.get_text().strip()
         self._qq_store.auth_code = self._auth_entry.get_text().strip()
         self._qq_store.save()
+
+        # AI 对话设置
+        self._ai_settings_store.soft_limit = int(self._soft_spin.get_value())
+        self._ai_settings_store.trim_target = int(self._trim_spin.get_value())
+        self._ai_settings_store.save()
 
         if self._dialog:
             self._dialog.destroy()

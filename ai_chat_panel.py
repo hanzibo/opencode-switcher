@@ -54,8 +54,6 @@ from prompts_config_dialog import show_prompts_config_dialog
 from ai_popovers import AICommandPopover, HistoryPopover
 from ai_tool_loop import run_llm_react_loop
 
-AI_MESSAGES_SOFT_LIMIT = 200
-AI_MESSAGES_TRIM_TARGET = 100
 AI_BTN_LABEL_SEND = "发送"
 AI_BTN_LABEL_STOP = "暂停"
 MAX_TOOL_ITERATIONS = 25
@@ -81,10 +79,11 @@ class AIChatPanel(Gtk.Box):
         ("/cd", "切换 bash 工作路径"),
     ]
 
-    def __init__(self, conversation_store, llm_settings_store, theme="dark", ai_commands=None, pygments_css_cache=None):
+    def __init__(self, conversation_store, llm_settings_store, ai_settings_store=None, theme="dark", ai_commands=None, pygments_css_cache=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self._conversation_store = conversation_store
         self._llm_settings_store = llm_settings_store
+        self._ai_settings_store = ai_settings_store
         self._theme = theme
         self._ai_commands = ai_commands
         self._pygments_css_cache = pygments_css_cache or {}
@@ -2377,12 +2376,20 @@ class AIChatPanel(Gtk.Box):
         return _rebuild_markdown_from_messages(messages)
 
     def _prune_messages(self):
-        if len(self._ai_messages) <= AI_MESSAGES_SOFT_LIMIT:
+        # Read latest values from shared settings store (supports live UI changes)
+        if self._ai_settings_store is not None:
+            soft_limit = self._ai_settings_store.soft_limit
+            trim_target = self._ai_settings_store.trim_target
+        else:
+            soft_limit = 200
+            trim_target = 100
+
+        if len(self._ai_messages) <= soft_limit:
             return
         # Keep first message, drop oldest from the rest to stay within trim target
         first = self._ai_messages[:1]
         rest = self._ai_messages[1:]
-        target_len = AI_MESSAGES_TRIM_TARGET - 1
+        target_len = trim_target - 1
         start_idx = len(rest) - target_len
         if start_idx < 0:
             start_idx = 0
