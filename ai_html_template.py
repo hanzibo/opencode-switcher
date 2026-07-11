@@ -944,6 +944,8 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 }});
                 function _scrollToBottom() {{
                     if (_autoScroll) {{
+                        // 强制 reflow 确保 scrollHeight 反映最新内容
+                        void document.body.offsetHeight;
                         window.scrollTo(0, document.body.scrollHeight);
                     }}
                 }}
@@ -1155,6 +1157,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 function _prevRound() {{ _scrollToRound(_currentRound - 1); }}
                 function _nextRound() {{ _scrollToRound(_currentRound + 1); }}
                 function _scrollToBottomForce() {{
+                    void document.body.offsetHeight;
                     window.scrollTo({{top: document.body.scrollHeight, behavior: 'smooth'}});
                 }}
                 function _scrollToTopForce() {{
