@@ -640,6 +640,11 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
         "edit_file": "path",
         "list_directory": "path",
         "file_info": "path",
+        "get_code_metrics": "path",
+        "find_project_dependencies": "path",
+        "parse_file_ast": "path",
+        "grep_search": "path",
+        "glob_find": "path",
     }
     display_field = TOOL_DISPLAY_FIELD.get(name)
     
