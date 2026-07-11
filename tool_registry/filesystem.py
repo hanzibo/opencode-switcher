@@ -218,7 +218,7 @@ def execute_list_directory(path: str, include_hidden: bool = False,
     return f"📁 目录列表: {resolved}\n\n" + "\n".join(lines)
 
 
-def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1,
+def execute_read_file(path: str, max_chars: int = 20000, start_line: int = 1,
                       end_line: Optional[int] = None) -> str:
     """Read a text file's content. Accepts absolute paths only, with optional line range."""
     resolved = _resolve_safe_path(path)
@@ -263,6 +263,10 @@ def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1,
     end_idx = total_lines if end_line is None else min(end_line, total_lines)
     sliced_lines = lines[start_idx:end_idx]
     content = "".join(sliced_lines)
+    # 预计算完整文件信息（供截断消息、头部块、状态块共用，消除冗余计算）
+    full_content = "".join(lines)
+    total_chars = len(full_content)
+    file_size_str = _format_file_size(os.path.getsize(resolved))
     truncated_by_chars = False
 
     if end_line is None and len(content) > max_chars:
@@ -272,7 +276,8 @@ def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1,
     is_full_read = (start_line == 1 and end_line is None and not truncated_by_chars)
 
     if truncated_by_chars:
-        content += f"\n\n...（内容因超出 max_chars={max_chars} 字符而被截断）"
+        pct = round(len(content) / total_chars * 100) if total_chars else 0
+        content += f"\n\n...（内容超出 max_chars={max_chars} 字符，文件共 {total_lines} 行 / {file_size_str}，已读 {pct}%）"
     elif end_line is not None and end_line < total_lines:
         content += f"\n\n...（已截断，仅显示第 {start_line} 至 {end_line} 行，文件共 {total_lines} 行）"
     elif start_line > 1:
@@ -280,9 +285,7 @@ def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1,
 
     if start_line == 1:
         try:
-            full_content_for_header = "".join(lines)
-            line_ending = "CRLF" if "\r\n" in full_content_for_header else "LF"
-            file_size_str = _format_file_size(os.path.getsize(resolved))
+            line_ending = "CRLF" if "\r\n" in full_content else "LF"
             header = (
                 f"--- {os.path.basename(resolved)} ({file_size_str}, {total_lines} 行, utf-8, {line_ending})\n"
                 f"--- {resolved}\n"
@@ -294,7 +297,6 @@ def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1,
 
     # 无论是否完整读取，都写入状态（部分读取记录 full_read=False）
     try:
-        full_content = "".join(lines)
         line_ending = "CRLF" if "\r\n" in full_content else "LF"
         _READ_FILE_STATE[resolved] = {
             "content": full_content,
@@ -607,7 +609,7 @@ def execute_write_file(path: str, content: str, force: bool = False,
         else:
             if os.path.exists(real_path):
                 return f"错误：文件已存在「{path}」。如需覆盖请设置 force=True。"
-            return f"错误：无法写入文件「{path}」"
+            return f"错误：无法写入文件「{path}」（路径无效，请检查路径是否正确）"
 
     parent = os.path.dirname(resolved)
     if not os.access(parent, os.W_OK):
@@ -623,6 +625,18 @@ def execute_write_file(path: str, content: str, force: bool = False,
         return f"错误：无权写入文件「{resolved}」"
     except OSError as e:
         return f"错误：写入文件时出错「{resolved}」: {e}"
+
+    # 注册到读取状态，使后续 edit_file 可直接使用
+    try:
+        _READ_FILE_STATE[resolved] = {
+            "content": content,
+            "mtime": os.path.getmtime(resolved),
+            "full_read": True,
+            "encoding": "utf-8",
+            "line_ending": "CRLF" if "\r\n" in content else "LF",
+        }
+    except OSError:
+        pass
 
     size_bytes = len(content.encode("utf-8"))
     size_str = _format_file_size(size_bytes)
@@ -662,7 +676,7 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "文件的绝对路径"},
-                    "max_chars": {"type": "integer", "description": "最大返回字符数（500-200000，默认 5000）", "default": 5000},
+                    "max_chars": {"type": "integer", "description": "最大返回字符数（500-200000，默认 20000）", "default": 20000},
                     "start_line": {"type": "integer", "description": "起始行号（从 1 开始，默认 1）", "default": 1},
                     "end_line": {"type": "integer", "description": "结束行号（含，可选）"}
                 },
