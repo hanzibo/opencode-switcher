@@ -1370,7 +1370,7 @@ class ClipboardPanel(Gtk.Box):
             custom_prompts_store=self._custom_prompts_store,
             llm_settings_store=self._llm_settings_store,
             on_dialog_shown=self.on_dialog_shown,
-            on_dialog_hidden=self.on_dialog_hidden
+            on_dialog_hidden=self.on_dialog_hidden,
         )
 
     def _on_settings_clicked(self, _btn):
@@ -2011,7 +2011,8 @@ class ClipboardPanel(Gtk.Box):
             on_copy_clipboard=self.on_copy_clipboard,
             on_hide_request=self.on_hide_request,
             on_dialog_shown=self.on_dialog_shown,
-            on_dialog_hidden=self.on_dialog_hidden
+            on_dialog_hidden=self.on_dialog_hidden,
+            copy_to_ai_panel_func=self._ai_chat_panel.insert_text_to_input,
         )
 
     @property

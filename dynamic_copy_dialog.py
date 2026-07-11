@@ -48,7 +48,8 @@ def show_dynamic_copy_dialog(item, parent_window,
                               on_hide_request=None,
                               on_dialog_shown=None,
                               on_dialog_hidden=None,
-                              unescape_template_field=None):
+                              unescape_template_field=None,
+                              copy_to_ai_panel_func=None):
     """Build and show the Dynamic Copy template parameter dialog.
 
     Parameters
@@ -69,6 +70,9 @@ def show_dynamic_copy_dialog(item, parent_window,
         Called when dialog is destroyed (focus guard).
     unescape_template_field : callable or None
         Function to unescape backslash-escaped colons/equals in template fields.
+    copy_to_ai_panel_func : callable or None
+        Function to insert text into the AI chat input box.
+        Called with ``(text)`` when user clicks "Copy to AI Panel".
     """
     if unescape_template_field is None:
         unescape_template_field = lambda v: v.replace("\\:", ":").replace("\\=", "=")
@@ -284,13 +288,18 @@ def show_dynamic_copy_dialog(item, parent_window,
     cancel_btn = Gtk.Button.new_with_label("Cancel")
     cancel_btn.connect("clicked", lambda _: dialog.destroy())
 
+    ai_btn = Gtk.Button.new_with_label("Copy to AI Panel")
+
     confirm_btn = Gtk.Button.new_with_label("Copy")
     confirm_btn.get_style_context().add_class("suggested-action")
 
-    def on_confirm(_btn):
+    def _get_preview_text():
         start_iter = preview_buffer.get_start_iter()
         end_iter = preview_buffer.get_end_iter()
-        text = preview_buffer.get_text(start_iter, end_iter, True)
+        return preview_buffer.get_text(start_iter, end_iter, True)
+
+    def on_confirm(_btn):
+        text = _get_preview_text()
 
         if on_copy_clipboard:
             on_copy_clipboard(text, None)
@@ -301,10 +310,25 @@ def show_dynamic_copy_dialog(item, parent_window,
         if on_hide_request:
             on_hide_request()
 
+    def on_copy_to_ai(_btn):
+        text = _get_preview_text()
+        if copy_to_ai_panel_func:
+            copy_to_ai_panel_func(text)
+        dialog.destroy()
+
     confirm_btn.connect("clicked", on_confirm)
 
     bottom_box.pack_end(confirm_btn, False, False, 0)
+    bottom_box.pack_end(ai_btn, False, False, 0)
     bottom_box.pack_end(cancel_btn, False, False, 0)
+
+    # Show AI button only if callback is provided
+    if copy_to_ai_panel_func is not None:
+        ai_btn.connect("clicked", on_copy_to_ai)
+        ai_btn.show()
+    else:
+        ai_btn.set_no_show_all(True)
+        ai_btn.hide()
     vbox_main.pack_start(bottom_box, False, False, 0)
 
     # Focus guards
