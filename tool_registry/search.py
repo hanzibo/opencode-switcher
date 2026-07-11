@@ -128,7 +128,7 @@ def _grep_with_ripgrep(pattern: str, resolved: str, max_results: int,
     if format == "grouped":
         for fpath in all_files:
             relpath = os.path.relpath(fpath, resolved)
-            cnt = file_total[fpath]
+            cnt = sum(1 for m in file_matches_map[fpath] if not m.startswith("    ..."))
             lines_out.append(f"━━━ {relpath}（{cnt} 个匹配）━━━")
             lines_out.extend(file_matches_map[fpath])
             lines_out.append("")
