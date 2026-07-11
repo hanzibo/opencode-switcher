@@ -407,7 +407,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_subagent_bar.set_margin_bottom(2)
         self._ai_subagent_bar.set_margin_start(4)
         self._ai_subagent_bar.set_margin_end(4)
-        self._ai_subagent_bar.set_visible(False)
+        self._ai_subagent_bar.hide()
         self._ai_subagent_bar.get_style_context().add_class("subagent-status-bar")
         self._ai_subagent_bar.connect("child-activated", self._on_subagent_child_activated)
         self._ai_input_area.pack_start(self._ai_subagent_bar, False, False, 0)
@@ -1402,7 +1402,7 @@ class AIChatPanel(Gtk.Box):
             # If info is None, it represents a deletion event
             if info is None:
                 self._remove_subagent_block(sid)
-                self._ai_subagent_bar.set_visible(len(self._ai_subagent_blocks) > 0)
+                self._update_subagent_bar_visibility()
                 return
 
             # Check if this subagent belongs to the active conversation
@@ -1418,7 +1418,7 @@ class AIChatPanel(Gtk.Box):
                 else:
                     self._create_subagent_block(sid, info)
             
-            self._ai_subagent_bar.set_visible(len(self._ai_subagent_blocks) > 0)
+            self._update_subagent_bar_visibility()
         except Exception as e:
             import sys
             print(f"[opencode-switcher] error in _on_subagent_status_changed: {e}", file=sys.stderr)
@@ -1435,7 +1435,7 @@ class AIChatPanel(Gtk.Box):
                 if info.get("conv_id") == active_conv_id:
                     self._create_subagent_block(sid, info)
                     
-            self._ai_subagent_bar.set_visible(len(self._ai_subagent_blocks) > 0)
+            self._update_subagent_bar_visibility()
         except Exception as e:
             import sys
             print(f"[opencode-switcher] error in _refresh_subagent_bar: {e}", file=sys.stderr)
@@ -1513,12 +1513,22 @@ class AIChatPanel(Gtk.Box):
             self._ai_subagent_bar.remove(child)
         self._ai_subagent_blocks.clear()
         self._ai_selected_subagents.clear()
-        self._ai_subagent_bar.set_visible(False)
+        self._update_subagent_bar_visibility()
+
+    def _update_subagent_bar_visibility(self):
+        """Show or hide the subagent bar based on whether any blocks exist."""
+        has_blocks = len(self._ai_subagent_blocks) > 0
+        if has_blocks:
+            self._ai_subagent_bar.set_no_show_all(False)
+            self._ai_subagent_bar.set_size_request(-1, -1)
+            self._ai_subagent_bar.show_all()
+        else:
+            self._ai_subagent_bar.set_no_show_all(True)
+            self._ai_subagent_bar.set_size_request(-1, 0)
+            self._ai_subagent_bar.hide()
 
     def _on_subagent_block_click(self, sid: Any):
         """Toggle selection state of a completed sub-agent block."""
-        with open("/tmp/subagent_debug.log", "a") as f:
-            f.write(f"click sid={sid}, selected before={self._ai_selected_subagents}\n")
         entry = self._ai_subagent_blocks.get(sid)
         if entry is None:
             return True
@@ -1526,8 +1536,6 @@ class AIChatPanel(Gtk.Box):
         from tool_registry import get_subagent_status_map
         info = get_subagent_status_map().get(sid, {})
         if info.get("status") != "completed":
-            with open("/tmp/subagent_debug.log", "a") as f:
-                f.write(f"  skipped: status={info.get('status')}\n")
             return True
         ctx = box.get_style_context()
         if sid in self._ai_selected_subagents:
@@ -1536,8 +1544,6 @@ class AIChatPanel(Gtk.Box):
         else:
             self._ai_selected_subagents.add(sid)
             ctx.add_class("subagent-block-selected")
-        with open("/tmp/subagent_debug.log", "a") as f:
-            f.write(f"  selected after={self._ai_selected_subagents}\n")
         return True  # Stop event propagation to prevent FlowBox default behavior
 
     def _on_subagent_child_activated(self, flowbox, child):
@@ -1720,7 +1726,7 @@ class AIChatPanel(Gtk.Box):
                 self._ai_subagent_blocks.pop(sid, None)
                 remove_subagent_status(sid)
             self._ai_selected_subagents.clear()
-            self._ai_subagent_bar.set_visible(len(self._ai_subagent_blocks) > 0)
+            self._update_subagent_bar_visibility()
 
             buf.set_text("")
             self._send_user_message(text)
