@@ -319,15 +319,16 @@ def show_dynamic_copy_dialog(item, parent_window,
     confirm_btn.connect("clicked", on_confirm)
 
     bottom_box.pack_end(confirm_btn, False, False, 0)
-    bottom_box.pack_end(ai_btn, False, False, 0)
     bottom_box.pack_end(cancel_btn, False, False, 0)
 
     # Show AI button only if callback is provided
     if copy_to_ai_panel_func is not None:
         ai_btn.connect("clicked", on_copy_to_ai)
+        bottom_box.pack_end(ai_btn, False, False, 0)
         ai_btn.show()
     else:
         ai_btn.set_no_show_all(True)
+        bottom_box.pack_end(ai_btn, False, False, 0)
         ai_btn.hide()
     vbox_main.pack_start(bottom_box, False, False, 0)
 

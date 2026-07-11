@@ -1370,7 +1370,7 @@ class ClipboardPanel(Gtk.Box):
             custom_prompts_store=self._custom_prompts_store,
             llm_settings_store=self._llm_settings_store,
             on_dialog_shown=self.on_dialog_shown,
-            on_dialog_hidden=self.on_dialog_hidden,
+            on_dialog_hidden=self.on_dialog_hidden
         )
 
     def _on_settings_clicked(self, _btn):
