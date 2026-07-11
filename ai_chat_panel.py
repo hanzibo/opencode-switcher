@@ -1504,11 +1504,16 @@ class AIChatPanel(Gtk.Box):
         self._ai_selected_subagents.discard(sid)
         entry = self._ai_subagent_blocks.pop(sid, None)
         if entry:
+            if not self._ai_subagent_blocks:
+                self._ai_subagent_bar.get_style_context().remove_class("subagent-status-bar")
+                self._ai_subagent_bar.hide()
             child, _event_box, _box = entry
             self._ai_subagent_bar.remove(child)
 
     def _clear_subagent_bar_instantly(self):
         """Instantly clear all subagent blocks from the status bar UI."""
+        self._ai_subagent_bar.get_style_context().remove_class("subagent-status-bar")
+        self._ai_subagent_bar.hide()
         for child in self._ai_subagent_bar.get_children():
             self._ai_subagent_bar.remove(child)
         self._ai_subagent_blocks.clear()
@@ -1519,13 +1524,13 @@ class AIChatPanel(Gtk.Box):
         """Show or hide the subagent bar based on whether any blocks exist."""
         has_blocks = len(self._ai_subagent_blocks) > 0
         if has_blocks:
+            self._ai_subagent_bar.get_style_context().add_class("subagent-status-bar")
             self._ai_subagent_bar.set_no_show_all(False)
-            self._ai_subagent_bar.set_size_request(-1, -1)
             self._ai_subagent_bar.show_all()
         else:
-            self._ai_subagent_bar.set_no_show_all(True)
-            self._ai_subagent_bar.set_size_request(-1, 0)
+            self._ai_subagent_bar.get_style_context().remove_class("subagent-status-bar")
             self._ai_subagent_bar.hide()
+            self._ai_subagent_bar.set_no_show_all(True)
 
     def _on_subagent_block_click(self, sid: Any):
         """Toggle selection state of a completed sub-agent block."""
@@ -1716,8 +1721,10 @@ class AIChatPanel(Gtk.Box):
             else:
                 text = bg_text
 
-            # Clean up selected blocks
+            # Clean up selected blocks — hide bar and remove styling FIRST to avoid visual flash
             from tool_registry import remove_subagent_status
+            self._ai_subagent_bar.get_style_context().remove_class("subagent-status-bar")
+            self._ai_subagent_bar.hide()
             for sid in list(self._ai_selected_subagents):
                 entry = self._ai_subagent_blocks.get(sid)
                 if entry:
