@@ -330,7 +330,7 @@ def execute_edit_file(path: str, old_string: str = "", new_string: str = "",
     else:
         was_modified = False
 
-    _ext_warn = "\n⚠️ 文件自读取后已被外部修改（内容一致，已刷新状态）。" if was_modified else ""
+    ext_warn = "\n⚠️ 文件自读取后已被外部修改（内容一致，已刷新状态）。" if was_modified else ""
 
     if mode not in ("string", "line"):
         return "错误：mode 必须是 'string' 或 'line'。"
@@ -390,7 +390,7 @@ def execute_edit_file(path: str, old_string: str = "", new_string: str = "",
             "encoding": "utf-8",
             "line_ending": line_ending,
         }
-        return f"✅ 已编辑文件「{path}」\n   模式: line（L{start_line}-L{end_line}）\n   变更: {actual_changes} 处替换{diff_block}{_ext_warn}"
+        return f"✅ 已编辑文件「{path}」\n   模式: line（L{start_line}-L{end_line}）\n   变更: {actual_changes} 处替换{diff_block}{ext_warn}"
 
     if not old_string:
         return "错误：string 模式下 old_string 不能为空。"
@@ -432,7 +432,7 @@ def execute_edit_file(path: str, old_string: str = "", new_string: str = "",
 
     diff = _generate_diff(content, new_content, path)
     diff_block = f"\n{diff}" if diff else ""
-    return f"✅ 已编辑文件「{path}」\n   变更: {actual_changes} 处替换{diff_block}{_ext_warn}"
+    return f"✅ 已编辑文件「{path}」\n   变更: {actual_changes} 处替换{diff_block}{ext_warn}"
 
 
 def execute_delete_file(path: str, recursive: bool = False) -> str:
