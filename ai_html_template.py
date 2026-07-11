@@ -709,6 +709,16 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 .tool-step-status.running {{
                     animation: spin 1s linear infinite;
                 }}
+                .tool-step-purpose {{
+                    color: #00E5FF;
+                    font-size: 12px;
+                    font-weight: normal;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                    max-width: 200px;
+                    margin-left: 24px;
+                }}
                 @keyframes spin {{
                     100% {{ transform: rotate(360deg); }}
                 }}

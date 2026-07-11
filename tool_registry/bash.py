@@ -442,6 +442,7 @@ def _exit_code_hint(code: int) -> str:
 def execute_bash(command: str, restart: bool = False,
                  timeout: int = _BASH_TIMEOUT_DEFAULT,
                  max_chars: int = _MAX_BASH_OUTPUT_CHARS,
+                 purpose: str = "",
                  cancel_event=None) -> str:
     """Execute a shell command in a persistent bash session."""
     if not command or not command.strip():
@@ -532,6 +533,7 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "command": {"type": "string", "description": "要执行的 shell 命令"},
+                    "purpose": {"type": "string", "description": "简短描述命令的目的（10-40字），用于向用户解释执行此命令的原因。例如：安装系统依赖、查看 nginx 日志、编译前端项目"},
                     "restart": {"type": "boolean", "description": "是否重启 bash 会话后再执行", "default": False},
                     "timeout": {"type": "integer", "description": "命令超时秒数（1-120，默认 120）", "default": 120},
                     "max_chars": {"type": "integer", "description": "输出最大字符数（500-20000，默认 20000）", "default": 20000}
