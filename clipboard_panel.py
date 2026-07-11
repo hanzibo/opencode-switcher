@@ -1169,6 +1169,14 @@ class ClipboardPanel(Gtk.Box):
                         prompt_item = Gtk.MenuItem.new_with_label(p.name)
                         prompt_item.connect("activate", lambda *_, p_obj=p: self._ask_custom_prompt(item, p_obj))
                         menu.append(prompt_item)
+
+            # "Copy to AI Panel" for non-image clipboard items
+            item_type = getattr(item, "type", "text")
+            if item_type != "image":
+                menu.append(Gtk.SeparatorMenuItem.new())
+                ai_item = Gtk.MenuItem.new_with_label("Copy to AI Panel")
+                ai_item.connect("activate", lambda *_: self._copy_to_ai_panel(item))
+                menu.append(ai_item)
         else:
             copy_item = Gtk.MenuItem.new_with_label("Copy")
             copy_item.connect("activate", lambda *_: self._activate_item(item))
@@ -1187,6 +1195,12 @@ class ClipboardPanel(Gtk.Box):
             del_item = Gtk.MenuItem.new_with_label("Delete")
             del_item.connect("activate", lambda *_: self._delete_item(item))
             menu.append(del_item)
+
+            # "Copy to AI Panel" for category items
+            menu.append(Gtk.SeparatorMenuItem.new())
+            ai_item = Gtk.MenuItem.new_with_label("Copy to AI Panel")
+            ai_item.connect("activate", lambda *_: self._copy_to_ai_panel(item))
+            menu.append(ai_item)
 
         old = self._active_popup_menu
         if old is not None:
@@ -1461,6 +1475,19 @@ class ClipboardPanel(Gtk.Box):
         _copy_to_clipboard(text)
         if self.on_hide_request:
             self.on_hide_request()
+
+    def _copy_to_ai_panel(self, item):
+        """复制项文本到 AI 面板输入框，不隐藏主面板。"""
+        if self._active_category_id == "__clipboard__" and isinstance(item, ClipboardItem):
+            if hasattr(item, "type") and item.type == "image":
+                return  # 图片不走这里
+            text = item.text
+        elif isinstance(item, CategoryItem):
+            text = item.text
+            text = self._process_template_text(text)
+        else:
+            return
+        self._ai_chat_panel.insert_text_to_input(text)
 
     def _process_template_text(self, text: str) -> str:
         """Process custom templates during direct copy.

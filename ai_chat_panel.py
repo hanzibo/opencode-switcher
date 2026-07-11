@@ -2851,6 +2851,12 @@ class AIChatPanel(Gtk.Box):
     def grab_entry_focus(self):
         self._ai_entry.grab_focus()
 
+    def insert_text_to_input(self, text: str):
+        """从外部向 AI 输入框插入文本并聚焦。"""
+        buffer = self._ai_entry.get_buffer()
+        buffer.insert(buffer.get_end_iter(), text)
+        self._ai_entry.grab_focus()
+
     def _select_and_set_bash_cwd(self):
         """Open a directory chooser dialog to let the user select a folder to set as the active bash working directory."""
         toplevel = self.get_toplevel()
