@@ -628,28 +628,30 @@ def _extract_local_title(message_content: Union[str, List, Dict]) -> str:
     return cleaned
 
 
+# Per-tool: maps tool name to the argument field shown in summary line
+_TOOL_DISPLAY_FIELD = {
+    "read_file": "path",
+    "write_file": "path",
+    "edit_file": "path",
+    "delete_file": "path",
+    "list_directory": "path",
+    "file_info": "path",
+    "get_code_metrics": "path",
+    "find_project_dependencies": "path",
+    "parse_file_ast": "path",
+    "grep_search": "path",
+    "glob_find": "path",
+    "web_search": "query",
+    "web_fetch": "url",
+}
+
+
 def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
     func = tool_call.get("function", {})
     name = func.get("name", "unknown")
     arguments_str = func.get("arguments", "{}")
 
-    # Per-tool: extract field to display in summary line (right side)
-    TOOL_DISPLAY_FIELD = {
-        "read_file": "path",
-        "write_file": "path",
-        "edit_file": "path",
-        "delete_file": "path",
-        "list_directory": "path",
-        "file_info": "path",
-        "get_code_metrics": "path",
-        "find_project_dependencies": "path",
-        "parse_file_ast": "path",
-        "grep_search": "path",
-        "glob_find": "path",
-        "web_search": "query",
-        "web_fetch": "url",
-    }
-    display_field = TOOL_DISPLAY_FIELD.get(name)
+    display_field = _TOOL_DISPLAY_FIELD.get(name)
     
     # Try to parse arguments for prettier display
     try:
