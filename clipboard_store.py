@@ -1089,6 +1089,7 @@ class AISettingsStore:
         try:
             with open(AI_SETTINGS_PATH) as f:
                 data = json.load(f)
+            _ = data.get("version", 1)  # 预留：未来 schema 迁移
             self.soft_limit = data.get("soft_limit", 200)
             self.trim_target = data.get("trim_target", 100)
         except Exception:
@@ -1101,6 +1102,7 @@ class AISettingsStore:
             fd = os.open(AI_SETTINGS_PATH, flags, 0o600)
             with os.fdopen(fd, "w") as f:
                 json.dump({
+                    "version": 1,
                     "soft_limit": self.soft_limit,
                     "trim_target": self.trim_target,
                 }, f, indent=2)

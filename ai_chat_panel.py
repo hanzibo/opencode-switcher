@@ -17,7 +17,7 @@ from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, Web
 from typing import Optional, Callable, List, Dict, Any, Tuple, Set
 from copy import deepcopy
 from uuid import uuid4
-from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P, CONFIG_DIR
+from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, AISettingsStore, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P, CONFIG_DIR
 import time
 import requests
 import json
@@ -2381,8 +2381,10 @@ class AIChatPanel(Gtk.Box):
             soft_limit = self._ai_settings_store.soft_limit
             trim_target = self._ai_settings_store.trim_target
         else:
-            soft_limit = 200
-            trim_target = 100
+            # Derive defaults from AISettingsStore to avoid hardcoded duplication
+            _fallback = AISettingsStore()
+            soft_limit = _fallback.soft_limit
+            trim_target = _fallback.trim_target
 
         if len(self._ai_messages) <= soft_limit:
             return
