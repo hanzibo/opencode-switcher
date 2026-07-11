@@ -15,31 +15,37 @@ from ._state import file_read
 _READ_FILE_STATE = file_read.store
 
 
-def _check_file_stale(path: str) -> Optional[str]:
+def _check_file_stale(path: str, mode: str = "string") -> Tuple[Optional[str], bool]:
     """Check if file has been modified since read_file was called.
-    Returns None if OK, error message string if stale/missing.
+
+    Returns (error_msg, was_externally_modified):
+        error_msg is None if OK, error string if stale/missing.
+        was_externally_modified is True when mtime changed but content is identical.
     """
     resolved = os.path.realpath(path)
     state = _READ_FILE_STATE.get(resolved)
     if state is None:
-        return f"错误：文件「{path}」尚未被读取。请先使用 read_file 工具读取该文件。"
-    if not state.get("full_read", False):
-        return f"错误：文件「{path}」之前只读取了部分内容。请使用 read_file 完整读取后再编辑。"
+        return f"错误：文件「{path}」尚未被读取。请先使用 read_file 工具读取该文件。", False
+    # string 模式：有 old_string 兜底，存在读取记录即可
+    # line 模式：无字符串匹配兜底，必须完整读取
+    if mode == "line" and not state.get("full_read", False):
+        return f"错误：文件「{path}」之前只读取了部分内容。line 模式下请使用 read_file 完整读取后再编辑。", False
     try:
         current_mtime = os.path.getmtime(resolved)
     except OSError:
-        return f"错误：无法访问文件「{path}」"
+        return f"错误：无法访问文件「{path}」", False
     if current_mtime > state["mtime"]:
         try:
             with open(resolved, "rb") as f:
                 raw = f.read()
             current_content = raw.decode(state.get("encoding", "utf-8"), errors="replace")
         except Exception:
-            return f"错误：文件「{path}」自读取后已被修改，请重新读取。"
+            return f"错误：文件「{path}」自读取后已被修改，请重新读取。", False
         if current_content != state["content"]:
-            return f"错误：文件「{path}」自读取后已被外部修改，请重新使用 read_file 读取。"
+            return f"错误：文件「{path}」自读取后已被外部修改，请重新使用 read_file 读取。", False
         state["mtime"] = current_mtime
-    return None
+        return None, True
+    return None, False
 
 
 def _resolve_safe_path(path: str) -> Optional[str]:
@@ -221,7 +227,7 @@ def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1,
     if not os.path.isfile(resolved):
         return f"错误：路径不是文件「{resolved}」"
 
-    max_chars = max(500, min(50000, max_chars))
+    max_chars = max(500, min(200000, max_chars))
 
     if start_line < 1:
         start_line = 1
@@ -259,7 +265,7 @@ def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1,
     content = "".join(sliced_lines)
     truncated_by_chars = False
 
-    if len(content) > max_chars:
+    if end_line is None and len(content) > max_chars:
         content = content[:max_chars]
         truncated_by_chars = True
 
@@ -286,19 +292,19 @@ def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1,
         except OSError:
             pass
 
-    if is_full_read:
-        try:
-            full_content = "".join(lines)
-            line_ending = "CRLF" if "\r\n" in full_content else "LF"
-            _READ_FILE_STATE[resolved] = {
-                "content": full_content,
-                "mtime": os.path.getmtime(resolved),
-                "full_read": True,
-                "encoding": "utf-8",
-                "line_ending": line_ending,
-            }
-        except OSError:
-            pass
+    # 无论是否完整读取，都写入状态（部分读取记录 full_read=False）
+    try:
+        full_content = "".join(lines)
+        line_ending = "CRLF" if "\r\n" in full_content else "LF"
+        _READ_FILE_STATE[resolved] = {
+            "content": full_content,
+            "mtime": os.path.getmtime(resolved),
+            "full_read": is_full_read,
+            "encoding": "utf-8",
+            "line_ending": line_ending,
+        }
+    except OSError:
+        pass
 
     return content
 
@@ -306,7 +312,8 @@ def execute_read_file(path: str, max_chars: int = 5000, start_line: int = 1,
 def execute_edit_file(path: str, old_string: str = "", new_string: str = "",
                       replace_all: bool = False, mode: str = "string",
                       start_line: Optional[int] = None,
-                      end_line: Optional[int] = None) -> str:
+                      end_line: Optional[int] = None,
+                      force: bool = False) -> str:
     """Edit a file via string replacement or line-range replacement."""
     resolved = _resolve_safe_path(path)
     if resolved is None:
@@ -314,9 +321,14 @@ def execute_edit_file(path: str, old_string: str = "", new_string: str = "",
     if not os.path.isfile(resolved):
         return f"错误：路径不是文件「{resolved}」"
 
-    stale_err = _check_file_stale(resolved)
-    if stale_err is not None:
-        return stale_err
+    if not force:
+        stale_err, was_modified = _check_file_stale(resolved, mode=mode)
+        if stale_err is not None:
+            return stale_err
+    else:
+        was_modified = False
+
+    _ext_warn = "\n⚠️ 文件自读取后已被外部修改（内容一致，已刷新状态）。" if was_modified else ""
 
     if mode not in ("string", "line"):
         return "错误：mode 必须是 'string' 或 'line'。"
@@ -376,7 +388,7 @@ def execute_edit_file(path: str, old_string: str = "", new_string: str = "",
             "encoding": "utf-8",
             "line_ending": line_ending,
         }
-        return f"✅ 已编辑文件「{path}」\n   模式: line（L{start_line}-L{end_line}）\n   变更: {actual_changes} 处替换{diff_block}"
+        return f"✅ 已编辑文件「{path}」\n   模式: line（L{start_line}-L{end_line}）\n   变更: {actual_changes} 处替换{diff_block}{_ext_warn}"
 
     if not old_string:
         return "错误：string 模式下 old_string 不能为空。"
@@ -418,7 +430,7 @@ def execute_edit_file(path: str, old_string: str = "", new_string: str = "",
 
     diff = _generate_diff(content, new_content, path)
     diff_block = f"\n{diff}" if diff else ""
-    return f"✅ 已编辑文件「{path}」\n   变更: {actual_changes} 处替换{diff_block}"
+    return f"✅ 已编辑文件「{path}」\n   变更: {actual_changes} 处替换{diff_block}{_ext_warn}"
 
 
 def execute_delete_file(path: str, recursive: bool = False) -> str:
@@ -650,7 +662,7 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "文件的绝对路径"},
-                    "max_chars": {"type": "integer", "description": "最大返回字符数（500-50000，默认 5000）", "default": 5000},
+                    "max_chars": {"type": "integer", "description": "最大返回字符数（500-200000，默认 5000）", "default": 5000},
                     "start_line": {"type": "integer", "description": "起始行号（从 1 开始，默认 1）", "default": 1},
                     "end_line": {"type": "integer", "description": "结束行号（含，可选）"}
                 },
@@ -675,26 +687,27 @@ TOOL_SCHEMAS = [
             }
         }
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "edit_file",
-            "description": "编辑现有文件：替换字符串（string 模式）或替换行范围（line 模式）。支持 replace_all 替换全部匹配。要求先通过 read_file 完整读取文件以确保内容未过时。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "文件的绝对路径"},
-                    "old_string": {"type": "string", "description": "要替换的原文（string 模式下必填）"},
-                    "new_string": {"type": "string", "description": "替换后的新内容"},
-                    "replace_all": {"type": "boolean", "description": "是否替换所有出现位置", "default": False},
-                    "mode": {"type": "string", "description": "编辑模式", "enum": ["string", "line"], "default": "string"},
-                    "start_line": {"type": "integer", "description": "替换的起始行号（line 模式）"},
-                    "end_line": {"type": "integer", "description": "替换的结束行号（line 模式，含）"}
-                },
-                "required": ["path"]
+        {
+            "type": "function",
+            "function": {
+                "name": "edit_file",
+                "description": "编辑现有文件：替换字符串（string 模式，根据 old_string 匹配定位）或替换行范围（line 模式）。string 模式任意读取过文件即可编辑（old_string 匹配确保安全），line 模式需完整读取（无字符串兜底）。设置 force=True 跳过所有读取检查。支持 replace_all 替换全部匹配。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "文件的绝对路径"},
+                        "old_string": {"type": "string", "description": "要替换的原文（string 模式下必填）"},
+                        "new_string": {"type": "string", "description": "替换后的新内容"},
+                        "replace_all": {"type": "boolean", "description": "是否替换所有出现位置", "default": False},
+                        "mode": {"type": "string", "description": "编辑模式", "enum": ["string", "line"], "default": "string"},
+                        "start_line": {"type": "integer", "description": "替换的起始行号（line 模式）"},
+                        "end_line": {"type": "integer", "description": "替换的结束行号（line 模式，含）"},
+                        "force": {"type": "boolean", "description": "跳过前置读取检查，强制编辑", "default": False}
+                    },
+                    "required": ["path"]
+                }
             }
-        }
-    },
+        },
     {
         "type": "function",
         "function": {
