@@ -716,7 +716,6 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     overflow: hidden;
                     text-overflow: ellipsis;
                     white-space: nowrap;
-                    max-width: 200px;
                     margin-left: 24px;
                 }}
                 @keyframes spin {{

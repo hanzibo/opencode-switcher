@@ -632,12 +632,25 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
     func = tool_call.get("function", {})
     name = func.get("name", "unknown")
     arguments_str = func.get("arguments", "{}")
+
+    # Per-tool: extract field to display in summary line (right side)
+    TOOL_DISPLAY_FIELD = {
+        "read_file": "path",
+        "write_file": "path",
+        "edit_file": "path",
+        "list_directory": "path",
+        "file_info": "path",
+    }
+    display_field = TOOL_DISPLAY_FIELD.get(name)
     
     # Try to parse arguments for prettier display
     try:
         args = json.loads(arguments_str)
-        # Filter out purpose — it's shown separately in the summary line
-        display_args = {k: v for k, v in args.items() if k != "purpose"}
+        # Filter out fields shown in summary line
+        filter_keys = {"purpose"}
+        if display_field:
+            filter_keys.add(display_field)
+        display_args = {k: v for k, v in args.items() if k not in filter_keys}
         args_display = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in display_args.items())
     except Exception:
         args = {}
@@ -645,6 +658,9 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
 
     # Generic: extract purpose from any tool's arguments for display
     purpose = args.get("purpose", "")
+
+    # Extract per-tool display value (e.g., file path for read_file)
+    display_value = args.get(display_field, "") if display_field else ""
 
     tool_icons = {
         "bash": "🖥️",
@@ -698,6 +714,7 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
         result_html = '<div class="tool-step-result"><em>正在运行中...</em></div>\n'
 
     purpose_html = f'<span class="tool-step-purpose">{html.escape(purpose)}</span>\n' if purpose else ""
+    display_html = f'<span class="tool-step-purpose">{html.escape(display_value)}</span>\n' if display_value else ""
 
     return (
         f'<details class="tool-step-details">\n'
@@ -705,6 +722,7 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
         f'<span class="tool-step-status">{status_icon}</span>\n'
         f'<strong>调用工具: {icon} {name}</strong>\n'
         f'{purpose_html}'
+        f'{display_html}'
         f'</summary>\n'
         f'<div class="tool-step-content">\n'
         f'<div class="tool-step-args"><strong>参数:</strong> <code>{html.escape(args_display)}</code></div>\n'
