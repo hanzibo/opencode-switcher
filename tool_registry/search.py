@@ -29,9 +29,10 @@ def _glob_match(filename: str, pattern: str) -> bool:
 
 
 def _grep_with_ripgrep(pattern: str, resolved: str, max_results: int,
-                       include: str = "", ignore_case: bool = False,
-                       literal: bool = False, context: int = 0,
-                       max_chars: int = 8000) -> str:
+                        include: str = "", ignore_case: bool = False,
+                        literal: bool = False, context: int = 0,
+                        max_chars: int = 8000,
+                        format: str = "flat") -> str:
     import subprocess as _sp
     import json as _json
 
@@ -47,7 +48,7 @@ def _grep_with_ripgrep(pattern: str, resolved: str, max_results: int,
     if include:
         cmd.extend(["--glob", include])
     if context > 0:
-        cmd.extend(["-C", str(min(context, 10))])
+        cmd.extend(["-C", str(min(context, 30))])
     cmd.extend(["--", pattern, str(resolved)])
 
     try:
@@ -124,10 +125,18 @@ def _grep_with_ripgrep(pattern: str, resolved: str, max_results: int,
     all_files = sorted(file_matches_map.keys())
     total_matches = sum(file_total.values())
     lines_out: List[str] = []
-    for fpath in all_files:
-        relpath = os.path.relpath(fpath, resolved)
-        lines_out.append(f"📄 {relpath}")
-        lines_out.extend(file_matches_map[fpath])
+    if format == "grouped":
+        for fpath in all_files:
+            relpath = os.path.relpath(fpath, resolved)
+            cnt = file_total[fpath]
+            lines_out.append(f"━━━ {relpath}（{cnt} 个匹配）━━━")
+            lines_out.extend(file_matches_map[fpath])
+            lines_out.append("")
+    else:
+        for fpath in all_files:
+            relpath = os.path.relpath(fpath, resolved)
+            lines_out.append(f"📄 {relpath}")
+            lines_out.extend(file_matches_map[fpath])
 
     result = (f"🔍 搜索「{pattern}」在 {resolved}\n"
               f"共 {len(all_files)} 个文件，{total_matches} 行匹配\n\n" +
@@ -145,9 +154,10 @@ def _grep_with_ripgrep(pattern: str, resolved: str, max_results: int,
 
 
 def _grep_with_python(pattern: str, resolved: str, max_results: int,
-                      include: str = "", ignore_case: bool = False,
-                      literal: bool = False, context: int = 0,
-                      max_chars: int = 8000) -> str:
+                       include: str = "", ignore_case: bool = False,
+                       literal: bool = False, context: int = 0,
+                       max_chars: int = 8000,
+                       format: str = "flat") -> str:
     max_lines_per_file = _MAX_LINES_PER_FILE
 
     try:
@@ -161,6 +171,7 @@ def _grep_with_python(pattern: str, resolved: str, max_results: int,
         return f"错误：无效的正则表达式「{pattern}」: {e}"
 
     matches: List[str] = []
+    file_matches_map: Dict[str, List[str]] = {}
     total_matches = 0
     file_count = 0
     char_count = 0
@@ -215,6 +226,7 @@ def _grep_with_python(pattern: str, resolved: str, max_results: int,
 
             if file_matches:
                 relpath = os.path.relpath(fpath, resolved)
+                file_matches_map[relpath] = list(file_matches)
                 matches.append(f"📄 {relpath}")
                 matches.extend(file_matches)
                 total_matches += sum(1 for m in file_matches
@@ -227,9 +239,20 @@ def _grep_with_python(pattern: str, resolved: str, max_results: int,
     if not matches:
         return f"在目录「{resolved}」中没有找到匹配「{pattern}」的内容。"
 
-    result = (f"🔍 搜索「{pattern}」在 {resolved}\n"
-              f"共 {file_count} 个文件，{total_matches} 行匹配\n\n" +
-              "\n".join(matches))
+    if format == "grouped":
+        grouped_lines: List[str] = []
+        for relpath in sorted(file_matches_map.keys()):
+            cnt = sum(1 for m in file_matches_map[relpath] if not m.startswith("    ..."))
+            grouped_lines.append(f"━━━ {relpath}（{cnt} 个匹配）━━━")
+            grouped_lines.extend(file_matches_map[relpath])
+            grouped_lines.append("")
+        result = (f"🔍 搜索「{pattern}」在 {resolved}\n"
+                  f"共 {len(file_matches_map)} 个文件，{total_matches} 行匹配\n\n" +
+                  "\n".join(grouped_lines))
+    else:
+        result = (f"🔍 搜索「{pattern}」在 {resolved}\n"
+                  f"共 {file_count} 个文件，{total_matches} 行匹配\n\n" +
+                  "\n".join(matches))
 
     reasons = []
     if total_matches >= max_results:
@@ -245,7 +268,8 @@ def _grep_with_python(pattern: str, resolved: str, max_results: int,
 def execute_grep_search(pattern: str, path: str, include: str = "",
                         max_results: int = 50, ignore_case: bool = False,
                         literal: bool = False, context: int = 0,
-                        max_chars: int = 8000) -> str:
+                        max_chars: int = 8000,
+                        format: str = "flat") -> str:
     """Search file contents by regex/keyword in a directory tree.
     Auto-detects ripgrep for fast search; falls back to pure-Python impl.
     """
@@ -256,7 +280,10 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
         return f"错误：路径不是目录「{resolved}」"
 
     max_results = max(1, min(_MAX_GREP_RESULTS, max_results))
-    max_chars = max(500, min(50000, max_chars))
+    max_chars = max(500, min(200000, max_chars))
+
+    if format not in ("flat", "grouped"):
+        return "错误：format 必须是 'flat' 或 'grouped'。"
 
     import shutil as _shutil
     if _shutil.which("rg"):
@@ -264,12 +291,12 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
             pattern, resolved, max_results,
             include=include, ignore_case=ignore_case,
             literal=literal, context=context,
-            max_chars=max_chars)
+            max_chars=max_chars, format=format)
     return _grep_with_python(
         pattern, resolved, max_results,
         include=include, ignore_case=ignore_case,
         literal=literal, context=context,
-        max_chars=max_chars)
+        max_chars=max_chars, format=format)
 
 
 def execute_glob_find(pattern: str, path: str, max_results: int = 100,
@@ -372,8 +399,9 @@ TOOL_SCHEMAS = [
                     "max_results": {"type": "integer", "description": "最大返回行数（1-500，默认 50）", "default": 50},
                     "ignore_case": {"type": "boolean", "description": "是否忽略大小写", "default": False},
                     "literal": {"type": "boolean", "description": "是否将 pattern 视为普通字符串而非正则", "default": False},
-                    "context": {"type": "integer", "description": "匹配行前后显示的上下文行数（0-10）", "default": 0},
-                    "max_chars": {"type": "integer", "description": "结果最大字符数（500-50000，默认 8000）", "default": 8000}
+                    "context": {"type": "integer", "description": "匹配行前后显示的上下文行数（0-30）", "default": 0},
+                    "max_chars": {"type": "integer", "description": "结果最大字符数（500-200000，默认 8000）", "default": 8000},
+                    "format": {"type": "string", "description": "输出格式：flat（默认，平铺列表）或 grouped（按文件分组）", "enum": ["flat", "grouped"], "default": "flat"}
                 },
                 "required": ["pattern", "path"]
             }
