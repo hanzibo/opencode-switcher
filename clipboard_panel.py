@@ -1171,7 +1171,6 @@ class ClipboardPanel(Gtk.Box):
                         menu.append(prompt_item)
 
             # "Copy to AI Panel" for non-image clipboard items
-            item_type = getattr(item, "type", "text")
             if item_type != "image":
                 menu.append(Gtk.SeparatorMenuItem.new())
                 ai_item = Gtk.MenuItem.new_with_label("Copy to AI Panel")
