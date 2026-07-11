@@ -636,7 +636,9 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
     # Try to parse arguments for prettier display
     try:
         args = json.loads(arguments_str)
-        args_display = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in args.items())
+        # Filter out purpose — it's shown separately in the summary line
+        display_args = {k: v for k, v in args.items() if k != "purpose"}
+        args_display = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in display_args.items())
     except Exception:
         args = {}
         args_display = arguments_str
