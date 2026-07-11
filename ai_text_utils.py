@@ -638,6 +638,7 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
         "read_file": "path",
         "write_file": "path",
         "edit_file": "path",
+        "delete_file": "path",
         "list_directory": "path",
         "file_info": "path",
         "get_code_metrics": "path",
@@ -645,6 +646,8 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
         "parse_file_ast": "path",
         "grep_search": "path",
         "glob_find": "path",
+        "web_search": "query",
+        "web_fetch": "url",
     }
     display_field = TOOL_DISPLAY_FIELD.get(name)
     

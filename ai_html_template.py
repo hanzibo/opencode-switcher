@@ -696,8 +696,9 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     padding: 6px 10px;
                     cursor: pointer;
                     display: flex;
+                    flex-wrap: wrap;
                     align-items: center;
-                    gap: 8px;
+                    gap: 4px 8px;
                     user-select: none;
                     outline: none;
                     font-weight: 500;
@@ -713,10 +714,11 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     color: #00E5FF;
                     font-size: 12px;
                     font-weight: normal;
+                    flex-basis: 100%;
+                    margin: 2px 0 0 24px;
                     overflow: hidden;
                     text-overflow: ellipsis;
                     white-space: nowrap;
-                    margin-left: 24px;
                 }}
                 @keyframes spin {{
                     100% {{ transform: rotate(360deg); }}
