@@ -520,7 +520,7 @@ class AIChatPanel(Gtk.Box):
 
         try:
             _subagent_css = b"""
-                .subagent-status-bar { margin: 4px 8px 2px 8px; min-height: 28px; }
+                .subagent-status-bar { margin: 4px 8px 2px 8px; min-height: 28px; background-color: #1a1d2e; border-radius: 6px; padding: 4px 6px; border: 1px solid #2a2d3e; }
                 .subagent-block-running { background-color: #3b82f6; color: #ffffff; border-radius: 4px; font-size: 12px; border: 2px solid transparent; }
                 .subagent-block-done { background-color: #22c55e; color: #ffffff; border-radius: 4px; font-size: 12px; border: 2px solid transparent; }
                 .subagent-block-done:hover { background-color: #16a34a; }
