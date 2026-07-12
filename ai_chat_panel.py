@@ -33,6 +33,7 @@ from ai_text_utils import (
     _vision_content_to_text, _image_hash_path, _image_to_data_uri, _cached_image_to_data_uri,
     _model_supports_vision, USER_AVATAR_HTML, _render_active_turn_to_html,
     _strip_ai_markup,
+    _preserve_newlines,
 )
 
 # Regex to match placeholders: ${index[:prompt][=default]}
@@ -690,6 +691,8 @@ class AIChatPanel(Gtk.Box):
                 rendered_text += f'\n\n<img src="{img_src}" class="chat-image" onclick="showLightbox(this.src)">'
         else:
             rendered_text = _close_unclosed_code_blocks(content)
+            if rendered_text:
+                rendered_text = _preserve_newlines(rendered_text)
         user_msg_idx = len(self._ai_messages) - 1
         self._ai_markdown_text += (
             f'\n\n<div class="msg-row user" markdown="1">\n'

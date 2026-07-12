@@ -846,6 +846,8 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
                 rendered_content = _vision_content_to_markdown(content)
             else:
                 rendered_content = _close_unclosed_code_blocks(content)
+            if rendered_content:
+                rendered_content = _preserve_newlines(rendered_content)
             parts.append(
                 f'<div class="msg-row user" markdown="1">\n'
                 f'{USER_AVATAR_HTML}\n'
@@ -882,3 +884,34 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
             
         i += 1
     return "".join(parts)
+
+
+def _preserve_newlines(text: str) -> str:
+    """Convert single newlines to <br> outside fenced code blocks.
+
+    Standard Markdown collapses single newlines into spaces, making
+    multi-line user input (Shift+Enter) render as a single paragraph.
+    This inserts <br> for single newlines between non-empty lines outside
+    code blocks, preserving the user's intended line breaks.
+    """
+    lines = text.split('\n')
+    out = []
+    in_code_block = False
+
+    for line in lines:
+        if line.strip().startswith('```'):
+            in_code_block = not in_code_block
+            out.append(line)
+            continue
+
+        if in_code_block:
+            out.append(line)
+            continue
+
+        # Outside code block: add <br> before this line if previous line is non-empty
+        if out and out[-1].strip() and line.strip():
+            out[-1] += '<br>'
+
+        out.append(line)
+
+    return '\n'.join(out)
