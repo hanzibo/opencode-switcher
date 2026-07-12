@@ -2,8 +2,7 @@ import json
 import re
 import os
 import threading
-import jieba
-from rank_bm25 import BM25Okapi
+# jieba / rank_bm25 在 MemStore 中懒加载，非必须依赖
 
 # Heuristic Code Classification Regexes
 HTML_START_RE = re.compile(r'^\s*<(html|head|body|div|span|p|a|ul|ol|li|table|tr|td|script|style|link|meta|xml)\b', re.IGNORECASE)
@@ -1155,20 +1154,24 @@ _SYNONYM_MAP = {
 
 
 class MemStore:
-    """跨 session 语义记忆存储，使用 BM25 全文检索。"""
+    """跨 session 语义记忆存储，使用 BM25 全文检索（可选依赖，无 jieba 时降级为基本文本匹配）。"""
 
     def __init__(self):
         self._items: Dict[str, MemoryItem] = {}
-        self._bm25: Optional[BM25Okapi] = None
+        self._bm25 = None
         self._load()
 
     def _tokenize(self, text: str) -> list:
-        text_lower = text.lower().replace("_", " ").replace(":", " ")
-        words = list(jieba.cut(text_lower))
-        for w in text_lower.split():
-            if w not in words:
-                words.append(w)
-        return [w for w in words if len(w.strip()) > 0]
+        try:
+            import jieba
+            text_lower = text.lower().replace("_", " ").replace(":", " ")
+            words = list(jieba.cut(text_lower))
+            for w in text_lower.split():
+                if w not in words:
+                    words.append(w)
+            return [w for w in words if len(w.strip()) > 0]
+        except ImportError:
+            return text.lower().replace("_", " ").replace(":", " ").split()
 
     def _expand_query(self, query: str) -> str:
         parts = [query]
@@ -1183,9 +1186,13 @@ class MemStore:
         if not self._items:
             self._bm25 = None
             return
-        corpus = [f"{item.key}: {item.value}" for item in self._items.values()]
-        tokenized = [self._tokenize(doc) for doc in corpus]
-        self._bm25 = BM25Okapi(tokenized)
+        try:
+            from rank_bm25 import BM25Okapi
+            corpus = [f"{item.key}: {item.value}" for item in self._items.values()]
+            tokenized = [self._tokenize(doc) for doc in corpus]
+            self._bm25 = BM25Okapi(tokenized)
+        except ImportError:
+            self._bm25 = None
 
     def _load(self):
         try:
@@ -1224,16 +1231,24 @@ class MemStore:
         return self._items.get(key)
 
     def search(self, query: str, limit: int = 10) -> List[MemoryItem]:
-        if not self._bm25 or not self._items:
+        if not self._items:
             return []
-        expanded = self._expand_query(query)
-        tokens = self._tokenize(expanded)
-        scores = self._bm25.get_scores(tokens)
-        ranked = sorted(
-            zip(list(self._items.values()), scores),
-            key=lambda x: x[1], reverse=True,
-        )
-        return [item for item, score in ranked[:limit] if score > 0]
+        if self._bm25:
+            expanded = self._expand_query(query)
+            tokens = self._tokenize(expanded)
+            scores = self._bm25.get_scores(tokens)
+            ranked = sorted(
+                zip(list(self._items.values()), scores),
+                key=lambda x: x[1], reverse=True,
+            )
+            return [item for item, score in ranked[:limit] if score > 0]
+        # 降级：无 BM25 时基本子串匹配
+        q = query.lower()
+        results = []
+        for item in self._items.values():
+            if q in item.key.lower() or q in item.value.lower():
+                results.append(item)
+        return results[:limit]
 
     def delete(self, key: str):
         self._items.pop(key, None)

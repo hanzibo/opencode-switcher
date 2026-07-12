@@ -20,6 +20,7 @@ from launcher import launch_session, launch_new_session, launch_session_pure
 from clipboard_store import ClipboardStore, CategoryStore, capture_clipboard_once
 from clipboard_panel import ClipboardPanel
 from utils import is_wayland
+from memory_manager_dialog import show_memory_manager_dialog
 
 CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
@@ -105,6 +106,12 @@ class App:
         theme_menu_item = Gtk.MenuItem.new_with_label("Theme")
         theme_menu_item.set_submenu(theme_menu)
         menu.append(theme_menu_item)
+
+        memory_item = Gtk.MenuItem.new_with_label("🗄️ 管理记忆")
+        memory_item.connect("activate", lambda *_: GLib.idle_add(
+            lambda: show_memory_manager_dialog(None)
+        ))
+        menu.append(memory_item)
 
         menu.append(Gtk.SeparatorMenuItem.new())
         restart_item = Gtk.MenuItem.new_with_label("Restart")
