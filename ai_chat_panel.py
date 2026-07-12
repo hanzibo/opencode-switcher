@@ -135,6 +135,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_selected_subagents: Set[str] = set()
         self._ai_subagent_blocks: Dict[str, tuple] = {}
         self._ai_current_reasoning_text = ""
+        self._ai_summary: str = ""
+        self._ai_summary_generating: bool = False
         self._ai_pending_title_notification = False
 
         # Callback hooks
@@ -636,6 +638,7 @@ class AIChatPanel(Gtk.Box):
             f'</div>\n\n'
         )
         self._ai_title_generated = False
+        self._ai_summary = ""
         user_html = _markdown_to_html_safe(
             self._ai_markdown_text,
             fallback_content=(
@@ -648,6 +651,23 @@ class AIChatPanel(Gtk.Box):
             )
         )
         self._ai_webview.load_html(self.get_html_template(self._theme, user_html), "file:///")
+
+    def _build_llm_messages(self) -> tuple:
+        """构建发送给 LLM 的消息列表和额外 system 消息。
+
+        Returns:
+            tuple: (messages_list, extra_system_messages)
+            - messages_list: 纯对话消息列表（不含摘要）
+            - extra_system_messages: 摘要 system 消息列表（如有），
+              仅在 HTTP 请求层注入，不污染 self._ai_messages
+        """
+        extra = []
+        if self._ai_summary:
+            extra.append({
+                "role": "system",
+                "content": f"【历史摘要】\n{self._ai_summary}"
+            })
+        return list(self._ai_messages), extra
 
     def _send_user_message(self, text: str):
         # Build message content with or without pending image
@@ -736,10 +756,12 @@ class AIChatPanel(Gtk.Box):
         self._ai_cancel_event.clear()
         self._update_send_button(True)
         self._ai_entry.placeholder_text = "等待回复中..."
+        msgs_for_llm, extra_sys = self._build_llm_messages()
         threading.Thread(
             target=self._run_llm_api_request,
-            args=(base_url, api_key, model_name, list(self._ai_messages), current_req_id,
-                  temperature, max_tokens, top_p, self._ai_markdown_text, self._ai_conversation_id),
+            args=(base_url, api_key, model_name, msgs_for_llm, current_req_id,
+                  temperature, max_tokens, top_p, self._ai_markdown_text,
+                  self._ai_conversation_id, extra_sys),
             daemon=True
         ).start()
 
@@ -798,10 +820,12 @@ class AIChatPanel(Gtk.Box):
             getattr(self, "_ai_active_model_info", None)
         )
         self._ai_cancel_event.clear()
+        msgs_for_llm, extra_sys = self._build_llm_messages()
         threading.Thread(
             target=self._run_llm_api_request,
-            args=(base_url, api_key, model_name, list(self._ai_messages), current_req_id,
-                  temperature, max_tokens, top_p, self._ai_markdown_text, self._ai_conversation_id),
+            args=(base_url, api_key, model_name, msgs_for_llm, current_req_id,
+                  temperature, max_tokens, top_p, self._ai_markdown_text,
+                  self._ai_conversation_id, extra_sys),
             daemon=True
         ).start()
 
@@ -873,16 +897,19 @@ class AIChatPanel(Gtk.Box):
         self._ai_cancel_event.clear()
         self._update_send_button(True)
         GLib.timeout_add(100, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
+        msgs_for_llm, extra_sys = self._build_llm_messages()
         threading.Thread(
             target=self._run_llm_api_request,
-            args=(base_url, api_key, model_name, list(self._ai_messages), current_req_id,
-                  temperature, max_tokens, top_p, self._ai_markdown_text, self._ai_conversation_id),
+            args=(base_url, api_key, model_name, msgs_for_llm, current_req_id,
+                  temperature, max_tokens, top_p, self._ai_markdown_text,
+                  self._ai_conversation_id, extra_sys),
             daemon=True
         ).start()
 
     def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, messages: list,
                               req_id: int, temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
-                              top_p: float = DEFAULT_TOP_P, markdown_text: str = "", conv_id: str = ""):
+                              top_p: float = DEFAULT_TOP_P, markdown_text: str = "", conv_id: str = "",
+                              extra_system_messages: Optional[list] = None):
         """Start the ReAct loop by delegating execution to the run_llm_react_loop orchestrator."""
         cancel_event = threading.Event()
         
@@ -974,6 +1001,7 @@ class AIChatPanel(Gtk.Box):
             set_reasoning_text_fn=set_reasoning_callback,
             set_assistant_text_fn=set_assistant_callback,
             conv_id=conv_id,
+            extra_system_messages=extra_system_messages,
         )
 
     def _finalize_after_tool_loop(self, req_id: int):
@@ -2383,15 +2411,47 @@ class AIChatPanel(Gtk.Box):
         if self._ai_settings_store is not None:
             soft_limit = self._ai_settings_store.soft_limit
             trim_target = self._ai_settings_store.trim_target
+            enable_summary = self._ai_settings_store.enable_summary
+            summary_threshold = self._ai_settings_store.summary_threshold
         else:
-            # Derive defaults from AISettingsStore to avoid hardcoded duplication
             _fallback = AISettingsStore()
             soft_limit = _fallback.soft_limit
             trim_target = _fallback.trim_target
+            enable_summary = _fallback.enable_summary
+            summary_threshold = _fallback.summary_threshold
 
         if len(self._ai_messages) <= soft_limit:
             return
-        # Keep first message, drop oldest from the rest to stay within trim target
+
+        # 摘要压缩：在丢弃之前先压缩为摘要
+        if enable_summary and not self._ai_summary_generating:
+            first = self._ai_messages[:1]
+            rest = self._ai_messages[1:]
+            target_len = trim_target - 1
+            start_idx = len(rest) - target_len
+            if start_idx < 0:
+                start_idx = 0
+            pruned = rest[:start_idx]
+            if pruned and len(pruned) >= summary_threshold:
+                self._ai_summary_generating = True
+                self._show_summary_status()
+                threading.Thread(
+                    target=self._generate_summary_async,
+                    args=(list(pruned), trim_target),
+                    daemon=True
+                ).start()
+                return
+
+        self._apply_prune(trim_target)
+
+    def _apply_prune(self, trim_target: int, save_summary: bool = False):
+        """根据 trim_target 从当前 _ai_messages 重新计算裁剪位置。
+
+        使用当前 _ai_messages 实时计算，避免异步回调中引用过期导致数据丢失。
+        """
+        if len(self._ai_messages) <= 1:
+            self._clear_summary_status()
+            return
         first = self._ai_messages[:1]
         rest = self._ai_messages[1:]
         target_len = trim_target - 1
@@ -2415,6 +2475,112 @@ class AIChatPanel(Gtk.Box):
         self._ai_messages = first + rest[start_idx:]
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         self._render_markdown(self._ai_markdown_text)
+        if save_summary:
+            self._save_summary_to_conversation()
+        self._clear_summary_status()
+
+    def _generate_summary_async(self, pruned_messages: list, trim_target: int):
+        """在后台线程中调用 LLM，将即将丢弃的消息压缩为摘要。"""
+        save_summary = False
+        try:
+            max_chars = (self._ai_settings_store.summary_max_chars
+                         if self._ai_settings_store else 500)
+
+            convo_lines = []
+            for m in pruned_messages:
+                role = m.get("role", "unknown")
+                content = m.get("content", "")
+                if isinstance(content, list):
+                    content = str(content)
+                content_str = str(content)
+                if len(content_str) > 500:
+                    content_str = content_str[:500] + "...(截断)"
+                convo_lines.append(f"{role.upper()}: {content_str}")
+
+            convo_text = "\n".join(convo_lines)
+
+            prev = f"已有摘要：\n{self._ai_summary}\n\n" if self._ai_summary else ""
+            prompt = (
+                f"{prev}请将以下对话压缩为简洁摘要，保留用户需求、决策、偏好、"
+                f"关键约定（如代码风格、命名规范）和已取得的进展：\n\n"
+                f"{convo_text}\n\n"
+                f"要求：第三人称、客观简洁、不超过{max_chars}字。"
+            )
+
+            base_url, api_key, model_name, _, temperature, max_tokens, top_p = \
+                self._read_model_config(self._ai_last_prompt_obj,
+                                        getattr(self, "_ai_active_model_info", None))
+
+            if not base_url or not api_key or not model_name:
+                print(f"[summary] 模型配置不完整，跳过摘要生成", flush=True)
+                return
+
+            print(f"[summary] 开始生成摘要 (已丢弃 {len(pruned_messages)} 条消息, max_chars={max_chars}, model={model_name}, prompt_len={len(prompt)}字)", flush=True)
+            result = self._call_llm_sync(
+                [{"role": "user", "content": prompt}],
+                base_url, api_key, model_name,
+                timeout=30,
+                temperature=0.3,
+                # max_tokens 需预留推理模型的 reasoning token 空间
+                max_tokens=max(4096, max_chars * 4),
+                top_p=top_p,
+            )
+
+            if result:
+                result = result.strip()
+                if self._ai_summary:
+                    self._ai_summary = (
+                        f"{self._ai_summary}\n"
+                        f"后续对话摘要：{result}"
+                    )
+                else:
+                    self._ai_summary = result
+                if len(self._ai_summary) > max_chars * 3:
+                    self._ai_summary = self._ai_summary[-max_chars * 3:]
+                save_summary = True
+                print(f"[summary] 摘要生成成功 ({len(result)} 字符)", flush=True)
+            else:
+                print(f"[summary] LLM 返回空结果，摘要未生成 (model={model_name})", flush=True)
+
+        except Exception as e:
+            print(f"[summary] 摘要生成失败: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+        finally:
+            self._ai_summary_generating = False
+            GLib.idle_add(self._apply_prune, trim_target, save_summary)
+
+    def _save_summary_to_conversation(self):
+        """在主线程中仅保存摘要到对话文件，不重建消息列表。"""
+        try:
+            if not self._ai_conversation_id:
+                return
+            conv = self._conversation_store.load_conversation(self._ai_conversation_id)
+            if conv:
+                conv.summary = self._ai_summary
+                self._conversation_store.save_conversation(conv, bump_updated_at=False)
+        except Exception as e:
+            print(f"Error saving summary to conversation: {e}", flush=True)
+
+    def _show_summary_status(self):
+        self._ai_entry.set_sensitive(False)
+        self._ai_send_btn.set_sensitive(False)
+        self._ai_entry.placeholder_text = "摘要压缩中..."
+        self.append_html_to_webview(
+            '<div id="summary-status" style="padding:8px 12px;margin:8px 0;'
+            'background:rgba(100,100,100,0.15);border-radius:8px;font-size:13px;color:#999;">'
+            '⏳ 正在压缩历史对话为摘要...</div>'
+        )
+
+    def _clear_summary_status(self):
+        self._ai_entry.set_sensitive(True)
+        self._ai_send_btn.set_sensitive(True)
+        self._ai_entry.placeholder_text = "输入后续问题..."
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript(
+                "var e=document.getElementById('summary-status');if(e)e.remove();",
+                None, None
+            )
 
     def append_html_to_webview(self, html: str):
         """Insert HTML snippet before end of content div and scroll to bottom."""
@@ -2461,12 +2627,15 @@ class AIChatPanel(Gtk.Box):
             )
             self._ai_conversation_id = conv.id
             conv.messages = [_dict_to_chat_message(m) for m in self._ai_messages]
+            conv.summary = self._ai_summary
             self._conversation_store.save_conversation(conv, bump_updated_at=not preserve_updated_at)
         else:
             conv = self._conversation_store.load_conversation(self._ai_conversation_id)
             if conv:
                 conv.messages = [_dict_to_chat_message(m) for m in self._ai_messages]
                 conv.model_config_snapshot = model_snapshot
+                if not self._ai_summary_generating:
+                    conv.summary = self._ai_summary
             else:
                 conv = Conversation(
                     id=self._ai_conversation_id,
@@ -2516,6 +2685,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_messages = st["messages"]
             self._ai_conversation_id = conv_id
             self._ai_conversation_created_at = conv.created_at
+            self._ai_summary = conv.summary if conv else ""
             
             cached_html = self._ai_html_cache.get(conv_id)
             if cached_html is not None:
@@ -2551,6 +2721,7 @@ class AIChatPanel(Gtk.Box):
                 self._ai_messages.append(msg)
             self._ai_conversation_id = conv.id
             self._ai_conversation_created_at = conv.created_at
+            self._ai_summary = conv.summary if conv else ""
             self._ai_current_assistant_text = ""
             self._ai_current_reasoning_text = ""
             self._ai_response_div_added = False
@@ -2801,6 +2972,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_last_prompt_obj = None
         self._ai_title_generated = False
         self._ai_pending_title_notification = False
+        self._ai_summary = ""
+        self._ai_summary_generating = False
         
         self._ai_input_area.set_no_show_all(False)
         self._ai_input_area.show_all()

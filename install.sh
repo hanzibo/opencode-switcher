@@ -133,7 +133,12 @@ install_python_deps() {
         "pynput>=1.7" \
         "python-xlib>=0.33" \
         "markdown" \
-        "pygments"
+        "pygments" \
+        "requests>=2.31" \
+        "trafilatura>=2.0.0" \
+        "pymdown-extensions>=10.0" \
+        "rank-bm25" \
+        "jieba"
     info "Python 依赖安装完成"
 }
 
@@ -163,6 +168,7 @@ install_files() {
     cp "$SCRIPT_DIR/sort_cats_dialog.py"         "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/llm_client.py"               "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/prompt_dialog.py"            "$INSTALL_DIR/"
+    cp "$SCRIPT_DIR/memory_manager_dialog.py"     "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/prompts_config_dialog.py"     "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/ai_chat_panel.py"            "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/ai_popovers.py"              "$INSTALL_DIR/"

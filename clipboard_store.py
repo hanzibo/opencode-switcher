@@ -2,6 +2,7 @@ import json
 import re
 import os
 import threading
+# jieba / rank_bm25 在 MemStore 中懒加载，非必须依赖
 
 # Heuristic Code Classification Regexes
 HTML_START_RE = re.compile(r'^\s*<(html|head|body|div|span|p|a|ul|ol|li|table|tr|td|script|style|link|meta|xml)\b', re.IGNORECASE)
@@ -683,6 +684,7 @@ class Conversation:
     model_config_snapshot: Dict[str, Any]  # alias, base_url, model_name, temperature, max_tokens, top_p
     created_at: int
     updated_at: int
+    summary: str = ""  # 跨会话持久化的历史摘要，供摘要压缩功能使用
 
 
 class ConversationStore:
@@ -718,6 +720,7 @@ class ConversationStore:
                 "title": conv.title,
                 "system_prompt": conv.system_prompt,
                 "messages": [asdict(m) for m in conv.messages],
+                "summary": conv.summary,
                 "model_config_snapshot": conv.model_config_snapshot,
                 "created_at": conv.created_at,
                 "updated_at": conv.updated_at,
@@ -736,6 +739,7 @@ class ConversationStore:
                 title=data.get("title", ""),
                 system_prompt=data.get("system_prompt", ""),
                 messages=messages,
+                summary=data.get("summary", ""),
                 model_config_snapshot=data.get("model_config_snapshot", {}),
                 created_at=data.get("created_at", 0),
                 updated_at=data.get("updated_at", 0),
@@ -768,6 +772,7 @@ class ConversationStore:
                 summaries.append({
                     "id": data.get("id", ""),
                     "title": data.get("title", "(untitled)"),
+                    "summary": data.get("summary", ""),
                     "message_count": len(data.get("messages", [])),
                     "updated_at": data.get("updated_at", 0),
                 })
@@ -1078,20 +1083,26 @@ AI_SETTINGS_PATH = os.path.join(CONFIG_DIR, "ai_settings.json")
 
 
 class AISettingsStore:
-    """AI 对话截断设置存储，遵循 QQMailCredentialsStore 模式。"""
+    """AI 对话设置存储（截断阈值 + 摘要压缩），遵循 QQMailCredentialsStore 模式。"""
 
     def __init__(self):
         self.soft_limit: int = 200      # 触发截断的消息数
         self.trim_target: int = 100     # 裁剪后保留的消息数
+        self.enable_summary: bool = True      # 是否启用摘要压缩
+        self.summary_threshold: int = 80      # 剩余多少条消息时触发摘要
+        self.summary_max_chars: int = 500     # 摘要最大字符数
         self._load()
 
     def _load(self):
         try:
             with open(AI_SETTINGS_PATH) as f:
                 data = json.load(f)
-            _ = data.get("version", 1)  # 预留：未来 schema 迁移
+            _ = data.get("version", 1)
             self.soft_limit = data.get("soft_limit", 200)
             self.trim_target = data.get("trim_target", 100)
+            self.enable_summary = data.get("enable_summary", True)
+            self.summary_threshold = data.get("summary_threshold", 80)
+            self.summary_max_chars = data.get("summary_max_chars", 500)
         except Exception:
             pass  # 使用默认值
 
@@ -1102,9 +1113,159 @@ class AISettingsStore:
             fd = os.open(AI_SETTINGS_PATH, flags, 0o600)
             with os.fdopen(fd, "w") as f:
                 json.dump({
-                    "version": 1,
+                    "version": 2,
                     "soft_limit": self.soft_limit,
                     "trim_target": self.trim_target,
+                    "enable_summary": self.enable_summary,
+                    "summary_threshold": self.summary_threshold,
+                    "summary_max_chars": self.summary_max_chars,
                 }, f, indent=2)
         except Exception as e:
             print(f"Error saving AI settings: {e}", flush=True)
+
+
+# ── Semantic Memory Store ─────────────────────────────────────────────────────
+
+MEMORY_PATH = os.path.join(CONFIG_DIR, "agent_memory.json")
+
+
+@dataclass
+class MemoryItem:
+    """单条语义记忆，由 memory_save/memory_recall 工具读写。"""
+    key: str
+    value: str
+    category: str = "general"
+    created_at: int = 0
+    updated_at: int = 0
+
+
+# 中英文同义映射，用于 BM25 查询扩展
+_SYNONYM_MAP = {
+    "名字": "name", "姓名": "name", "我叫": "name", "称呼": "name",
+    "偏好": "preference", "喜好": "preference", "喜欢": "preference",
+    "部署": "deploy", "发布": "deploy",
+    "代码风格": "coding_style", "风格": "coding", "编码": "coding",
+    "语言": "language", "编程语言": "language",
+    "工作流": "workflow", "流程": "workflow",
+    "助理": "assistant", "助手": "assistant", "机器人": "assistant",
+    "pdf": "pdf", "txt": "txt",
+    "转换": "convert", "转成": "convert",
+}
+
+
+class MemStore:
+    """跨 session 语义记忆存储，使用 BM25 全文检索（可选依赖，无 jieba 时降级为基本文本匹配）。"""
+
+    def __init__(self):
+        self._items: Dict[str, MemoryItem] = {}
+        self._bm25 = None
+        self._has_jieba: Optional[bool] = None
+        self._load()
+
+    def _tokenize(self, text: str) -> list:
+        if self._has_jieba is None:
+            try:
+                import jieba
+                self._has_jieba = True
+            except ImportError:
+                self._has_jieba = False
+        if self._has_jieba:
+            import jieba
+            text_lower = text.lower().replace("_", " ").replace(":", " ")
+            words = list(jieba.cut(text_lower))
+            for w in text_lower.split():
+                if w not in words:
+                    words.append(w)
+            return [w for w in words if len(w.strip()) > 0]
+        return text.lower().replace("_", " ").replace(":", " ").split()
+
+    def _expand_query(self, query: str) -> str:
+        parts = [query]
+        for zh, en in _SYNONYM_MAP.items():
+            if zh in query:
+                parts.append(en)
+            if en in query.lower():
+                parts.append(zh)
+        return " ".join(parts)
+
+    def _build_index(self):
+        if not self._items:
+            self._bm25 = None
+            return
+        try:
+            from rank_bm25 import BM25Okapi
+            corpus = [f"{item.key}: {item.value}" for item in self._items.values()]
+            tokenized = [self._tokenize(doc) for doc in corpus]
+            self._bm25 = BM25Okapi(tokenized)
+        except ImportError:
+            self._bm25 = None
+
+    def _load(self):
+        try:
+            with open(MEMORY_PATH) as f:
+                data = json.load(f)
+            for item_data in data.get("items", []):
+                item = MemoryItem(**item_data)
+                self._items[item.key] = item
+        except Exception:
+            pass
+        self._build_index()
+
+    def save(self):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        try:
+            with open(MEMORY_PATH, "w") as f:
+                json.dump({
+                    "items": [asdict(item) for item in self._items.values()]
+                }, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Error saving memory store: {e}", flush=True)
+
+    def put(self, key: str, value: str):
+        now = int(time.time() * 1000)
+        if key in self._items:
+            item = self._items[key]
+            item.value = value
+            item.updated_at = now
+        else:
+            self._items[key] = MemoryItem(
+                key=key, value=value, created_at=now, updated_at=now,
+            )
+        self._build_index()
+
+    def get(self, key: str) -> Optional[MemoryItem]:
+        return self._items.get(key)
+
+    def search(self, query: str, limit: int = 10) -> List[MemoryItem]:
+        if not self._items:
+            return []
+        if self._bm25:
+            expanded = self._expand_query(query)
+            tokens = self._tokenize(expanded)
+            scores = self._bm25.get_scores(tokens)
+            ranked = sorted(
+                zip(list(self._items.values()), scores),
+                key=lambda x: x[1], reverse=True,
+            )
+            return [item for item, score in ranked[:limit] if score > 0]
+        # 降级：无 BM25 时基本子串匹配（含同义映射）
+        keywords = {query.lower()}
+        expanded = self._expand_query(query)
+        for kw in expanded.split():
+            keywords.add(kw.lower())
+        results = []
+        for item in self._items.values():
+            text = (item.key + " " + item.value).lower()
+            if any(kw in text for kw in keywords):
+                results.append(item)
+        return results[:limit]
+
+    def delete(self, key: str):
+        self._items.pop(key, None)
+        self._build_index()
+
+    def list_recent(self, limit: int = 20) -> List[MemoryItem]:
+        sorted_items = sorted(
+            self._items.values(), key=lambda x: x.updated_at, reverse=True
+        )
+        return sorted_items[:limit]

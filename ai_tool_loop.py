@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 from gi.repository import GLib
 import tool_registry
 from ai_text_utils import _strip_ai_markup
@@ -47,6 +48,7 @@ def run_llm_react_loop(
     set_reasoning_text_fn=None,
     set_assistant_text_fn=None,
     conv_id: str = None,
+    extra_system_messages: Optional[list] = None,
 ):
     set_tool_iteration_fn(0)
     tool_registry.set_current_conversation_id(conv_id)
@@ -90,6 +92,7 @@ def run_llm_react_loop(
                 iteration=iteration,
                 set_reasoning_text_fn=set_reasoning_text_fn,
                 set_assistant_text_fn=set_assistant_text_fn,
+                extra_system_messages=extra_system_messages,
             )
             if not should_continue:
                 break
@@ -123,6 +126,7 @@ def _perform_llm_call(
     iteration: int,
     set_reasoning_text_fn=None,
     set_assistant_text_fn=None,
+    extra_system_messages: Optional[list] = None,
 ) -> bool:
     assistant_text = ""
     reasoning_text = ""
@@ -138,6 +142,7 @@ def _perform_llm_call(
             temperature=temperature, max_tokens=max_tokens, top_p=top_p,
             tools=tool_registry.TOOL_DEFINITIONS,
             tool_choice=tool_registry.TOOL_CHOICE_AUTO,
+            extra_system_messages=extra_system_messages,
         ):
             if get_current_request_id_fn() != req_id:
                 return False

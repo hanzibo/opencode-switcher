@@ -260,6 +260,60 @@ class SettingsDialog:
         hint.set_margin_top(12)
         vbox.pack_start(hint, False, False, 0)
 
+        # ── Separator before summary compression settings ──
+        sep = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        sep.set_margin_top(16)
+        sep.set_margin_bottom(12)
+        vbox.pack_start(sep, False, False, 0)
+
+        # ── Summary compression section title ──
+        summary_title = Gtk.Label.new()
+        summary_title.set_markup("<b>📝 摘要压缩</b>")
+        summary_title.set_xalign(0)
+        vbox.pack_start(summary_title, False, False, 0)
+
+        # ── Enable summary compression ──
+        summary_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        summary_hbox.set_margin_top(8)
+        self._enable_summary_check = Gtk.CheckButton.new_with_label("启用摘要压缩")
+        self._enable_summary_check.set_active(self._ai_settings_store.enable_summary)
+        summary_hbox.pack_start(self._enable_summary_check, False, False, 0)
+        vbox.pack_start(summary_hbox, False, False, 0)
+
+        # ── Summary threshold ──
+        thresh_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        thresh_lbl = Gtk.Label.new("触发摘要的消息余量:")
+        thresh_lbl.set_size_request(150, -1)
+        thresh_lbl.set_xalign(0)
+        self._summary_thresh_spin = Gtk.SpinButton.new_with_range(20, 300, 10)
+        self._summary_thresh_spin.set_value(self._ai_settings_store.summary_threshold)
+        thresh_hbox.pack_start(thresh_lbl, False, False, 0)
+        thresh_hbox.pack_start(self._summary_thresh_spin, False, False, 0)
+        vbox.pack_start(thresh_hbox, False, False, 0)
+
+        # ── Summary max chars ──
+        max_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        max_lbl = Gtk.Label.new("摘要最大字符数:")
+        max_lbl.set_size_request(150, -1)
+        max_lbl.set_xalign(0)
+        self._summary_max_spin = Gtk.SpinButton.new_with_range(100, 2000, 100)
+        self._summary_max_spin.set_value(self._ai_settings_store.summary_max_chars)
+        max_hbox.pack_start(max_lbl, False, False, 0)
+        max_hbox.pack_start(self._summary_max_spin, False, False, 0)
+        vbox.pack_start(max_hbox, False, False, 0)
+
+        # ── Help text for summary ──
+        summary_hint = Gtk.Label.new()
+        summary_hint.set_markup(
+            "<span size='small' foreground='#888888'>"
+            "启用后，当消息数超过阈值时，将最早的消息压缩为摘要而不是直接丢弃，"
+            "保留关键信息。\n摘要会作为系统消息注入后续对话，帮助 Agent 记住早期内容。"
+            "</span>"
+        )
+        summary_hint.set_xalign(0)
+        summary_hint.set_margin_top(8)
+        vbox.pack_start(summary_hint, False, False, 0)
+
         # ── Spacer ──
         spacer = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         spacer.set_vexpand(True)
@@ -279,6 +333,9 @@ class SettingsDialog:
         # AI 对话设置
         self._ai_settings_store.soft_limit = int(self._soft_spin.get_value())
         self._ai_settings_store.trim_target = int(self._trim_spin.get_value())
+        self._ai_settings_store.enable_summary = self._enable_summary_check.get_active()
+        self._ai_settings_store.summary_threshold = int(self._summary_thresh_spin.get_value())
+        self._ai_settings_store.summary_max_chars = int(self._summary_max_spin.get_value())
         self._ai_settings_store.save()
 
         if self._dialog:

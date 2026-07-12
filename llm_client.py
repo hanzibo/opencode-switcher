@@ -94,13 +94,21 @@ class _LLMHttpClient:
                        stream: bool, temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
                        top_p: float = DEFAULT_TOP_P,
                        tools: Optional[list] = None,
-                       tool_choice: Optional[str] = None):
+                       tool_choice: Optional[str] = None,
+                       extra_system_messages: Optional[list] = None):
         url = base_url.rstrip("/") + "/chat/completions"
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {api_key}",
         }
         cleaned_messages = []
+        # 注入额外的 system 消息（如历史摘要），仅在 HTTP 请求层生效，不污染原始消息列表
+        if extra_system_messages:
+            for extra_msg in extra_system_messages:
+                cleaned_messages.append({
+                    "role": "system",
+                    "content": extra_msg.get("content", ""),
+                })
         for m in messages:
             role = m.get("role")
             content = m.get("content")
@@ -186,6 +194,7 @@ class _LLMHttpClient:
         top_p: float = DEFAULT_TOP_P,
         tools: Optional[list] = None,
         tool_choice: Optional[str] = None,
+        extra_system_messages: Optional[list] = None,
     ):
         """SSE streaming. Yields delta dicts.
 
@@ -204,6 +213,7 @@ class _LLMHttpClient:
             base_url, api_key, model_name, messages, stream=True,
             temperature=temperature, max_tokens=max_tokens, top_p=top_p,
             tools=tools, tool_choice=tool_choice,
+            extra_system_messages=extra_system_messages,
         )
 
         try:
@@ -321,6 +331,7 @@ class _LLMHttpClient:
         top_p: float = DEFAULT_TOP_P,
         tools: Optional[list] = None,
         tool_choice: Optional[str] = None,
+        extra_system_messages: Optional[list] = None,
     ) -> dict:
         """Non-streaming chat completion. Returns the full assistant message dict.
 
@@ -336,13 +347,21 @@ class _LLMHttpClient:
             base_url, api_key, model_name, messages, stream=False,
             temperature=temperature, max_tokens=max_tokens, top_p=top_p,
             tools=tools, tool_choice=tool_choice,
+            extra_system_messages=extra_system_messages,
         )
 
         try:
             resp = self._session.post(url, json=body, headers=headers, timeout=timeout)
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]
+            msg = data["choices"][0]["message"]
+            content = msg.get("content")
+            if not content:
+                fr = data["choices"][0].get("finish_reason", "?")
+                print(f"[sync_chat] API 返回 content 为空 (finish_reason={fr})", flush=True)
+                if data.get("usage"):
+                    print(f"[sync_chat] usage: {data['usage']}", flush=True)
+            return msg
         except requests.exceptions.RequestException as e:
             raise _LLMHttpError(f"请求异常：{e}")
         except (KeyError, IndexError, json.JSONDecodeError) as e:
