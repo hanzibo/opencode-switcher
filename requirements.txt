@@ -6,3 +6,5 @@ pygments
 requests>=2.31
 trafilatura>=2.0.0
 pymdown-extensions>=10.0
+rank-bm25
+jieba

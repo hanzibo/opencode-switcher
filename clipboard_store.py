@@ -2,6 +2,8 @@ import json
 import re
 import os
 import threading
+import jieba
+from rank_bm25 import BM25Okapi
 
 # Heuristic Code Classification Regexes
 HTML_START_RE = re.compile(r'^\s*<(html|head|body|div|span|p|a|ul|ol|li|table|tr|td|script|style|link|meta|xml)\b', re.IGNORECASE)
@@ -1133,17 +1135,57 @@ class MemoryItem:
     """单条语义记忆，由 memory_save/memory_recall 工具读写。"""
     key: str
     value: str
-    category: str = "general"  # "preference", "decision", "fact", "general"
+    category: str = "general"
     created_at: int = 0
     updated_at: int = 0
 
 
+# 中英文同义映射，用于 BM25 查询扩展
+_SYNONYM_MAP = {
+    "名字": "name", "姓名": "name", "我叫": "name", "称呼": "name",
+    "偏好": "preference", "喜好": "preference", "喜欢": "preference",
+    "部署": "deploy", "发布": "deploy",
+    "代码风格": "coding_style", "风格": "coding", "编码": "coding",
+    "语言": "language", "编程语言": "language",
+    "工作流": "workflow", "流程": "workflow",
+    "助理": "assistant", "助手": "assistant", "机器人": "assistant",
+    "pdf": "pdf", "txt": "txt",
+    "转换": "convert", "转成": "convert",
+}
+
+
 class MemStore:
-    """跨 session 语义记忆存储，持久化到 agent_memory.json。"""
+    """跨 session 语义记忆存储，使用 BM25 全文检索。"""
 
     def __init__(self):
         self._items: Dict[str, MemoryItem] = {}
+        self._bm25: Optional[BM25Okapi] = None
         self._load()
+
+    def _tokenize(self, text: str) -> list:
+        text_lower = text.lower().replace("_", " ").replace(":", " ")
+        words = list(jieba.cut(text_lower))
+        for w in text_lower.split():
+            if w not in words:
+                words.append(w)
+        return [w for w in words if len(w.strip()) > 0]
+
+    def _expand_query(self, query: str) -> str:
+        parts = [query]
+        for zh, en in _SYNONYM_MAP.items():
+            if zh in query:
+                parts.append(en)
+            if en in query.lower():
+                parts.append(zh)
+        return " ".join(parts)
+
+    def _build_index(self):
+        if not self._items:
+            self._bm25 = None
+            return
+        corpus = [f"{item.key}: {item.value}" for item in self._items.values()]
+        tokenized = [self._tokenize(doc) for doc in corpus]
+        self._bm25 = BM25Okapi(tokenized)
 
     def _load(self):
         try:
@@ -1154,6 +1196,7 @@ class MemStore:
                 self._items[item.key] = item
         except Exception:
             pass
+        self._build_index()
 
     def save(self):
         os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -1165,49 +1208,36 @@ class MemStore:
         except Exception as e:
             print(f"Error saving memory store: {e}", flush=True)
 
-    def put(self, key: str, value: str, category: str = "general"):
+    def put(self, key: str, value: str):
         now = int(time.time() * 1000)
         if key in self._items:
             item = self._items[key]
             item.value = value
-            item.category = category
             item.updated_at = now
         else:
             self._items[key] = MemoryItem(
-                key=key, value=value, category=category,
-                created_at=now, updated_at=now,
+                key=key, value=value, created_at=now, updated_at=now,
             )
+        self._build_index()
 
     def get(self, key: str) -> Optional[MemoryItem]:
         return self._items.get(key)
 
-    def search(self, query: str) -> List[MemoryItem]:
-        query_lower = query.lower().strip()
-        # 对常见中英文语义做同义映射，提高匹配鲁棒性
-        synonyms = {
-            "名字": "name", "姓名": "name", "叫什么": "name",
-            "名称": "name", "偏好": "preference", "喜好": "preference",
-            "喜欢": "preference", "决策": "decision", "决定": "decision",
-            "事实": "fact", "习惯": "preference",
-        }
-        # 收集原始关键词 + 同义映射关键词
-        keywords = {query_lower}
-        for zh, en in synonyms.items():
-            if zh in query_lower or query_lower in zh:
-                keywords.add(en)
-            if en in query_lower:
-                keywords.add(zh)
-
-        results = []
-        for item in self._items.values():
-            item_text = (item.key + " " + item.value + " " + item.category).lower()
-            if any(kw in item_text for kw in keywords):
-                results.append(item)
-        results.sort(key=lambda x: x.updated_at, reverse=True)
-        return results
+    def search(self, query: str, limit: int = 10) -> List[MemoryItem]:
+        if not self._bm25 or not self._items:
+            return []
+        expanded = self._expand_query(query)
+        tokens = self._tokenize(expanded)
+        scores = self._bm25.get_scores(tokens)
+        ranked = sorted(
+            zip(list(self._items.values()), scores),
+            key=lambda x: x[1], reverse=True,
+        )
+        return [item for item, score in ranked[:limit] if score > 0]
 
     def delete(self, key: str):
         self._items.pop(key, None)
+        self._build_index()
 
     def list_recent(self, limit: int = 20) -> List[MemoryItem]:
         sorted_items = sorted(

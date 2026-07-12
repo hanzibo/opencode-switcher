@@ -1,5 +1,5 @@
 """
-Tool Registry package — 24 AI tool executors for the AI panel.
+Tool Registry package — 26 AI tool executors for the AI panel.
 
 Replaces the monolithic tool_registry.py. Each tool group is a separate module.
 This __init__.py assembles TOOL_DEFINITIONS (from per-module TOOL_SCHEMAS),
@@ -80,9 +80,8 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "find_project_dependencies": _code_analysis.execute_find_dependencies,
     "parse_file_ast": _code_analysis.execute_parse_file_ast,
     # memory
-    "conversation_search": _memory.execute_conversation_search,
-    "conversation_fetch": _memory.execute_conversation_fetch,
     "memory_save": _memory.execute_memory_save,
+    "memory_list": _memory.execute_memory_list,
     "memory_recall": _memory.execute_memory_recall,
 }
 
