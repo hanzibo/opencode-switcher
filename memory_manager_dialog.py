@@ -131,8 +131,8 @@ def show_memory_manager_dialog(parent,
     # ── Show ──
     if on_dialog_shown:
         on_dialog_shown()
-    dialog.show_all()
     refresh_list()
+    dialog.show_all()
 
     dialog.connect("destroy", lambda *_: on_dialog_hidden() if on_dialog_hidden else None)
     dialog.run()

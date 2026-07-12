@@ -1,8 +1,9 @@
 """Agent memory tools — save, list, and recall semantic memories."""
 
+from typing import Optional
 from clipboard_store import MemStore
 
-_MEM_STORE: MemStore = None
+_MEM_STORE: Optional[MemStore] = None
 
 
 def _get_mem_store() -> MemStore:
