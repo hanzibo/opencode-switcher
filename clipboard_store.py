@@ -683,6 +683,7 @@ class Conversation:
     model_config_snapshot: Dict[str, Any]  # alias, base_url, model_name, temperature, max_tokens, top_p
     created_at: int
     updated_at: int
+    summary: str = ""  # 跨会话持久化的历史摘要，供摘要压缩功能使用
 
 
 class ConversationStore:
@@ -718,6 +719,7 @@ class ConversationStore:
                 "title": conv.title,
                 "system_prompt": conv.system_prompt,
                 "messages": [asdict(m) for m in conv.messages],
+                "summary": conv.summary,
                 "model_config_snapshot": conv.model_config_snapshot,
                 "created_at": conv.created_at,
                 "updated_at": conv.updated_at,
@@ -736,6 +738,7 @@ class ConversationStore:
                 title=data.get("title", ""),
                 system_prompt=data.get("system_prompt", ""),
                 messages=messages,
+                summary=data.get("summary", ""),
                 model_config_snapshot=data.get("model_config_snapshot", {}),
                 created_at=data.get("created_at", 0),
                 updated_at=data.get("updated_at", 0),
@@ -768,6 +771,7 @@ class ConversationStore:
                 summaries.append({
                     "id": data.get("id", ""),
                     "title": data.get("title", "(untitled)"),
+                    "summary": data.get("summary", ""),
                     "message_count": len(data.get("messages", [])),
                     "updated_at": data.get("updated_at", 0),
                 })
@@ -1078,20 +1082,26 @@ AI_SETTINGS_PATH = os.path.join(CONFIG_DIR, "ai_settings.json")
 
 
 class AISettingsStore:
-    """AI 对话截断设置存储，遵循 QQMailCredentialsStore 模式。"""
+    """AI 对话设置存储（截断阈值 + 摘要压缩），遵循 QQMailCredentialsStore 模式。"""
 
     def __init__(self):
         self.soft_limit: int = 200      # 触发截断的消息数
         self.trim_target: int = 100     # 裁剪后保留的消息数
+        self.enable_summary: bool = True      # 是否启用摘要压缩
+        self.summary_threshold: int = 80      # 剩余多少条消息时触发摘要
+        self.summary_max_chars: int = 500     # 摘要最大字符数
         self._load()
 
     def _load(self):
         try:
             with open(AI_SETTINGS_PATH) as f:
                 data = json.load(f)
-            _ = data.get("version", 1)  # 预留：未来 schema 迁移
+            _ = data.get("version", 1)
             self.soft_limit = data.get("soft_limit", 200)
             self.trim_target = data.get("trim_target", 100)
+            self.enable_summary = data.get("enable_summary", True)
+            self.summary_threshold = data.get("summary_threshold", 80)
+            self.summary_max_chars = data.get("summary_max_chars", 500)
         except Exception:
             pass  # 使用默认值
 
@@ -1102,9 +1112,105 @@ class AISettingsStore:
             fd = os.open(AI_SETTINGS_PATH, flags, 0o600)
             with os.fdopen(fd, "w") as f:
                 json.dump({
-                    "version": 1,
+                    "version": 2,
                     "soft_limit": self.soft_limit,
                     "trim_target": self.trim_target,
+                    "enable_summary": self.enable_summary,
+                    "summary_threshold": self.summary_threshold,
+                    "summary_max_chars": self.summary_max_chars,
                 }, f, indent=2)
         except Exception as e:
             print(f"Error saving AI settings: {e}", flush=True)
+
+
+# ── Semantic Memory Store ─────────────────────────────────────────────────────
+
+MEMORY_PATH = os.path.join(CONFIG_DIR, "agent_memory.json")
+
+
+@dataclass
+class MemoryItem:
+    """单条语义记忆，由 memory_save/memory_recall 工具读写。"""
+    key: str
+    value: str
+    category: str = "general"  # "preference", "decision", "fact", "general"
+    created_at: int = 0
+    updated_at: int = 0
+
+
+class MemStore:
+    """跨 session 语义记忆存储，持久化到 agent_memory.json。"""
+
+    def __init__(self):
+        self._items: Dict[str, MemoryItem] = {}
+        self._load()
+
+    def _load(self):
+        try:
+            with open(MEMORY_PATH) as f:
+                data = json.load(f)
+            for item_data in data.get("items", []):
+                item = MemoryItem(**item_data)
+                self._items[item.key] = item
+        except Exception:
+            pass
+
+    def save(self):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        try:
+            with open(MEMORY_PATH, "w") as f:
+                json.dump({
+                    "items": [asdict(item) for item in self._items.values()]
+                }, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Error saving memory store: {e}", flush=True)
+
+    def put(self, key: str, value: str, category: str = "general"):
+        now = int(time.time() * 1000)
+        if key in self._items:
+            item = self._items[key]
+            item.value = value
+            item.category = category
+            item.updated_at = now
+        else:
+            self._items[key] = MemoryItem(
+                key=key, value=value, category=category,
+                created_at=now, updated_at=now,
+            )
+
+    def get(self, key: str) -> Optional[MemoryItem]:
+        return self._items.get(key)
+
+    def search(self, query: str) -> List[MemoryItem]:
+        query_lower = query.lower().strip()
+        # 对常见中英文语义做同义映射，提高匹配鲁棒性
+        synonyms = {
+            "名字": "name", "姓名": "name", "叫什么": "name",
+            "名称": "name", "偏好": "preference", "喜好": "preference",
+            "喜欢": "preference", "决策": "decision", "决定": "decision",
+            "事实": "fact", "习惯": "preference",
+        }
+        # 收集原始关键词 + 同义映射关键词
+        keywords = {query_lower}
+        for zh, en in synonyms.items():
+            if zh in query_lower or query_lower in zh:
+                keywords.add(en)
+            if en in query_lower:
+                keywords.add(zh)
+
+        results = []
+        for item in self._items.values():
+            item_text = (item.key + " " + item.value + " " + item.category).lower()
+            if any(kw in item_text for kw in keywords):
+                results.append(item)
+        results.sort(key=lambda x: x.updated_at, reverse=True)
+        return results
+
+    def delete(self, key: str):
+        self._items.pop(key, None)
+
+    def list_recent(self, limit: int = 20) -> List[MemoryItem]:
+        sorted_items = sorted(
+            self._items.values(), key=lambda x: x.updated_at, reverse=True
+        )
+        return sorted_items[:limit]

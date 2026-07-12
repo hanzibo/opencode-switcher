@@ -21,6 +21,7 @@ from . import display
 from . import subagent
 
 from . import code_analysis as _code_analysis
+from . import memory as _memory
 
 
 # ── Public constants ────────────────────────────────────────────────
@@ -34,7 +35,8 @@ ERROR_PREFIXES = ("❌", "⚠️", "错误：", "执行工具「", "搜索失败
 
 TOOL_DEFINITIONS: List[Dict[str, Any]] = []
 for _mod in [common, todo, filesystem, search, web, bash,
-             notification, mail, display, subagent, _code_analysis]:
+             notification, mail, display, subagent, _code_analysis,
+             _memory]:
     for _schema in getattr(_mod, "TOOL_SCHEMAS", []):
         TOOL_DEFINITIONS.append(_schema)
 
@@ -77,6 +79,11 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "get_code_metrics": _code_analysis.execute_get_code_metrics,
     "find_project_dependencies": _code_analysis.execute_find_dependencies,
     "parse_file_ast": _code_analysis.execute_parse_file_ast,
+    # memory
+    "conversation_search": _memory.execute_conversation_search,
+    "conversation_fetch": _memory.execute_conversation_fetch,
+    "memory_save": _memory.execute_memory_save,
+    "memory_recall": _memory.execute_memory_recall,
 }
 
 
