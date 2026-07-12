@@ -528,7 +528,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "bash",
-            "description": "执行 shell 命令。使用持久化 bash 会话，命令之间的工作目录和上下文不重置。自动检测并阻止交互式命令（编辑器、REPL、数据库客户端、网络工具等），环境已预硬化（禁用翻页器/交互提示）。超时会自动重启会话。",
+            "description": "执行 shell 命令。使用持久化 bash 会话，命令之间的工作目录和上下文不重置。自动检测并阻止交互式命令（编辑器、REPL、数据库客户端、网络工具等），环境已预硬化（禁用翻页器/交互提示）。超时会自动重启会话。不适用于仅查询会话状态（应使用 bash_get_session_info）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -546,7 +546,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "bash_get_session_info",
-            "description": "获取当前 Bash 会话的状态信息，包括进程 PID 和会话是否活跃。如需获取工作目录请执行 pwd 命令。返回信息包含安全提示：如需终止会话应使用 kill <PID> 而非 pkill/pkill -f，防止误杀。",
+            "description": "获取当前 Bash 会话的状态信息，包括进程 PID 和会话是否活跃。如需获取工作目录请执行 pwd 命令。返回信息包含安全提示：如需终止会话应使用 kill <PID> 而非 pkill/pkill -f，防止误杀。不适用于执行 shell 命令或修改会话状态（应使用 bash）。",
             "parameters": {
                 "type": "object",
                 "properties": {}

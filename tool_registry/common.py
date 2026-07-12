@@ -93,7 +93,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_current_time",
-            "description": "获取当前的日期、时间、星期和时区信息。可指定 IANA 时区（如 Asia/Shanghai、UTC）或使用本地时间。",
+            "description": "获取当前的日期、时间、星期和时区信息。可指定 IANA 时区（如 Asia/Shanghai、UTC）或使用本地时间。不适用于计时、倒计时、闹钟或时间运算。仅返回当前时刻的快照。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -110,7 +110,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "ask_user_question",
-            "description": "向用户提问并等待回答。当需要用户确认、选择或提供额外信息时使用。注意：此工具会阻塞等待用户响应。",
+            "description": "向用户提问并等待回答。当需要用户确认、选择或提供额外信息时使用。注意：此工具会阻塞等待用户响应。仅在需要用户输入额外信息时调用。不适用于自行搜索信息或做出假设。",
             "parameters": {
                 "type": "object",
                 "properties": {

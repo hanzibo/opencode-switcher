@@ -232,7 +232,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_qq_mail",
-            "description": "读取 QQ 邮箱中的邮件。通过 IMAP over SSL 连接 QQ 邮箱，支持指定文件夹和搜索条件，返回邮件的发件人、主题、时间和正文。",
+            "description": "读取 QQ 邮箱中的邮件。通过 IMAP over SSL 连接 QQ 邮箱，支持指定文件夹和搜索条件，返回邮件的发件人、主题、时间和正文。仅用于读取 QQ 邮箱。不适用于发送邮件、管理邮箱设置或其他邮件服务。",
             "parameters": {
                 "type": "object",
                 "properties": {

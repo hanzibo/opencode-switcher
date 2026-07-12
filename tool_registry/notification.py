@@ -65,7 +65,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "send_notification",
-            "description": "发送桌面通知。通过 notify-send 在系统桌面上显示通知消息，支持设置紧急程度、图标和显示时长。",
+            "description": "发送桌面通知。通过 notify-send 在系统桌面上显示通知消息，支持设置紧急程度、图标和显示时长。不适用于发送邮件、消息或执行系统命令。仅在需要桌面弹窗通知时使用。",
             "parameters": {
                 "type": "object",
                 "properties": {

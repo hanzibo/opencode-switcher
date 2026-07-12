@@ -391,7 +391,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "grep_search",
-            "description": "在目录树中按正则表达式或关键词搜索文件内容。自动检测 ripgrep 加速，无 ripgrep 时使用 Python 实现。支持文件类型过滤。",
+            "description": "在目录树中按正则表达式或关键词搜索文件内容。自动检测 ripgrep 加速，无 ripgrep 时使用 Python 实现。支持文件类型过滤。不适用于按文件名 glob 模式搜索文件（应使用 glob_find）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -414,7 +414,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "glob_find",
-            "description": "在目录树中递归搜索匹配 glob 模式的文件。支持 **/*.py、config*.json 等模式，返回文件路径、大小和修改时间。自动跳过 node_modules 等黑名单目录。",
+            "description": "在目录树中递归搜索匹配 glob 模式的文件。支持 **/*.py、config*.json 等模式，返回文件路径、大小和修改时间。自动跳过 node_modules 等黑名单目录。不适用于搜索文件内容（应使用 grep_search）。",
             "parameters": {
                 "type": "object",
                 "properties": {

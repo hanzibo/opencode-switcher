@@ -456,7 +456,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "sub_agent",
-            "description": "启动一个独立的子代理来完成指定任务。子代理拥有独立的 bash 会话和 LLM 上下文。支持后台运行（默认），完成后结果保存到临时文件。支持 general（全部工具）、explore（只读）、bash（仅 shell）三种模式。",
+            "description": "启动一个独立的子代理来完成指定任务。子代理拥有独立的 bash 会话和 LLM 上下文。支持后台运行（默认），完成后结果保存到临时文件。支持 general（全部工具）、explore（只读）、bash（仅 shell）三种模式。不适用于查询已有子代理的状态（应使用 get_subagent_status）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -474,7 +474,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "get_subagent_status",
-            "description": "查询后台子代理的执行状态。可按 ID 查询单个子代理，或列出全部。支持清除已完成子代理记录。",
+            "description": "查询后台子代理的执行状态。可按 ID 查询单个子代理，或列出全部。支持清除已完成子代理记录。不适用于创建新子代理或分配新任务（应使用 sub_agent）。",
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -269,7 +269,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "todo_create",
-            "description": "创建新任务。支持设置优先级、依赖任务（blocked_by）、包含当前动作和验证标准。依赖任务全部完成时，本任务自动解除阻塞。",
+            "description": "创建新任务。支持设置优先级、依赖任务（blocked_by）、包含当前动作和验证标准。依赖任务全部完成时，本任务自动解除阻塞。不适用于更新已有任务或查询任务列表（应使用 todo_update 或 todo_list）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -288,7 +288,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "todo_update",
-            "description": "更新已有任务。可修改状态、标题、描述、优先级、依赖关系和当前动作。状态变更会自动处理依赖链。",
+            "description": "更新已有任务。可修改状态、标题、描述、优先级、依赖关系和当前动作。状态变更会自动处理依赖链。不适用于创建新任务或查询任务列表（应使用 todo_create 或 todo_list）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -308,7 +308,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "todo_list",
-            "description": "查询任务清单。可按状态筛选、按创建时间/更新时间/优先级排序。不传参数时返回所有任务。支持查询单个任务详情。",
+            "description": "查询任务清单。可按状态筛选、按创建时间/更新时间/优先级排序。不传参数时返回所有任务。支持查询单个任务详情。不适用于创建或更新任务（应使用 todo_create 或 todo_update）。",
             "parameters": {
                 "type": "object",
                 "properties": {

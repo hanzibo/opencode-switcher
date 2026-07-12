@@ -946,7 +946,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
             "description": "分析文件或目录的代码度量指标：总行数、代码行数、注释行数、空行数、"
                            "函数/类数量。支持任何文本文件。对于 Python 文件额外提供函数和类计数。"
                            "可用 include 过滤文件类型（如 *.py），exclude 排除文件或目录，"
-                           "sort_by 控制排序方式。",
+                           "sort_by 控制排序方式。不适用于分析代码依赖关系或解析代码结构（应使用 "
+                           "find_project_dependencies 或 parse_file_ast）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -980,7 +981,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
             "name": "find_project_dependencies",
             "description": "分析文件或项目的依赖关系。Python 文件使用 ast 模块精确提取 import 语句，"
                            "JS/TS/Go 使用正则提取。将依赖分类为标准库、第三方包和本地模块，"
-                           "并检测循环依赖和孤立模块。",
+                           "并检测循环依赖和孤立模块。不适用于统计代码行数或解析代码结构（应使用 "
+                           "get_code_metrics 或 parse_file_ast）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1008,7 +1010,8 @@ TOOL_SCHEMAS: List[Dict[str, Any]] = [
                            "（需安装 tree-sitter 及对应 grammar）。"
                            "不指定 language 时自动从文件后缀检测。"
                            "可通过 exclude_private 过滤私有函数，include_docstrings 显示文档摘要，"
-                           "include_imports 控制是否列出导入语句。",
+                           "include_imports 控制是否列出导入语句。不适用于统计代码行数或分析项目依赖"
+                           "关系（应使用 get_code_metrics 或 find_project_dependencies）。",
             "parameters": {
                 "type": "object",
                 "properties": {

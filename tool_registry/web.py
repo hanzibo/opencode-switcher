@@ -427,7 +427,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "搜索互联网获取实时信息。当用户问及实时新闻、最新动态、技术文档、或不确认的知识时使用。返回搜索结果列表（标题、URL、摘要）。",
+            "description": "搜索互联网获取实时信息。当用户问及实时新闻、最新动态、技术文档、或不确认的知识时使用。返回搜索结果列表（标题、URL、摘要）。不适用于打开/阅读指定 URL 的全文内容（应使用 web_fetch）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -442,7 +442,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "web_fetch",
-            "description": "获取指定 URL 页面的内容。优先使用 HTTP 直连（轻量快速），页面含反爬或需 JS 渲染时自动回退到 Obscura 无头浏览器。结果缓存 5 分钟。",
+            "description": "获取指定 URL 页面的内容。优先使用 HTTP 直连（轻量快速），页面含反爬或需 JS 渲染时自动回退到 Obscura 无头浏览器。结果缓存 5 分钟。不适用于泛泛搜索未知资料（应使用 web_search）。",
             "parameters": {
                 "type": "object",
                 "properties": {

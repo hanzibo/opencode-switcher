@@ -657,7 +657,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "list_directory",
-            "description": "列出目录内容。返回文件/目录/链接列表，含大小和修改时间。支持排序和隐藏文件控制。仅接受绝对路径。",
+            "description": "列出目录内容。返回文件/目录/链接列表，含大小和修改时间。支持排序和隐藏文件控制。仅接受绝对路径。不适用于读取文件内容、搜索文件内容或获取单个文件的详细信息（应使用 read_file、grep_search 或 file_info）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -674,7 +674,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "读取文本文件的内容。支持指定行范围（从 start_line 到 end_line），以及控制最大字符数。仅接受绝对路径。读取后可通过 edit_file 工具编辑。",
+            "description": "读取文本文件的内容。支持指定行范围（从 start_line 到 end_line），以及控制最大字符数。仅接受绝对路径。读取后可通过 edit_file 工具编辑。不适用于列出目录内容、搜索文件内容或编辑文件。返回文件原始文本内容。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -692,7 +692,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "write_file",
-            "description": "创建新文件或覆盖现有文件的内容。仅接受绝对路径。默认不覆盖已有文件（需设置 force=True）。支持 append 追加模式。",
+            "description": "创建新文件或覆盖现有文件的内容。仅接受绝对路径。默认不覆盖已有文件（需设置 force=True）。支持 append 追加模式。不适用于编辑已有文件中的部分内容（应使用 edit_file），不适用于重命名或删除文件。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -710,7 +710,7 @@ TOOL_SCHEMAS = [
             "type": "function",
             "function": {
                 "name": "edit_file",
-                "description": "编辑现有文件：替换字符串（string 模式，根据 old_string 匹配定位）或替换行范围（line 模式）。string 模式任意读取过文件即可编辑（old_string 匹配确保安全），line 模式需完整读取（无字符串兜底）。设置 force=True 跳过所有读取检查。支持 replace_all 替换全部匹配。",
+                "description": "编辑现有文件：替换字符串（string 模式，根据 old_string 匹配定位）或替换行范围（line 模式）。string 模式任意读取过文件即可编辑（old_string 匹配确保安全），line 模式需完整读取（无字符串兜底）。设置 force=True 跳过所有读取检查。支持 replace_all 替换全部匹配。不适用于创建新文件（应使用 write_file），不适用于重命名或删除文件。",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -732,7 +732,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "delete_file",
-            "description": "删除文件或空目录。对非空目录需要设置 recursive=True 递归删除。仅接受绝对路径。",
+            "description": "删除文件或空目录。对非空目录需要设置 recursive=True 递归删除。仅接受绝对路径。不适用于移动、重命名或编辑文件。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -747,7 +747,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "rename_file",
-            "description": "重命名或移动文件/目录。目标路径已存在时需要设置 force=True 覆盖。仅接受绝对路径。",
+            "description": "重命名或移动文件/目录。目标路径已存在时需要设置 force=True 覆盖。仅接受绝对路径。不适用于复制、删除或编辑文件内容。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -763,7 +763,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "file_info",
-            "description": "获取文件或目录的详细信息：类型、大小、权限、所有者、修改/访问/创建时间。支持符号链接。仅接受绝对路径。",
+            "description": "获取文件或目录的详细信息：类型、大小、权限、所有者、修改/访问/创建时间。支持符号链接。仅接受绝对路径。不适用于列出目录内容或读取文件内容（应使用 list_directory 或 read_file）。",
             "parameters": {
                 "type": "object",
                 "properties": {
