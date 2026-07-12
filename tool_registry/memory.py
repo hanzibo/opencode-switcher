@@ -39,7 +39,7 @@ def execute_memory_list(bm25_filter: str = "") -> str:
 def execute_memory_recall(keys: str) -> str:
     """根据键名查询记忆内容。keys 支持单个键名或多个逗号分隔。"""
     store = _get_mem_store()
-    key_list = [k.strip() for k in keys.split(",")]
+    key_list = [k.strip() for k in keys.split(",") if k.strip()]
     results = []
     for key in key_list:
         item = store.get(key)

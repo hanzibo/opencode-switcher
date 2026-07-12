@@ -1159,10 +1159,17 @@ class MemStore:
     def __init__(self):
         self._items: Dict[str, MemoryItem] = {}
         self._bm25 = None
+        self._has_jieba: Optional[bool] = None
         self._load()
 
     def _tokenize(self, text: str) -> list:
-        try:
+        if self._has_jieba is None:
+            try:
+                import jieba
+                self._has_jieba = True
+            except ImportError:
+                self._has_jieba = False
+        if self._has_jieba:
             import jieba
             text_lower = text.lower().replace("_", " ").replace(":", " ")
             words = list(jieba.cut(text_lower))
@@ -1170,8 +1177,7 @@ class MemStore:
                 if w not in words:
                     words.append(w)
             return [w for w in words if len(w.strip()) > 0]
-        except ImportError:
-            return text.lower().replace("_", " ").replace(":", " ").split()
+        return text.lower().replace("_", " ").replace(":", " ").split()
 
     def _expand_query(self, query: str) -> str:
         parts = [query]
