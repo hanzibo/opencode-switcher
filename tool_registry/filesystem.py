@@ -219,7 +219,8 @@ def execute_list_directory(path: str, include_hidden: bool = False,
 
 
 def execute_read_file(path: str, max_chars: int = 20000, start_line: int = 1,
-                      end_line: Optional[int] = None) -> str:
+                      end_line: Optional[int] = None,
+                      purpose: str = "") -> str:
     """Read a text file's content. Accepts absolute paths only, with optional line range."""
     resolved = _resolve_safe_path(path)
     if resolved is None:
@@ -315,7 +316,8 @@ def execute_edit_file(path: str, old_string: str = "", new_string: str = "",
                       replace_all: bool = False, mode: str = "string",
                       start_line: Optional[int] = None,
                       end_line: Optional[int] = None,
-                      force: bool = False) -> str:
+                      force: bool = False,
+                      purpose: str = "") -> str:
     """Edit a file via string replacement or line-range replacement."""
     resolved = _resolve_safe_path(path)
     if resolved is None:
@@ -557,7 +559,8 @@ def execute_file_info(path: str) -> str:
 
 
 def execute_write_file(path: str, content: str, force: bool = False,
-                       mode: str = "write") -> str:
+                       mode: str = "write",
+                       purpose: str = "") -> str:
     """Create a new file or overwrite an existing file's content."""
     if not path or not isinstance(path, str) or not os.path.isabs(path):
         return "错误：必须使用绝对路径！"
@@ -676,6 +679,7 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "文件的绝对路径"},
+                    "purpose": {"type": "string", "description": "简短描述操作该文件的目的（10-40字），用于向用户解释执行此操作的原因。例如：检查配置文件、查看日志错误、阅读源代码"},
                     "max_chars": {"type": "integer", "description": "最大返回字符数（500-200000，默认 20000）", "default": 20000},
                     "start_line": {"type": "integer", "description": "起始行号（从 1 开始，默认 1）", "default": 1},
                     "end_line": {"type": "integer", "description": "结束行号（含，可选）"}
@@ -693,6 +697,7 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "文件的绝对路径"},
+                    "purpose": {"type": "string", "description": "简短描述写入该文件的目的（10-40字），用于向用户解释执行此操作的原因。例如：创建配置文件、写入测试数据"},
                     "content": {"type": "string", "description": "写入的文本内容"},
                     "force": {"type": "boolean", "description": "是否覆盖已存在的文件", "default": False},
                     "mode": {"type": "string", "description": "写入模式", "enum": ["write", "append"], "default": "write"}
@@ -710,6 +715,7 @@ TOOL_SCHEMAS = [
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "文件的绝对路径"},
+                        "purpose": {"type": "string", "description": "简短描述编辑该文件的目的（10-40字），用于向用户解释执行此操作的原因。例如：修复语法错误、更新配置项、替换旧版权信息"},
                         "old_string": {"type": "string", "description": "要替换的原文（string 模式下必填）"},
                         "new_string": {"type": "string", "description": "替换后的新内容"},
                         "replace_all": {"type": "boolean", "description": "是否替换所有出现位置", "default": False},
