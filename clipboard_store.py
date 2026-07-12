@@ -1248,11 +1248,15 @@ class MemStore:
                 key=lambda x: x[1], reverse=True,
             )
             return [item for item, score in ranked[:limit] if score > 0]
-        # 降级：无 BM25 时基本子串匹配
-        q = query.lower()
+        # 降级：无 BM25 时基本子串匹配（含同义映射）
+        keywords = {query.lower()}
+        expanded = self._expand_query(query)
+        for kw in expanded.split():
+            keywords.add(kw.lower())
         results = []
         for item in self._items.values():
-            if q in item.key.lower() or q in item.value.lower():
+            text = (item.key + " " + item.value).lower()
+            if any(kw in text for kw in keywords):
                 results.append(item)
         return results[:limit]
 

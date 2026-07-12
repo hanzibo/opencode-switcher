@@ -109,7 +109,7 @@ class App:
 
         memory_item = Gtk.MenuItem.new_with_label("🗄️ 管理记忆")
         memory_item.connect("activate", lambda *_: GLib.idle_add(
-            lambda: show_memory_manager_dialog(None)
+            show_memory_manager_dialog, None
         ))
         menu.append(memory_item)
 
