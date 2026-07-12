@@ -269,7 +269,8 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
                         max_results: int = 50, ignore_case: bool = False,
                         literal: bool = False, context: int = 0,
                         max_chars: int = 8000,
-                        format: str = "flat") -> str:
+                        format: str = "flat",
+                        purpose: str = "") -> str:
     """Search file contents by regex/keyword in a directory tree.
     Auto-detects ripgrep for fast search; falls back to pure-Python impl.
     """
@@ -300,7 +301,8 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
 
 
 def execute_glob_find(pattern: str, path: str, max_results: int = 100,
-                      exclude: str = "") -> str:
+                      exclude: str = "",
+                      purpose: str = "") -> str:
     """Recursively find files matching a glob pattern, skipping blacklisted directories."""
     resolved = _resolve_safe_path(path)
     if resolved is None:
@@ -394,6 +396,7 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string", "description": "搜索关键词或正则表达式"},
+                    "purpose": {"type": "string", "description": "简短描述搜索的目的（10-40字），用于向用户解释执行此搜索的原因。例如：查找错误日志、定位函数实现"},
                     "path": {"type": "string", "description": "搜索根目录的绝对路径"},
                     "include": {"type": "string", "description": "文件类型过滤 glob，例如 *.py、*.{ts,js}"},
                     "max_results": {"type": "integer", "description": "最大返回行数（1-500，默认 50）", "default": 50},
@@ -416,6 +419,7 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string", "description": "glob 搜索模式，例如 **/*.py、config*.json、src/**/*.ts"},
+                    "purpose": {"type": "string", "description": "简短描述搜索的目的（10-40字），用于向用户解释执行此搜索的原因。例如：查找配置文件、列出源代码文件"},
                     "path": {"type": "string", "description": "搜索根目录的绝对路径"},
                     "max_results": {"type": "integer", "description": "最大返回文件数（1-500，默认 100）", "default": 100},
                     "exclude": {"type": "string", "description": "排除的 glob 模式，例如 *__pycache__*"}
