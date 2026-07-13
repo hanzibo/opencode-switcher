@@ -53,8 +53,7 @@ from utils import is_wayland, CONVERSATIONS_DIR
 
 CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
 CLIPBOARD_PATH = os.path.join(CONFIG_DIR, "clipboard_history.json")
-# ponytail: removed unused Prompt, PromptStore, and migrate_from_prompts
-MAX_CLIPBOARD = 150
+# ponytail: removed unused Prompt, PromptStore, and migrate_from_prompts, MAX_CLIPBOARD
 CATEGORIES_PATH = os.path.join(CONFIG_DIR, "categories.json")
 CUSTOM_PROMPTS_PATH = os.path.join(CONFIG_DIR, "custom_prompts.json")
 
@@ -297,6 +296,7 @@ class ClipboardStore:
         self._lock = threading.RLock()
         self._items: List[ClipboardItem] = []
         self._last_written_hash: Optional[str] = None
+        self._max_clipboard: int = AISettingsStore().max_clipboard
         with self._lock:
             self._load()
 
@@ -307,7 +307,7 @@ class ClipboardStore:
             try:
                 with open(CLIPBOARD_PATH, "r") as f:
                     data = json.load(f)
-                self._items = [ClipboardItem(**d) for d in data[-MAX_CLIPBOARD:]]
+                self._items = [ClipboardItem(**d) for d in data[-self._max_clipboard:]]
             except (json.JSONDecodeError, TypeError):
                 self._items = []
 
@@ -349,9 +349,9 @@ class ClipboardStore:
             item_type = self.classify_text(text)
             language = self.detect_language_name(text) if item_type == "code" else None
             self._items.append(ClipboardItem(text=text, timestamp=int(time.time() * 1000), hash=h, type=item_type, language=language))
-            if len(self._items) > MAX_CLIPBOARD:
-                evicted = self._items[:-MAX_CLIPBOARD]
-                self._items = self._items[-MAX_CLIPBOARD:]
+            if len(self._items) > self._max_clipboard:
+                evicted = self._items[:-self._max_clipboard]
+                self._items = self._items[-self._max_clipboard:]
                 for item in evicted:
                     if item.type == "image" and item.image_path:
                         self._delete_image_file_if_unreferenced(item.image_path)
@@ -385,9 +385,9 @@ class ClipboardStore:
                 type="image",
                 image_path=img_path
             ))
-            if len(self._items) > MAX_CLIPBOARD:
-                evicted = self._items[:-MAX_CLIPBOARD]
-                self._items = self._items[-MAX_CLIPBOARD:]
+            if len(self._items) > self._max_clipboard:
+                evicted = self._items[:-self._max_clipboard]
+                self._items = self._items[-self._max_clipboard:]
                 for item in evicted:
                     if item.type == "image" and item.image_path:
                         self._delete_image_file_if_unreferenced(item.image_path)
@@ -1083,7 +1083,7 @@ AI_SETTINGS_PATH = os.path.join(CONFIG_DIR, "ai_settings.json")
 
 
 class AISettingsStore:
-    """AI 对话设置存储（截断阈值 + 摘要压缩），遵循 QQMailCredentialsStore 模式。"""
+    """应用设置存储（AI 对话设置 + 常量配置），遵循 QQMailCredentialsStore 模式。"""
 
     def __init__(self):
         self.soft_limit: int = 200      # 触发截断的消息数
@@ -1091,6 +1091,8 @@ class AISettingsStore:
         self.enable_summary: bool = True      # 是否启用摘要压缩
         self.summary_threshold: int = 80      # 剩余多少条消息时触发摘要
         self.summary_max_chars: int = 500     # 摘要最大字符数
+        self.max_clipboard: int = 150   # 剪切板最大历史项目数
+        self.max_tool_iterations: int = 25  # AI 工具调用最大次数
         self._load()
 
     def _load(self):
@@ -1103,6 +1105,8 @@ class AISettingsStore:
             self.enable_summary = data.get("enable_summary", True)
             self.summary_threshold = data.get("summary_threshold", 80)
             self.summary_max_chars = data.get("summary_max_chars", 500)
+            self.max_clipboard = data.get("max_clipboard", 150)
+            self.max_tool_iterations = data.get("max_tool_iterations", 25)
         except Exception:
             pass  # 使用默认值
 
@@ -1113,12 +1117,14 @@ class AISettingsStore:
             fd = os.open(AI_SETTINGS_PATH, flags, 0o600)
             with os.fdopen(fd, "w") as f:
                 json.dump({
-                    "version": 2,
+                    "version": 3,
                     "soft_limit": self.soft_limit,
                     "trim_target": self.trim_target,
                     "enable_summary": self.enable_summary,
                     "summary_threshold": self.summary_threshold,
                     "summary_max_chars": self.summary_max_chars,
+                    "max_clipboard": self.max_clipboard,
+                    "max_tool_iterations": self.max_tool_iterations,
                 }, f, indent=2)
         except Exception as e:
             print(f"Error saving AI settings: {e}", flush=True)

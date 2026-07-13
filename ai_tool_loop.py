@@ -5,6 +5,16 @@ import tool_registry
 from ai_text_utils import _strip_ai_markup
 from llm_client import _LLMHttpError
 
+# lazily initialized from AISettingsStore
+_MAX_TOOL_ITERATIONS: Optional[int] = None
+
+def _get_max_tool_iterations() -> int:
+    global _MAX_TOOL_ITERATIONS
+    if _MAX_TOOL_ITERATIONS is None:
+        from clipboard_store import AISettingsStore
+        _MAX_TOOL_ITERATIONS = AISettingsStore().max_tool_iterations
+    return _MAX_TOOL_ITERATIONS
+
 def _clean_messages_for_llm(messages: list) -> list:
     cleaned = []
     for msg in messages:
@@ -19,8 +29,6 @@ def _clean_messages_for_llm(messages: list) -> list:
         else:
             cleaned.append(msg)
     return cleaned
-
-MAX_TOOL_ITERATIONS = 25
 
 def run_llm_react_loop(
     llm_client,
@@ -54,7 +62,8 @@ def run_llm_react_loop(
     tool_registry.set_current_conversation_id(conv_id)
     try:
         iteration = 0
-        while iteration < MAX_TOOL_ITERATIONS:
+        max_iter = _get_max_tool_iterations()
+        while iteration < max_iter:
             # Stop before next iteration if user cancelled (pressed pause/stop)
             if cancel_event and cancel_event.is_set():
                 break
@@ -218,10 +227,11 @@ def _perform_llm_call(
             if cancel_event and cancel_event.is_set():
                 return False
 
-            if iteration + 1 >= MAX_TOOL_ITERATIONS:
+            max_iter = _get_max_tool_iterations()
+            if iteration + 1 >= max_iter:
                 append_message_fn({
                     "role": "assistant",
-                    "content": f"⚠️ 已达到最大工具调用次数（{MAX_TOOL_ITERATIONS}），请简化请求或重试。"
+                    "content": f"⚠️ 已达到最大迭代次数（{max_iter}），请简化请求或重试。"
                 })
                 GLib.idle_add(finalize_after_tool_loop_fn, req_id)
                 return False
