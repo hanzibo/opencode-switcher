@@ -43,6 +43,12 @@ from ai_text_utils import (
 TEMPLATE_REGEX = re.compile(r"\$\{(\d+)(?::((?:[^}=]|\\:|\\=)+))?(?<!\\)(?:=([^}]*))?\}")
 PROMPT_PLACEHOLDER_RE = re.compile(r'\\\\|\\(\${&})|(\${&})')
 
+# WebView memory pressure settings — applied at WebContext construction time
+_MPS_MEMORY_LIMIT = 300
+_MPS_POLL_INTERVAL = 5
+_MPS_CONSERVATIVE = 0.2
+_MPS_STRICT = 0.4
+
 
 from ai_html_template import get_html_template, _get_pygments_css
 from dynamic_copy_dialog import show_dynamic_copy_dialog
@@ -79,6 +85,7 @@ class AIChatPanel(Gtk.Box):
         ("/cd", "切换 bash 工作路径"),
     ]
     _SUSPEND_DELAY_SECONDS = 15
+    _MPS = None
 
     def __init__(self, conversation_store, llm_settings_store, ai_settings_store=None, theme="dark", ai_commands=None, pygments_css_cache=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -140,7 +147,6 @@ class AIChatPanel(Gtk.Box):
         self._ai_pending_title_notification = False
         self._webview_suspended = False
         self._suspend_timeout_id = 0
-        self._ai_webview_context = None
 
         # Callback hooks
         self.on_dialog_shown = None
@@ -248,16 +254,16 @@ class AIChatPanel(Gtk.Box):
         ai_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         ai_scrolled.set_vexpand(True)
 
-        # Custom WebContext with aggressive memory pressure settings
-        mps = WebKit2.MemoryPressureSettings.new()
-        mps.set_memory_limit(300)
-        mps.set_poll_interval(5)
-        mps.set_conservative_threshold(0.2)
-        mps.set_strict_threshold(0.4)
-        self._ai_webview_context = WebKit2.WebContext(memory_pressure_settings=mps)
-        self._ai_webview_context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
-
-        self._ai_webview = WebKit2.WebView.new_with_context(self._ai_webview_context)
+        if AIChatPanel._MPS is None:
+            _mps = WebKit2.MemoryPressureSettings.new()
+            _mps.set_memory_limit(_MPS_MEMORY_LIMIT)
+            _mps.set_poll_interval(_MPS_POLL_INTERVAL)
+            _mps.set_conservative_threshold(_MPS_CONSERVATIVE)
+            _mps.set_strict_threshold(_MPS_STRICT)
+            AIChatPanel._MPS = _mps
+        _web_context = WebKit2.WebContext(memory_pressure_settings=AIChatPanel._MPS)
+        _web_context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
+        self._ai_webview = WebKit2.WebView.new_with_context(_web_context)
         self._ai_webview.set_name("aiWebView")
 
         # Minimize WebKit resource footprint
@@ -399,10 +405,7 @@ class AIChatPanel(Gtk.Box):
 
         self.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
         ai_scrolled.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
-        if self._theme == "dark":
-            self._ai_webview.set_background_color(Gdk.RGBA(0.039, 0.043, 0.063, 1.0))
-        else:
-            self._ai_webview.set_background_color(Gdk.RGBA(1.0, 1.0, 1.0, 1.0))
+        self._ai_webview.set_background_color(bg_rgba)
 
         self.pack_start(ai_scrolled, True, True, 0)
 
@@ -2952,9 +2955,7 @@ class AIChatPanel(Gtk.Box):
         return self.get_visible()
 
     def on_panel_shown(self):
-        print(f"[DEBUG] on_panel_shown called, _webview_suspended={self._webview_suspended}", flush=True)
         if getattr(self, "_suspend_timeout_id", 0) != 0:
-            print(f"[DEBUG] on_panel_shown: cancelling timer {self._suspend_timeout_id}", flush=True)
             GLib.source_remove(self._suspend_timeout_id)
             self._suspend_timeout_id = 0
         
@@ -2966,7 +2967,6 @@ class AIChatPanel(Gtk.Box):
             print("[AI] WebView restored from suspension.", flush=True)
 
     def on_panel_hidden(self):
-        print(f"[DEBUG] on_panel_hidden called, _webview_suspended={self._webview_suspended}", flush=True)
         if getattr(self, "_suspend_timeout_id", 0) != 0:
             GLib.source_remove(self._suspend_timeout_id)
             self._suspend_timeout_id = 0
@@ -2974,13 +2974,10 @@ class AIChatPanel(Gtk.Box):
         self._suspend_timeout_id = GLib.timeout_add_seconds(
             self._SUSPEND_DELAY_SECONDS, self._suspend_webview_cb
         )
-        print(f"[DEBUG] suspend timer started, id={self._suspend_timeout_id}", flush=True)
 
     def _suspend_webview_cb(self) -> bool:
-        print(f"[DEBUG] _suspend_webview_cb fired, _webview_suspended={self._webview_suspended}, _ai_running_convs={ {k: v.get('streaming') for k, v in self._ai_running_convs.items()} }", flush=True)
         any_running = any(st.get("streaming", False) for st in self._ai_running_convs.values())
         if any_running:
-            print("[DEBUG] _suspend_webview_cb: skipped, streaming active", flush=True)
             return True
 
         self._suspend_timeout_id = 0
