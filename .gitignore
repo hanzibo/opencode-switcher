@@ -8,3 +8,4 @@ venv/
 .omo/
 .mimocode/
 codebase_analysis.md
+monitor-resources.sh
