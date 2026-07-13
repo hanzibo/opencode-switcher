@@ -525,10 +525,6 @@ class ClipboardPanel(Gtk.Box):
             " border: none; background: transparent; color: %(text_secondary)s;"
             " border-radius: 4px; }"
             ".filter-gear:hover { background: %(btn_hover)s; color: %(text_fg)s; }"
-            ".row-more-btn { font-size: 18px; padding: 0 4px; min-width: 26px; min-height: 26px;"
-            " border: none; background: transparent; color: %(text_secondary)s;"
-            " border-radius: 4px; }"
-            ".row-more-btn:hover { background: %(btn_hover)s; color: %(text_fg)s; }"
             "paned > separator { min-width: 5px; min-height: 5px;"
             " background: %(input_border)s; border-radius: 2px;"
             " outline: none; box-shadow: none; border: none; }"
@@ -984,13 +980,6 @@ class ClipboardPanel(Gtk.Box):
 
         hbox.pack_start(right_vbox, False, False, 0)
 
-        more_btn = Gtk.Button.new_with_label("\u22ef")
-        more_btn.set_relief(Gtk.ReliefStyle.NONE)
-        more_btn.set_valign(Gtk.Align.CENTER)
-        more_btn.get_style_context().add_class("row-more-btn")
-        more_btn.connect("clicked", self._on_row_more_clicked, row, item)
-        hbox.pack_start(more_btn, False, False, 0)
-
         row.add(hbox)
 
     def _build_prompt_row(self, row, item: CategoryItem):
@@ -1031,13 +1020,6 @@ class ClipboardPanel(Gtk.Box):
             tag_label.set_halign(Gtk.Align.END)
             tag_label.set_valign(Gtk.Align.CENTER)
             hbox.pack_start(tag_label, False, False, 0)
-
-        more_btn = Gtk.Button.new_with_label("\u22ef")
-        more_btn.set_relief(Gtk.ReliefStyle.NONE)
-        more_btn.set_valign(Gtk.Align.CENTER)
-        more_btn.get_style_context().add_class("row-more-btn")
-        more_btn.connect("clicked", self._on_row_more_clicked, row, item)
-        hbox.pack_start(more_btn, False, False, 0)
 
         row.add(hbox)
 
@@ -1134,11 +1116,6 @@ class ClipboardPanel(Gtk.Box):
     def _on_content_activated(self, _listbox, row):
         if hasattr(row, "store_item"):
             self._activate_item(row.store_item)
-
-    def _on_row_more_clicked(self, btn, row, item):
-        self._content_list.select_row(row)
-        menu = self._build_item_menu(item)
-        menu.popup_at_widget(btn, Gdk.Gravity.SOUTH_WEST, Gdk.Gravity.NORTH_WEST, None)
 
     def _build_item_menu(self, item):
         menu = Gtk.Menu.new()
