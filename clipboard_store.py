@@ -310,6 +310,20 @@ class ClipboardStore:
                 self._items = [ClipboardItem(**d) for d in data[-self._max_clipboard:]]
             except (json.JSONDecodeError, TypeError):
                 self._items = []
+            self._delete_orphan_images()
+
+    def _delete_orphan_images(self):
+        img_dir = os.path.join(CONFIG_DIR, "images")
+        if not os.path.isdir(img_dir):
+            return
+        referenced = {item.image_path for item in self._items if item.image_path}
+        for fname in os.listdir(img_dir):
+            fpath = os.path.join(img_dir, fname)
+            if fpath not in referenced and os.path.isfile(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
 
     def _save(self):
         with self._lock:

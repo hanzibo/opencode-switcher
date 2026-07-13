@@ -891,15 +891,7 @@ class ClipboardPanel(Gtk.Box):
         if hasattr(item, "type") and item.type == "image" and item.image_path:
             try:
                 if not hasattr(item, '_thumb_pixbuf') or item._thumb_pixbuf is None:
-                    raw_pixbuf = GdkPixbuf.Pixbuf.new_from_file(item.image_path)
-                    h = raw_pixbuf.get_height()
-                    w = raw_pixbuf.get_width()
-                    target_h = 40
-                    target_w = int(w * (target_h / h))
-                    if target_w > 120:
-                        target_w = 120
-                        target_h = int(h * (target_w / w))
-                    item._thumb_pixbuf = raw_pixbuf.scale_simple(target_w, target_h, GdkPixbuf.InterpType.BILINEAR)
+                    item._thumb_pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(item.image_path, 120, 40)
                 img = Gtk.Image.new_from_pixbuf(item._thumb_pixbuf)
                 preview_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 10)
                 lbl = Gtk.Label.new("[Image]")
