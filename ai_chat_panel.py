@@ -399,7 +399,10 @@ class AIChatPanel(Gtk.Box):
 
         self.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
         ai_scrolled.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
-        self._ai_webview.set_background_color(Gdk.RGBA(0.0, 0.0, 0.0, 0.0))
+        if self._theme == "dark":
+            self._ai_webview.set_background_color(Gdk.RGBA(0.039, 0.043, 0.063, 1.0))
+        else:
+            self._ai_webview.set_background_color(Gdk.RGBA(1.0, 1.0, 1.0, 1.0))
 
         self.pack_start(ai_scrolled, True, True, 0)
 
@@ -2986,18 +2989,9 @@ class AIChatPanel(Gtk.Box):
             if self._ai_conversation_id:
                 self._ai_html_cache[self._ai_conversation_id] = getattr(self, "_last_rendered_html", "")
             
-            self._ai_webview.load_html("<html></html>", "about:blank")
-            if self._ai_webview_context:
-                self._ai_webview_context.clear_cache()
+            self._ai_webview.terminate_web_process()
             self._webview_suspended = True
-            print("[AI] WebView suspended, memory cleared.", flush=True)
-            
-            import ctypes
-            try:
-                libc = ctypes.CDLL("libc.so.6")
-                libc.malloc_trim(0)
-            except Exception:
-                pass
+            print("[AI] WebView suspended, web process terminated.", flush=True)
             
         return False
 
