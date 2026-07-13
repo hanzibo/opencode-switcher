@@ -48,6 +48,7 @@ _MPS_MEMORY_LIMIT = 300
 _MPS_POLL_INTERVAL = 5
 _MPS_CONSERVATIVE = 0.2
 _MPS_STRICT = 0.4
+_POLL_INTERVAL_MS = 60
 
 
 from ai_html_template import get_html_template, _get_pygments_css
@@ -762,7 +763,7 @@ class AIChatPanel(Gtk.Box):
             self._render_markdown(self._ai_markdown_text)
             return
 
-        GLib.timeout_add(200, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
+        GLib.timeout_add(_POLL_INTERVAL_MS, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
 
         self._ai_cancel_event.clear()
         self._update_send_button(True)
@@ -816,7 +817,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
         self._ai_assistant_html_base = ""
-        GLib.timeout_add(200, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
+        GLib.timeout_add(_POLL_INTERVAL_MS, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
 
         self._ai_spinner.show()
         self._ai_spinner.start()
@@ -902,7 +903,7 @@ class AIChatPanel(Gtk.Box):
 
         self._ai_cancel_event.clear()
         self._update_send_button(True)
-        GLib.timeout_add(200, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
+        GLib.timeout_add(_POLL_INTERVAL_MS, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
         msgs_for_llm, extra_sys = self._build_llm_messages()
         threading.Thread(
             target=self._run_llm_api_request,
@@ -2782,7 +2783,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_spinner.show()
             self._ai_spinner.start()
             
-            GLib.timeout_add(200, self._poll_stream_queue, st["req_id"], conv_id)
+            GLib.timeout_add(_POLL_INTERVAL_MS, self._poll_stream_queue, st["req_id"], conv_id)
         else:
             self._ai_messages = []
             for m in conv.messages:
