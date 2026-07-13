@@ -563,6 +563,48 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 .msg-row.user {{
                     flex-direction: row-reverse;
                 }}
+
+                /* DOM Windowing — 隐藏超出可见窗口的旧消息 */
+                .msg-windowed {{
+                    display: none !important;
+                }}
+
+                /* 显示更早消息按钮容器 */
+                .show-older-bar {{
+                    text-align: center;
+                    padding: 16px 0;
+                    margin: 0 0 8px 0;
+                    border-bottom: 1px solid rgba(128, 128, 128, 0.12);
+                    user-select: none;
+                }}
+                .show-older-bar button {{
+                    background: rgba(128, 128, 128, 0.08);
+                    border: 1px solid rgba(128, 128, 128, 0.15);
+                    border-radius: 8px;
+                    color: inherit;
+                    cursor: pointer;
+                    font-size: 13px;
+                    padding: 8px 24px;
+                    transition: all 0.15s ease;
+                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                }}
+                .show-older-bar button:hover {{
+                    background: rgba(128, 128, 128, 0.15);
+                    border-color: rgba(128, 128, 128, 0.25);
+                    transform: translateY(-1px);
+                }}
+                .show-older-bar .hidden-count {{
+                    font-weight: 600;
+                    color: {toggle_color};
+                }}
+                .light .show-older-bar button {{
+                    background: rgba(0, 0, 0, 0.04);
+                    border-color: rgba(0, 0, 0, 0.1);
+                }}
+                .light .show-older-bar button:hover {{
+                    background: rgba(0, 0, 0, 0.07);
+                }}
+
                 .msg-avatar {{
                     width: 32px;
                     height: 32px;
@@ -948,6 +990,11 @@ def get_html_template(theme_name: str, initial_html: str = "",
                         el.replaceWith(wrapper);
                     }});
                 }}
+                // ── DOM Windowing (按轮次, 1 轮 = 1 条 user 消息 + N 条 assistant 回复) ──
+                const MAX_VISIBLE_ROUNDS = 10;
+                const REVEAL_BATCH_ROUNDS = 3;
+                let _showAllMessages = false;
+
                 const SCROLL_THRESHOLD = 20;
                 let _autoScroll = true;
                 window.addEventListener('scroll', function() {{
@@ -960,12 +1007,104 @@ def get_html_template(theme_name: str, initial_html: str = "",
                         window.scrollTo(0, document.body.scrollHeight);
                     }}
                 }}
+
+                // ── DOM Windowing functions ──
+                function applyWindowing() {{
+                    if (_showAllMessages) return;
+                    var content = document.getElementById('content');
+                    if (!content) return;
+                    var allRows = content.querySelectorAll(':scope > .msg-row');
+                    var userRows = content.querySelectorAll(':scope > .msg-row.user');
+                    // 按轮次：每轮 = 一条 user 消息及其后的 AI 回复
+                    if (userRows.length <= MAX_VISIBLE_ROUNDS) {{
+                        for (var i = 0; i < allRows.length; i++) {{
+                            allRows[i].classList.remove('msg-windowed');
+                        }}
+                        updateShowOlderBar();
+                        return;
+                    }}
+                    // 找出倒数第 MAX_VISIBLE_ROUNDS 条 user 消息的 DOM 索引
+                    var keepFromUser = userRows[userRows.length - MAX_VISIBLE_ROUNDS];
+                    var keepFromIndex = -1;
+                    for (var i = 0; i < allRows.length; i++) {{
+                        if (allRows[i] === keepFromUser) {{
+                            keepFromIndex = i;
+                            break;
+                        }}
+                    }}
+                    // 保留该 user 消息及之后的所有内容（含工具调用等）
+                    for (var i = 0; i < keepFromIndex; i++) {{
+                        allRows[i].classList.add('msg-windowed');
+                    }}
+                    for (var i = keepFromIndex; i < allRows.length; i++) {{
+                        allRows[i].classList.remove('msg-windowed');
+                    }}
+                    updateShowOlderBar();
+                }}
+
+                function showOlderBatch() {{
+                    var allRows = document.querySelectorAll('#content > .msg-row');
+                    var userRows = document.querySelectorAll('#content > .msg-row.user');
+                    // 找到第一个当前可见的 user 行
+                    var firstVisibleUserIdx = -1;
+                    for (var i = 0; i < userRows.length; i++) {{
+                        if (!userRows[i].classList.contains('msg-windowed')) {{
+                            firstVisibleUserIdx = i;
+                            break;
+                        }}
+                    }}
+                    if (firstVisibleUserIdx <= 0) return;
+                    // 从隐藏区末尾往前揭示 REVEAL_BATCH_ROUNDS 轮
+                    var revealCount = Math.min(firstVisibleUserIdx, REVEAL_BATCH_ROUNDS);
+                    var newFirstUserIdx = firstVisibleUserIdx - revealCount;
+                    var newFirstUser = userRows[newFirstUserIdx];
+                    var firstVisibleUser = userRows[firstVisibleUserIdx];
+                    var revealing = false;
+                    for (var i = 0; i < allRows.length; i++) {{
+                        if (allRows[i] === newFirstUser) revealing = true;
+                        if (revealing) allRows[i].classList.remove('msg-windowed');
+                        if (allRows[i] === firstVisibleUser) break;
+                    }}
+                    updateShowOlderBar();
+                    _updateRoundNav();
+                }}
+
+                function showAllMessages() {{
+                    _showAllMessages = true;
+                    var hidden = document.querySelectorAll('.msg-windowed');
+                    for (var i = 0; i < hidden.length; i++) {{
+                        hidden[i].classList.remove('msg-windowed');
+                    }}
+                    var bar = document.getElementById('show-older-bar');
+                    if (bar) bar.style.display = 'none';
+                    _updateRoundNav();
+                }}
+
+                function updateShowOlderBar() {{
+                    var userRows = document.querySelectorAll('#content > .msg-row.user');
+                    var hiddenRounds = 0;
+                    for (var i = 0; i < userRows.length; i++) {{
+                        if (userRows[i].classList.contains('msg-windowed')) hiddenRounds++;
+                    }}
+                    var bar = document.getElementById('show-older-bar');
+                    var countSpan = document.getElementById('hidden-count');
+                    if (!bar || !countSpan) return;
+                    if (hiddenRounds > 0) {{
+                        countSpan.textContent = hiddenRounds;
+                        bar.style.display = '';
+                    }} else {{
+                        bar.style.display = 'none';
+                    }}
+                }}
+
                 function updateContent(html) {{
                     window._isStreaming = false;
+                    _showAllMessages = false;
                     const content = document.getElementById('content');
                     content.innerHTML = html;
                     addCopyButtons();
                     _renderMath(content);
+                    applyWindowing();
                     _scrollToBottom();
                     _initRoundNav();
                 }}
@@ -990,6 +1129,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                         
                         content.appendChild(row);
                     }}
+                    applyWindowing();
                     _scrollToBottom();
                 }}
                 function updateMessageContainer(msgId, html) {{
@@ -999,6 +1139,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                         addCopyButtons();
                         _renderMath(div);
                     }}
+                    applyWindowing();
                     _scrollToBottom();
                 }}
                 function appendHtml(msgId, html) {{
@@ -1008,6 +1149,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                         _renderMath(div);
                         addCopyButtons();
                     }}
+                    applyWindowing();
                     _scrollToBottom();
                 }}
                 function addCopyButtons() {{
@@ -1133,7 +1275,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     if (nav) nav.style.opacity = '0.5';
                 }}
                 function _updateRoundNav() {{
-                    var userRows = document.querySelectorAll('.msg-row.user');
+                    var userRows = document.querySelectorAll('.msg-row.user:not(.msg-windowed)');
                     var nav = document.getElementById('round-nav');
                     if (!nav) return;
                     var total = userRows.length;
@@ -1157,7 +1299,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     if (nextBtn) nextBtn.disabled = _currentRound >= total;
                 }}
                 function _scrollToRound(n) {{
-                    var userRows = document.querySelectorAll('.msg-row.user');
+                    var userRows = document.querySelectorAll('.msg-row.user:not(.msg-windowed)');
                     if (n < 1 || n > userRows.length) return;
                     var target = userRows[n - 1];
                     if (target) {{
@@ -1177,6 +1319,17 @@ def get_html_template(theme_name: str, initial_html: str = "",
             </script>
         </head>
         <body class="{theme_name}">
+            <div id="show-older-bar" class="show-older-bar" style="display:none">
+                <button onclick="showOlderBatch()">
+                    ↑ 显示更早的消息（
+                    <span id="hidden-count" class="hidden-count">0</span>
+                    轮已隐藏）
+                </button>
+                &nbsp;
+                <button onclick="showAllMessages()" style="font-size:12px; opacity:0.7;">
+                    显示全部
+                </button>
+            </div>
             <div id="content">{initial_html}</div>
             <div id="lightbox" class="lightbox-overlay">
                 <img id="lightbox-img" class="lightbox-img">
