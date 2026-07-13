@@ -1155,7 +1155,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     _scrollToBottom();
                 }}
                 function addCopyButtons() {{
-                    document.querySelectorAll('pre').forEach(function(pre) {{
+                    document.querySelectorAll('pre:not(.has-copy-btn)').forEach(function(pre) {{
                         if (pre.classList.contains('tool-result-content')) return;
                         
                         const code = pre.querySelector('code');
@@ -1169,7 +1169,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                             pre.setAttribute('data-lang', lang);
                         }}
 
-                        if (pre.querySelector('.copy-btn')) return;
+
                         const btn = document.createElement('button');
                         btn.className = 'copy-btn';
                         btn.textContent = '复制';
@@ -1198,6 +1198,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
                             }}
                         }});
                         pre.appendChild(btn);
+                        pre.classList.add('has-copy-btn');
                     }});
                     function fallbackCopy(text, done) {{
                         const ta = document.createElement('textarea');

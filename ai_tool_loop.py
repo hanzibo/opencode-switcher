@@ -41,13 +41,9 @@ def run_llm_react_loop(
     max_tokens: int,
     top_p: float,
     cancel_event,
-    stream_lock,
-    stream_queue,
     get_current_request_id_fn,
     append_message_fn,
     append_html_to_webview_fn,
-    flush_stream_queue_fn,
-    append_to_stream_queue_fn,
     handle_ask_user_question_fn,
     on_llm_api_finished_fn,
     finalize_after_tool_loop_fn,
@@ -87,13 +83,9 @@ def run_llm_react_loop(
                 max_tokens=max_tokens,
                 top_p=top_p,
                 cancel_event=cancel_event,
-                stream_lock=stream_lock,
-                stream_queue=stream_queue,
                 get_current_request_id_fn=get_current_request_id_fn,
                 append_message_fn=append_message_fn,
                 append_html_to_webview_fn=append_html_to_webview_fn,
-                flush_stream_queue_fn=flush_stream_queue_fn,
-                append_to_stream_queue_fn=append_to_stream_queue_fn,
                 handle_ask_user_question_fn=handle_ask_user_question_fn,
                 on_llm_api_finished_fn=on_llm_api_finished_fn,
                 finalize_after_tool_loop_fn=finalize_after_tool_loop_fn,
@@ -121,13 +113,9 @@ def _perform_llm_call(
     max_tokens: int,
     top_p: float,
     cancel_event,
-    stream_lock,
-    stream_queue,
     get_current_request_id_fn,
     append_message_fn,
     append_html_to_webview_fn,
-    flush_stream_queue_fn,
-    append_to_stream_queue_fn,
     handle_ask_user_question_fn,
     on_llm_api_finished_fn,
     finalize_after_tool_loop_fn,
@@ -168,14 +156,10 @@ def _perform_llm_call(
                 reasoning_text += reasoning
                 if set_reasoning_text_fn is not None:
                     set_reasoning_text_fn(reasoning_text)
-                with stream_lock:
-                    append_to_stream_queue_fn(reasoning)
             elif content:
                 assistant_text += content
                 if set_assistant_text_fn is not None:
                     set_assistant_text_fn(assistant_text)
-                with stream_lock:
-                    append_to_stream_queue_fn(content)
 
 
         if tool_calls_found:
@@ -187,8 +171,6 @@ def _perform_llm_call(
             if reasoning_text:
                 tool_call_msg["reasoning_content"] = reasoning_text
             append_message_fn(tool_call_msg)
-
-            flush_stream_queue_fn()
 
             for tc_idx, tc in enumerate(tool_calls_found):
                 if get_current_request_id_fn() != req_id:
@@ -241,13 +223,9 @@ def _perform_llm_call(
             GLib.idle_add(on_llm_api_finished_fn, req_id)
             return False
 
-    except _LLMHttpError as e:
-        with stream_lock:
-            append_to_stream_queue_fn(f"\n\n❌ [请求失败]:\n{e}")
+    except _LLMHttpError:
         GLib.idle_add(on_llm_api_finished_fn, req_id)
         return False
-    except Exception as e:
-        with stream_lock:
-            append_to_stream_queue_fn(f"\n\n❌ [内部错误]:\n{e}")
+    except Exception:
         GLib.idle_add(on_llm_api_finished_fn, req_id)
         return False

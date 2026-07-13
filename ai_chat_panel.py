@@ -119,8 +119,6 @@ class AIChatPanel(Gtk.Box):
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
         self._ai_assistant_html_base = ""
-        self._ai_stream_lock = threading.Lock()
-        self._ai_stream_queue = []
         self._ai_markdown_text = ""
         self._ai_assistant_buffer = ""
         self._ai_last_prompt_obj = None
@@ -707,8 +705,6 @@ class AIChatPanel(Gtk.Box):
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
         self._ai_assistant_html_base = ""
-        with self._ai_stream_lock:
-            self._ai_stream_queue = []
 
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
@@ -766,7 +762,7 @@ class AIChatPanel(Gtk.Box):
             self._render_markdown(self._ai_markdown_text)
             return
 
-        GLib.timeout_add(100, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
+        GLib.timeout_add(200, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
 
         self._ai_cancel_event.clear()
         self._update_send_button(True)
@@ -788,7 +784,6 @@ class AIChatPanel(Gtk.Box):
                 active_state["cancel_event"].set()
                 self._ai_running_convs.pop(self._ai_conversation_id, None)
             self._llm_client.cancel_active_request()
-            self._flush_stream_queue()
             self._update_send_button(False)
             self._ai_streaming = False
             self._ai_spinner.stop()
@@ -821,9 +816,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
         self._ai_assistant_html_base = ""
-        with self._ai_stream_lock:
-            self._ai_stream_queue = []
-        GLib.timeout_add(100, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
+        GLib.timeout_add(200, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
 
         self._ai_spinner.show()
         self._ai_spinner.start()
@@ -862,8 +855,6 @@ class AIChatPanel(Gtk.Box):
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
         self._ai_assistant_html_base = ""
-        with self._ai_stream_lock:
-            self._ai_stream_queue = []
         if getattr(self, "_ai_render_timeout_id", 0) != 0:
             GLib.source_remove(self._ai_render_timeout_id)
             self._ai_render_timeout_id = 0
@@ -911,7 +902,7 @@ class AIChatPanel(Gtk.Box):
 
         self._ai_cancel_event.clear()
         self._update_send_button(True)
-        GLib.timeout_add(100, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
+        GLib.timeout_add(200, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
         msgs_for_llm, extra_sys = self._build_llm_messages()
         threading.Thread(
             target=self._run_llm_api_request,
@@ -1001,13 +992,9 @@ class AIChatPanel(Gtk.Box):
             max_tokens=max_tokens,
             top_p=top_p,
             cancel_event=cancel_event,
-            stream_lock=self._ai_stream_lock,
-            stream_queue=self._ai_stream_queue,
             get_current_request_id_fn=lambda: req_id,
             append_message_fn=append_message_callback,
             append_html_to_webview_fn=append_html_callback,
-            flush_stream_queue_fn=self._flush_stream_queue,
-            append_to_stream_queue_fn=lambda text: self._ai_stream_queue.append(text),
             handle_ask_user_question_fn=self._handle_ask_user_question,
             on_llm_api_finished_fn=self._on_llm_api_finished,
             finalize_after_tool_loop_fn=self._finalize_after_tool_loop,
@@ -1037,7 +1024,6 @@ class AIChatPanel(Gtk.Box):
             state["streaming"] = False
 
         if self._ai_conversation_id == conv_id:
-            self._flush_stream_queue()
             target_messages = state["messages"] if state else self._ai_messages
             self._ai_messages = target_messages
             # Rebuild full markdown from messages (which now include tool call/results)
@@ -1204,14 +1190,6 @@ class AIChatPanel(Gtk.Box):
         except Exception as e:
             print(f"Dropdown refresh error: {e}", flush=True)
 
-    def _flush_stream_queue(self) -> bool:
-        new_text_list = []
-        with self._ai_stream_lock:
-            if self._ai_stream_queue:
-                new_text_list = self._ai_stream_queue
-                self._ai_stream_queue = []
-        return len(new_text_list) > 0
-
     def _poll_stream_queue(self, req_id: int, conv_id: str) -> bool:
         if self._ai_conversation_id != conv_id:
             return False
@@ -1220,7 +1198,6 @@ class AIChatPanel(Gtk.Box):
         if not st or st.get("req_id") != req_id:
             return False
 
-        self._flush_stream_queue()
         if getattr(self, "_ai_dirty_stream", False):
             self._ai_dirty_stream = False
             self._render_current_assistant_message(req_id)
@@ -1308,9 +1285,6 @@ class AIChatPanel(Gtk.Box):
             state = None
         else:
             state = self._ai_running_convs.get(conv_id)
-
-        if self._ai_conversation_id == conv_id:
-            self._flush_stream_queue()
 
         assistant_text = state["current_assistant_text"] if state else self._ai_current_assistant_text
         reasoning = state["current_reasoning_text"] if state else self._ai_current_reasoning_text
@@ -1667,7 +1641,6 @@ class AIChatPanel(Gtk.Box):
                 active_state["cancel_event"].set()
                 self._ai_running_convs.pop(self._ai_conversation_id, None)
             self._llm_client.cancel_active_request()
-            self._flush_stream_queue()
             self._update_send_button(False, sensitive=False)
             self._ai_entry.placeholder_text = "正在中止..."
             self._ai_spinner.stop()
@@ -1833,7 +1806,6 @@ class AIChatPanel(Gtk.Box):
         if self._ai_streaming:
             self._ai_cancel_event.set()
             self._llm_client.cancel_active_request()
-            self._flush_stream_queue()
             # Preserve partial assistant content before resetting state
             partial = getattr(self, "_ai_current_assistant_text", "")
             if partial.strip():
@@ -2722,7 +2694,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_spinner.show()
             self._ai_spinner.start()
             
-            GLib.timeout_add(100, self._poll_stream_queue, st["req_id"], conv_id)
+            GLib.timeout_add(200, self._poll_stream_queue, st["req_id"], conv_id)
         else:
             self._ai_messages = []
             for m in conv.messages:
