@@ -1228,11 +1228,16 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 window.addEventListener('scroll', function() {{
                     _autoScroll = (window.innerHeight + window.scrollY >= document.body.scrollHeight - SCROLL_THRESHOLD);
                 }});
+                let _scrollRafId = null;
                 function _scrollToBottom() {{
                     if (_autoScroll) {{
-                        // 强制 reflow 确保 scrollHeight 反映最新内容
-                        void document.body.offsetHeight;
-                        window.scrollTo(0, document.body.scrollHeight);
+                        if (_scrollRafId) {{
+                            cancelAnimationFrame(_scrollRafId);
+                        }}
+                        _scrollRafId = requestAnimationFrame(() => {{
+                            window.scrollTo(0, document.body.scrollHeight);
+                            _scrollRafId = null;
+                        }});
                     }}
                 }}
 
