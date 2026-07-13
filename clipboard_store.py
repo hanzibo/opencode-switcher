@@ -1,6 +1,7 @@
 import json
 import re
 import os
+import sys
 import threading
 # jieba / rank_bm25 在 MemStore 中懒加载，非必须依赖
 
@@ -322,8 +323,9 @@ class ClipboardStore:
             if fpath not in referenced and os.path.isfile(fpath):
                 try:
                     os.remove(fpath)
-                except Exception:
-                    pass
+                except Exception as e:
+                    sys.stderr.write(f"Error deleting orphan image {fpath}: {e}\n")
+                    sys.stderr.flush()
 
     def _save(self):
         with self._lock:
@@ -347,7 +349,6 @@ class ClipboardStore:
                 if os.path.exists(image_path):
                     os.remove(image_path)
             except Exception as e:
-                import sys
                 sys.stderr.write(f"Error deleting image file {image_path}: {e}\n")
                 sys.stderr.flush()
 
