@@ -129,6 +129,9 @@ class AIChatPanel(Gtk.Box):
         self._last_rendered_html = ""
         self._ai_conversation_created_at = 0
         self._ai_title_generated = False
+        self._ai_history_queries = []
+        self._ai_history_index = -1
+        self._ai_current_draft = ""
         self._llm_client = _LLMHttpClient()
         self._ai_panel_visible_saved = False
         self._ai_cmd_popover = None
@@ -1774,6 +1777,11 @@ class AIChatPanel(Gtk.Box):
         start = buf.get_start_iter()
         end = buf.get_end_iter()
         text = buf.get_text(start, end, True).strip()
+        if text:
+            if not self._ai_history_queries or self._ai_history_queries[-1] != text:
+                self._ai_history_queries.append(text)
+            self._ai_history_index = -1
+            self._ai_current_draft = ""
         # Allow send with empty text if there is a pending image or selected sub-agents
         if not text and not self._ai_pending_image_data_uri and not self._ai_selected_subagents:
             return
@@ -2290,6 +2298,45 @@ class AIChatPanel(Gtk.Box):
                     self._rebuild_command_popover(text)
                     return True
             return False
+
+        if is_ctrl and keyname in ("l", "L"):
+            self._reset_ai_panel_silent()
+            return True
+
+        if keyname in ("Up", "KP_Up", "Down", "KP_Down"):
+            buf = self._ai_entry.get_buffer()
+            start = buf.get_start_iter()
+            end = buf.get_end_iter()
+            text_val = buf.get_text(start, end, True)
+            cursor_iter = buf.get_iter_at_mark(buf.get_insert())
+            
+            cursor_line = cursor_iter.get_line()
+            total_lines = buf.get_line_count()
+
+            if keyname in ("Up", "KP_Up") and cursor_line == 0:
+                if self._ai_history_queries:
+                    if self._ai_history_index == -1:
+                        self._ai_current_draft = text_val
+                        self._ai_history_index = len(self._ai_history_queries) - 1
+                    elif self._ai_history_index > 0:
+                        self._ai_history_index -= 1
+                    
+                    hist_text = self._ai_history_queries[self._ai_history_index]
+                    buf.set_text(hist_text)
+                    buf.place_cursor(buf.get_end_iter())
+                    return True
+            
+            elif keyname in ("Down", "KP_Down") and cursor_line == total_lines - 1:
+                if self._ai_history_index != -1:
+                    if self._ai_history_index < len(self._ai_history_queries) - 1:
+                        self._ai_history_index += 1
+                        hist_text = self._ai_history_queries[self._ai_history_index]
+                        buf.set_text(hist_text)
+                    else:
+                        self._ai_history_index = -1
+                        buf.set_text(self._ai_current_draft)
+                    buf.place_cursor(buf.get_end_iter())
+                    return True
 
         is_enter = keyname in ("Return", "KP_Enter")
         if not is_enter:
@@ -3026,6 +3073,7 @@ class AIChatPanel(Gtk.Box):
             html = self.get_html_template(self._theme, cached_html or "")
             self._ai_webview.load_html(html, "file:///")
             print("[AI] WebView restored from suspension.", flush=True)
+        self._ai_entry.grab_focus()
 
     def on_panel_hidden(self):
         if getattr(self, "_suspend_timeout_id", 0) != 0:
