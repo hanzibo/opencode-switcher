@@ -17,9 +17,8 @@ from panel import SearchPanel
 from session_store import get_sessions, delete_session, rename_session
 from launcher import launch_session, launch_new_session, launch_session_pure
 # ponytail: removed PromptStore import
-from clipboard_store import ClipboardStore, CategoryStore, capture_clipboard_once
+from clipboard_store import ClipboardStore, CategoryStore
 from clipboard_panel import ClipboardPanel
-from utils import is_wayland
 from memory_manager_dialog import show_memory_manager_dialog
 
 CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
@@ -72,14 +71,6 @@ class App:
         self._panel.on_launch_pure = self._on_session_launch_pure
         self._hotkey.on_trigger = lambda: self._on_hotkey()
         self._hotkey.on_trigger_ai = lambda: self._on_hotkey_ai()
-
-    def _clipboard_loop(self):
-        """Background daemon thread: initial capture + periodic polling on X11."""
-        capture_clipboard_once(self._clip_store)
-        while self._running:
-            if not is_wayland():
-                capture_clipboard_once(self._clip_store)
-            time.sleep(3)
 
     def _build_indicator(self):
         ind = AyatanaAppIndicator3.Indicator.new(
@@ -164,7 +155,6 @@ class App:
 
     def run(self):
         self._hotkey.start()
-        threading.Thread(target=self._clipboard_loop, daemon=True).start()
         Gtk.main()
 
     def stop(self):

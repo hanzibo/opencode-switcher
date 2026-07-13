@@ -61,7 +61,7 @@ check_deps() {
 
     # Check Python packages
     local py_missing=()
-    for mod in gi pynput; do
+    for mod in gi; do
         if ! python3 -c "import $mod" 2>/dev/null; then
             py_missing+=("$mod")
         fi
@@ -77,10 +77,7 @@ check_deps() {
         warn "wl-clipboard 未安装（可选，Wayland 下剪切板监听/写入需要）: sudo apt install wl-clipboard"
     fi
 
-    # Optional: xclip (X11 clipboard)
-    if ! command -v xclip &>/dev/null; then
-        warn "xclip 未安装（可选，X11 下剪切板监听/写入需要）: sudo apt install xclip"
-    fi
+
 
     # Optional: opencode CLI
     if ! command -v opencode &>/dev/null; then
@@ -116,9 +113,7 @@ install_system_deps() {
         error "pip 安装失败，请手动安装 python3-pip 后重试"
         exit 1
     fi
-    if ! command -v xdotool &>/dev/null; then
-        warn "xdotool 未安装（可选，仅 X11 下窗口激活需要）"
-    fi
+
     if ! command -v ptyxis &>/dev/null && ! command -v gnome-terminal &>/dev/null; then
         warn "未检测到 ptyxis 或 gnome-terminal，请安装一个: sudo apt install ptyxis"
     fi
@@ -130,8 +125,6 @@ install_python_deps() {
     mkdir -p "$INSTALL_DIR"
     python3 -m venv --system-site-packages "$INSTALL_DIR/venv"
     "$INSTALL_DIR/venv/bin/pip" install --quiet \
-        "pynput>=1.7" \
-        "python-xlib>=0.33" \
         "markdown" \
         "pygments" \
         "requests>=2.31" \

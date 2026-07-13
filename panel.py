@@ -12,7 +12,7 @@ from clipboard_panel import ClipboardPanel
 import difflib
 import os
 import time
-from utils import relative_time, is_wayland, request_window_focus, PANEL_WIDTH
+from utils import relative_time, request_window_focus, PANEL_WIDTH
 
 
 def _get_active_monitor_geometry():
@@ -425,7 +425,7 @@ class SearchPanel:
                 self._search_entry.set_text("")
 
             if index == 0:
-                self._search_entry.set_placeholder_text("Search sessions…")
+                self._search_entry.set_placeholder_text("🔍 Search sessions, slash commands...")
                 self._build_all()
                 self._content_stack.set_visible_child_name("sessions")
             else:
@@ -434,8 +434,6 @@ class SearchPanel:
                     self._clipboard_panel.reset_filter()
                     self._clipboard_panel.load_cached()
                 self._content_stack.set_visible_child_name("clipboard")
-                if self._clipboard_panel and not is_wayland():
-                    self._clipboard_panel.load_data()
         finally:
             self._search_entry.handler_unblock(self._search_changed_id)
 
@@ -481,10 +479,7 @@ class SearchPanel:
                 self.on_open()
             self._build_all()
         elif self._clipboard_panel:
-            if is_wayland():
-                self._clipboard_panel.load_cached()
-            else:
-                self._clipboard_panel.load_data()
+            self._clipboard_panel.load_cached()
 
         if not keep_ai and self._clipboard_panel:
             self._clipboard_panel.hide_ai_panel()
@@ -1107,24 +1102,7 @@ class SearchPanel:
                     print("Automated typing successfully via evdev.UInput", flush=True)
                     return
                 except Exception as evdev_err:
-                    print(f"evdev.UInput failed or not available ({evdev_err}), falling back to pynput...", flush=True)
-
-                # Fallback to pynput
-                from pynput.keyboard import Controller, Key
-                keyboard = Controller()
-                
-                # Press Ctrl+V
-                with keyboard.pressed(Key.ctrl):
-                    keyboard.press('v')
-                    keyboard.release('v')
-                
-                # Sleep briefly before Enter
-                time.sleep(0.3)
-                
-                # Press Enter
-                keyboard.press(Key.enter)
-                keyboard.release(Key.enter)
-                print("Automated typing successfully via pynput", flush=True)
+                    print(f"evdev.UInput failed or not available ({evdev_err})", flush=True)
             except Exception as e:
                 print(f"Error simulating keyboard input: {e}", flush=True)
 

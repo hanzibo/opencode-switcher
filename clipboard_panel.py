@@ -23,7 +23,7 @@ import time
 import requests
 import json
 import base64
-from utils import relative_time, is_wayland, request_window_focus, PANEL_WIDTH
+from utils import relative_time, request_window_focus, PANEL_WIDTH
 from urllib.parse import urlparse, parse_qs
 from ai_text_utils import (
     _dict_to_chat_message, _extract_after_header, _escape_math,
@@ -75,33 +75,20 @@ CATEGORY_WIDTH = 200
 def _copy_image_to_clipboard(image_path: str):
     if not os.path.exists(image_path):
         return
-    if is_wayland():
-        try:
-            with open(image_path, "rb") as f:
-                p = subprocess.Popen(["wl-copy", "--type", "image/png"], stdin=subprocess.PIPE)
-                p.communicate(f.read())
-        except Exception:
-            pass
-    else:
-        try:
-            subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", image_path], stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
+    try:
+        with open(image_path, "rb") as f:
+            p = subprocess.Popen(["wl-copy", "--type", "image/png"], stdin=subprocess.PIPE)
+            p.communicate(f.read())
+    except Exception:
+        pass
 
 
 def _copy_to_clipboard(text: str):
-    if is_wayland():
-        try:
-            p = subprocess.Popen(["wl-copy"], stdin=subprocess.PIPE)
-            p.communicate(text.encode("utf-8"))
-        except FileNotFoundError:
-            pass
-    else:
-        try:
-            p = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
-            p.communicate(text.encode("utf-8"))
-        except FileNotFoundError:
-            pass
+    try:
+        p = subprocess.Popen(["wl-copy"], stdin=subprocess.PIPE)
+        p.communicate(text.encode("utf-8"))
+    except FileNotFoundError:
+        pass
 
 
 _DIV_CLOSE_LEN = 6  # len('</div>')
@@ -674,20 +661,7 @@ class ClipboardPanel(Gtk.Box):
         self._clip_items.reverse()
         self._rebuild()
 
-    def load_data(self):
-        if getattr(self, "_loading_data", False):
-            return
-        self._loading_data = True
-        def worker():
-            try:
-                capture_clipboard_once(self._clip_store)
-            finally:
-                GLib.idle_add(self._finish_load_and_reset)
-        threading.Thread(target=worker, daemon=True).start()
 
-    def _finish_load_and_reset(self):
-        self._loading_data = False
-        self._finish_load()
 
     def _finish_load(self):
         self._clip_store.reload()

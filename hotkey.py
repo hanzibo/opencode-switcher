@@ -2,7 +2,6 @@ import os
 import socket
 import threading
 from typing import Optional, Callable
-from utils import is_wayland
 
 SOCKET_DIR = os.path.expanduser("~/.cache/opencode-switcher")
 SOCKET_PATH = os.path.join(SOCKET_DIR, "toggle.sock")
@@ -13,29 +12,11 @@ class HotkeyManager:
         self._listener: Optional[threading.Thread] = None
         self._socket: Optional[socket.socket] = None
         self._running = False
-        self._use_pynput = False
         self.on_trigger: Optional[Callable[[], None]] = None
         self.on_trigger_ai: Optional[Callable[[], None]] = None
 
     def start(self):
-        self._use_pynput = not is_wayland()
-        if self._use_pynput:
-            self._start_pynput()
-        else:
-            self._start_socket_listener()
-
-    def _start_pynput(self):
-        from pynput.keyboard import GlobalHotKeys
-
-        hotkeys = {}
-        if self.on_trigger:
-            hotkeys['<ctrl>+<shift>+<space>'] = self.on_trigger
-        if self.on_trigger_ai:
-            hotkeys['<ctrl>+<shift>+x'] = self.on_trigger_ai
-            hotkeys['<ctrl>+<shift>+X'] = self.on_trigger_ai
-
-        self._listener = GlobalHotKeys(hotkeys)
-        self._listener.start()
+        self._start_socket_listener()
 
     def _start_socket_listener(self):
         self._running = True
@@ -71,8 +52,6 @@ class HotkeyManager:
 
     def stop(self):
         self._running = False
-        if self._use_pynput and self._listener is not None:
-            self._listener.stop()
         self._listener = None
         if self._socket:
             try:

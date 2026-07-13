@@ -1,6 +1,4 @@
 PyGObject>=3.42
-pynput>=1.7
-python-xlib>=0.33
 markdown
 pygments
 requests>=2.31

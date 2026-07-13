@@ -22,7 +22,7 @@ import time
 import requests
 import json
 import base64
-from utils import relative_time, is_wayland, request_window_focus
+from utils import relative_time, request_window_focus
 from urllib.parse import urlparse, parse_qs
 from ai_text_utils import (
     _dict_to_chat_message, _extract_after_header, _escape_math,

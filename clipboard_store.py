@@ -49,7 +49,7 @@ from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Any, Union
 from uuid import uuid4
 
-from utils import is_wayland, CONVERSATIONS_DIR
+from utils import CONVERSATIONS_DIR
 
 CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
 CLIPBOARD_PATH = os.path.join(CONFIG_DIR, "clipboard_history.json")
@@ -784,50 +784,30 @@ class ConversationStore:
 # ── Clipboard capture ─────────────────────────────────────────────────────────
 
 def _capture_image() -> Optional[bytes]:
-    if is_wayland():
-        try:
-            types = subprocess.check_output(["wl-paste", "--list-types"], stderr=subprocess.DEVNULL, timeout=0.5).decode("utf-8", errors="ignore")
-            if "image/png" in types:
-                res = subprocess.run(["wl-paste", "--type", "image/png"], capture_output=True, timeout=1)
-                if res.returncode == 0 and res.stdout:
-                    return res.stdout
-        except Exception:
-            pass
-    else:
-        try:
-            targets = subprocess.check_output(["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"], stderr=subprocess.DEVNULL, timeout=0.5).decode("utf-8", errors="ignore")
-            if "image/png" in targets:
-                res = subprocess.run(["xclip", "-selection", "clipboard", "-t", "image/png", "-o"], capture_output=True, timeout=1)
-                if res.returncode == 0 and res.stdout:
-                    return res.stdout
-        except Exception:
-            pass
+    try:
+        types = subprocess.check_output(["wl-paste", "--list-types"], stderr=subprocess.DEVNULL, timeout=0.5).decode("utf-8", errors="ignore")
+        if "image/png" in types:
+            res = subprocess.run(["wl-paste", "--type", "image/png"], capture_output=True, timeout=1)
+            if res.returncode == 0 and res.stdout:
+                return res.stdout
+    except Exception:
+        pass
     return None
 
 
 def _clipboard_cmd() -> list:
-    if is_wayland():
-        return ["wl-paste"]
-    return ["xclip", "-o", "-selection", "clipboard"]
+    return ["wl-paste"]
 
 
 def capture_clipboard_once(store: ClipboardStore):
     try:
         # Check for sensitive MIME types first to skip recording
-        if is_wayland():
-            try:
-                types = subprocess.check_output(["wl-paste", "--list-types"], stderr=subprocess.DEVNULL, timeout=0.5).decode("utf-8", errors="ignore")
-                if "x-kde-passwordManagerHint" in types:
-                    return
-            except Exception:
-                pass
-        else:
-            try:
-                targets = subprocess.check_output(["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"], stderr=subprocess.DEVNULL, timeout=0.5).decode("utf-8", errors="ignore")
-                if "x-kde-passwordManagerHint" in targets:
-                    return
-            except Exception:
-                pass
+        try:
+            types = subprocess.check_output(["wl-paste", "--list-types"], stderr=subprocess.DEVNULL, timeout=0.5).decode("utf-8", errors="ignore")
+            if "x-kde-passwordManagerHint" in types:
+                return
+        except Exception:
+            pass
 
         image_data = _capture_image()
         if image_data:
