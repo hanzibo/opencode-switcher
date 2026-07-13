@@ -123,7 +123,20 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     {{left: '\\\\(', right: '\\\\)', display: false}},
                     {{left: '\\\\[', right: '\\\\]', display: true}}
                 ];
-                window._isStreaming = false;
+                window.__isStreamingVal = false;
+                Object.defineProperty(window, '_isStreaming', {{
+                    get: function() {{
+                        return window.__isStreamingVal;
+                    }},
+                    set: function(val) {{
+                        window.__isStreamingVal = val;
+                        if (val) {{
+                            document.body.classList.add('streaming');
+                        }} else {{
+                            document.body.classList.remove('streaming');
+                        }}
+                    }}
+                }});
 
                 let lightboxScale = 1.0;
                 let translateX = 0;
@@ -450,7 +463,8 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 .assistant-header {{ color: {assistant_color}; font-weight: bold; margin-top: 12px; }}
                 summary {{ cursor: pointer; }}
                 table {{ border-collapse: collapse; width: 100%; margin: 8px 0; }}
-                th, td {{ border: 1px solid {pre_border}; padding: 6px 10px; text-align: left; }}
+                body.streaming table {{ table-layout: fixed; }}
+                th, td {{ border: 1px solid {pre_border}; padding: 6px 10px; text-align: left; word-break: break-all; overflow-wrap: break-word; }}
                 th {{ background-color: {table_header_bg}; font-weight: 600; }}
                 tr:nth-child(even) {{ background-color: {table_alt_bg}; }}
 
