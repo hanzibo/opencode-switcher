@@ -140,6 +140,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_pending_title_notification = False
         self._webview_suspended = False
         self._suspend_timeout_id = 0
+        self._ai_webview_context = None
 
         # Callback hooks
         self.on_dialog_shown = None
@@ -247,7 +248,16 @@ class AIChatPanel(Gtk.Box):
         ai_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         ai_scrolled.set_vexpand(True)
 
-        self._ai_webview = WebKit2.WebView.new()
+        # Custom WebContext with aggressive memory pressure settings
+        mps = WebKit2.MemoryPressureSettings.new()
+        mps.set_memory_limit(300)
+        mps.set_poll_interval(5)
+        mps.set_conservative_threshold(0.2)
+        mps.set_strict_threshold(0.4)
+        self._ai_webview_context = WebKit2.WebContext(memory_pressure_settings=mps)
+        self._ai_webview_context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
+
+        self._ai_webview = WebKit2.WebView.new_with_context(self._ai_webview_context)
         self._ai_webview.set_name("aiWebView")
 
         # Minimize WebKit resource footprint
@@ -284,9 +294,6 @@ class AIChatPanel(Gtk.Box):
 
         # Allow file:// page to load file:// subresources (KaTeX CSS/JS/fonts)
         settings.set_allow_file_access_from_file_urls(True)
-
-        context = WebKit2.WebContext.get_default()
-        context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
 
         self._ai_webview.load_html(self.get_html_template("dark"), "file:///")
 
@@ -2980,7 +2987,8 @@ class AIChatPanel(Gtk.Box):
                 self._ai_html_cache[self._ai_conversation_id] = getattr(self, "_last_rendered_html", "")
             
             self._ai_webview.load_html("<html></html>", "about:blank")
-            WebKit2.WebContext.get_default().clear_cache()
+            if self._ai_webview_context:
+                self._ai_webview_context.clear_cache()
             self._webview_suspended = True
             print("[AI] WebView suspended, memory cleared.", flush=True)
             
