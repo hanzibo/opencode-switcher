@@ -296,14 +296,12 @@ class ClipboardStore:
         self._lock = threading.RLock()
         self._items: List[ClipboardItem] = []
         self._last_written_hash: Optional[str] = None
-        self._settings = AISettingsStore()
-        self._max_clipboard: int = self._settings.max_clipboard
+        self._max_clipboard: int = AISettingsStore().max_clipboard
         with self._lock:
             self._load()
 
     def _load(self):
         with self._lock:
-            self._max_clipboard = AISettingsStore().max_clipboard  # reload in case file changed
             if not os.path.isfile(CLIPBOARD_PATH):
                 return
             try:

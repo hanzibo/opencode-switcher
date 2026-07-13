@@ -231,7 +231,7 @@ def _perform_llm_call(
             if iteration + 1 >= max_iter:
                 append_message_fn({
                     "role": "assistant",
-                    "content": f"⚠️ 已达到最大工具调用次数（{max_iter}），请简化请求或重试。"
+                    "content": f"⚠️ 已达到最大迭代次数（{max_iter}），请简化请求或重试。"
                 })
                 GLib.idle_add(finalize_after_tool_loop_fn, req_id)
                 return False
