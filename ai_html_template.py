@@ -979,6 +979,226 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 .light #round-nav .round-indicator {{
                     color: rgba(0, 0, 0, 0.35);
                 }}
+
+                /* System status/error notices printed inline */
+                .chat-system-error {{
+                    color: #f43f5e;
+                    background: rgba(244, 63, 94, 0.05);
+                    border: 1px solid rgba(244, 63, 94, 0.15);
+                    padding: 8px 12px;
+                    margin: 8px 0;
+                    border-radius: 6px;
+                    font-size: 13px;
+                }}
+                .dark .chat-system-error {{
+                    color: #f87171;
+                    background: rgba(248, 113, 113, 0.05);
+                    border: 1px solid rgba(248, 113, 113, 0.15);
+                }}
+
+                .chat-status-notice {{
+                    color: #0284c7;
+                    background: rgba(2, 132, 199, 0.05);
+                    border: 1px solid rgba(2, 132, 199, 0.15);
+                    padding: 8px 12px;
+                    margin: 4px 0;
+                    border-radius: 6px;
+                    font-size: 13px;
+                }}
+                .dark .chat-status-notice {{
+                    color: #38bdf8;
+                    background: rgba(56, 189, 248, 0.05);
+                    border: 1px solid rgba(56, 189, 248, 0.15);
+                }}
+
+                .chat-model-info {{
+                    color: #6366f1;
+                    background: rgba(99, 102, 241, 0.05);
+                    border: 1px solid rgba(99, 102, 241, 0.15);
+                    padding: 8px 12px;
+                    margin: 4px 0;
+                    border-radius: 6px;
+                    font-size: 13px;
+                }}
+                .chat-model-info span {{
+                    font-size: 12px;
+                    opacity: 0.7;
+                }}
+                .dark .chat-model-info {{
+                    color: #818cf8;
+                    background: rgba(129, 140, 248, 0.05);
+                    border: 1px solid rgba(129, 140, 248, 0.15);
+                }}
+
+                .chat-simple-error {{
+                    color: #f43f5e;
+                    padding: 8px;
+                    font-size: 13px;
+                }}
+                .dark .chat-simple-error {{
+                    color: #f87171;
+                }}
+
+                .chat-simple-info {{
+                    color: #6366f1;
+                    padding: 8px;
+                    font-size: 13px;
+                }}
+                .dark .chat-simple-info {{
+                    color: #818cf8;
+                }}
+
+                /* Rollback panel and rollback cards styles */
+                .rollback-panel {{
+                    border: 1px solid rgba(0,0,0,0.1);
+                    border-radius: 8px;
+                    padding: 12px 14px;
+                    margin: 8px 0;
+                    background: rgba(0,0,0,0.01);
+                }}
+                .dark .rollback-panel {{
+                    border: 1px solid rgba(255,255,255,0.12);
+                    background: rgba(255,255,255,0.01);
+                }}
+                .rollback-title {{
+                    font-size: 14px;
+                    font-weight: bold;
+                    margin-bottom: 6px;
+                    color: #6366f1;
+                }}
+                .dark .rollback-title {{
+                    color: #818cf8;
+                }}
+                .rollback-title span {{
+                    font-size: 12px;
+                    font-weight: normal;
+                    opacity: 0.6;
+                }}
+                .rollback-card {{
+                    border: 1px solid rgba(0,0,0,0.1);
+                    border-radius: 6px;
+                    padding: 8px 10px;
+                    margin: 6px 0;
+                    background: rgba(0,0,0,0.02);
+                }}
+                .dark .rollback-card {{
+                    border: 1px solid rgba(255,255,255,0.12);
+                    background: rgba(255,255,255,0.03);
+                }}
+                .rollback-card-header {{
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    margin-bottom: 3px;
+                }}
+                .rollback-round-label {{
+                    font-weight: bold;
+                    font-size: 13px;
+                    color: #6366f1;
+                }}
+                .dark .rollback-round-label {{
+                    color: #818cf8;
+                }}
+                .rollback-current-tag {{
+                    font-size: 12px;
+                    opacity: 0.4;
+                }}
+                .rollback-btn {{
+                    background: #6366f1;
+                    color: #ffffff;
+                    border: none;
+                    border-radius: 4px;
+                    padding: 3px 10px;
+                    font-size: 12px;
+                    cursor: pointer;
+                }}
+                .dark .rollback-btn {{
+                    background: #818cf8;
+                }}
+                .rollback-btn:hover {{
+                    opacity: 0.9;
+                }}
+                .rollback-user-preview {{
+                    font-size: 12px;
+                    color: #6366f1;
+                    opacity: 0.85;
+                    margin-bottom: 2px;
+                }}
+                .dark .rollback-user-preview {{
+                    color: #818cf8;
+                }}
+                .rollback-asst-preview {{
+                    font-size: 12px;
+                    color: #0d9488;
+                    opacity: 0.8;
+                }}
+                .dark .rollback-asst-preview {{
+                    color: #2dd4bf;
+                }}
+                .rollback-close-btn {{
+                    font-size: 12px;
+                    opacity: 0.4;
+                    cursor: pointer;
+                }}
+                .rollback-close-btn:hover {{
+                    opacity: 0.8;
+                }}
+
+                /* Agent confirmation box (Ask User Question) */
+                .tool-ask-user {{
+                    margin: 12px 0;
+                    border-radius: 8px;
+                    border: 1px solid rgba(99, 102, 241, 0.15);
+                    overflow: hidden;
+                    background: rgba(99, 102, 241, 0.02);
+                }}
+                .dark .tool-ask-user {{
+                    border: 1px solid rgba(129, 140, 248, 0.25);
+                    background: rgba(129, 140, 248, 0.02);
+                }}
+                .tool-ask-user-header {{
+                    padding: 10px 14px;
+                    background: rgba(99, 102, 241, 0.06);
+                    border-bottom: 1px solid rgba(99, 102, 241, 0.1);
+                    font-size: 12px;
+                    color: #6366f1;
+                    font-weight: 600;
+                }}
+                .dark .tool-ask-user-header {{
+                    background: rgba(129, 140, 248, 0.08);
+                    border-bottom: 1px solid rgba(129, 140, 248, 0.15);
+                    color: #818cf8;
+                }}
+                .tool-ask-user-body {{
+                    padding: 14px 16px;
+                    background: rgba(99, 102, 241, 0.02);
+                    font-size: 14px;
+                    line-height: 1.6;
+                }}
+                .dark .tool-ask-user-body {{
+                    background: rgba(129, 140, 248, 0.05);
+                }}
+                .tool-ask-user-footer {{
+                    padding: 8px 14px;
+                    background: rgba(99, 102, 241, 0.02);
+                    border-top: 1px solid rgba(99, 102, 241, 0.1);
+                    font-size: 12px;
+                    color: #6366f1;
+                }}
+                .dark .tool-ask-user-footer {{
+                    background: rgba(129, 140, 248, 0.05);
+                    border-top: 1px solid rgba(129, 140, 248, 0.15);
+                    color: #818cf8;
+                }}
+
+                .summary-status {{
+                    padding: 8px 12px;
+                    margin: 8px 0;
+                    background: rgba(100,100,100,0.15);
+                    border-radius: 8px;
+                    font-size: 13px;
+                    color: #999;
+                }}
             </style>
             <script>
                 function _renderMath(element) {{

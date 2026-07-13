@@ -1190,22 +1190,10 @@ class AIChatPanel(Gtk.Box):
 
         rendered_question = _markdown_to_html_safe(question)
         question_html = (
-            '<div class="tool-ask-user" style="margin: 12px 0; border-radius: 8px; '
-            'border: 1px solid rgba(129, 140, 248, 0.25); overflow: hidden;">'
-            '<div style="padding: 10px 14px; background: rgba(129, 140, 248, 0.08); '
-            'border-bottom: 1px solid rgba(129, 140, 248, 0.15); '
-            'font-size: 12px; color: #818cf8; font-weight: 600;">'
-            '💬 Agent 需要确认'
-            '</div>'
-            '<div style="padding: 14px 16px; background: rgba(129, 140, 248, 0.05); '
-            'font-size: 14px; line-height: 1.6;">'
-            + rendered_question +
-            '</div>'
-            '<div style="padding: 8px 14px; background: rgba(129, 140, 248, 0.05); '
-            'border-top: 1px solid rgba(129, 140, 248, 0.15); '
-            'font-size: 12px; color: #818cf8;">'
-            '✏️ 在下方输入框中回答，或输入 /cancel 取消'
-            '</div>'
+            '<div class="tool-ask-user">'
+            '<div class="tool-ask-user-header">💬 Agent 需要确认</div>'
+            f'<div class="tool-ask-user-body">{rendered_question}</div>'
+            '<div class="tool-ask-user-footer">✏️ 在下方输入框中回答，或输入 /cancel 取消</div>'
             '</div>'
         )
         GLib.idle_add(self.append_html_to_webview, question_html)
@@ -1733,8 +1721,7 @@ class AIChatPanel(Gtk.Box):
             if text in ("/cancel", "/abort"):
                 safe_q = html.escape(ask_state["question"])
                 self.append_html_to_webview(
-                    f'<div style="color: #f87171; padding: 8px 12px; '
-                    f'font-size: 13px;">❌ 已取消问题：「{safe_q}」</div>'
+                    f'<div class="chat-system-error">❌ 已取消问题：「{safe_q}」</div>'
                 )
                 ask_state["answer"] = ""
                 ask_state["event"].set()
@@ -1748,8 +1735,7 @@ class AIChatPanel(Gtk.Box):
             if text_cmd in known_cmds:
                 cmd_name = html.escape(text_cmd)
                 self.append_html_to_webview(
-                    f'<div style="color: #f87171; padding: 8px 12px; '
-                    f'font-size: 13px;">❌ 问题已取消（检测到系统命令「{cmd_name}」）。'
+                    f'<div class="chat-system-error">❌ 问题已取消（检测到系统命令「{cmd_name}」）。'
                     f'请重新输入命令。</div>'
                 )
                 ask_state["answer"] = ""
@@ -1827,11 +1813,9 @@ class AIChatPanel(Gtk.Box):
                 alias = model_info.get("alias", "?")
                 mname = model_info.get("model_name", "?")
                 info_html = (
-                    f'<div style="color: #818cf8; padding: 8px 12px; margin: 4px 0; '
-                    f'border: 1px solid #818cf8; border-radius: 6px; font-size: 13px;">'
+                    f'<div class="chat-model-info">'
                     f'📋 当前模型: <strong>{alias}</strong> ({mname})<br/>'
-                    f'<span style="font-size: 12px; opacity: 0.7;">'
-                    f'输入 /model &lt;别名&gt; 快速切换</span></div>'
+                    f'<span>输入 /model &lt;别名&gt; 快速切换</span></div>'
                 )
                 self.append_html_to_webview(info_html)
             self._show_model_selector()
@@ -1850,9 +1834,7 @@ class AIChatPanel(Gtk.Box):
             from tool_registry import set_bash_cwd
             result = set_bash_cwd(arg, session_key=self._ai_conversation_id)
             self.append_html_to_webview(
-                f'<div style="color: #38bdf8; padding: 8px 12px; margin: 4px 0; '
-                f'border: 1px solid #38bdf8; border-radius: 6px; font-size: 13px;">'
-                f'{html.escape(result)}</div>'
+                f'<div class="chat-status-notice">{html.escape(result)}</div>'
             )
             return
         # Handle selected sub-agent blocks: build notification text and send
@@ -1929,10 +1911,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_lbl.set_markup(
             f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>"
         )
-        # 在 WebView 中追加成功切换通知
         notice_html = (
-            f'<div style="color: #38bdf8; padding: 8px 12px; margin: 4px 0; '
-            f'border: 1px solid #38bdf8; border-radius: 6px; font-size: 13px;">'
+            f'<div class="chat-status-notice">'
             f'🔄 已切换至 <strong>{model.alias}</strong> ({model.model_name})</div>'
         )
         self.append_html_to_webview(notice_html)
@@ -2028,25 +2008,23 @@ class AIChatPanel(Gtk.Box):
 
         if not rounds:
             self.append_html_to_webview(
-                '<div style="color:#f43f5e; padding:8px 12px; margin:8px 0; '
-                'border:1px solid #f43f5e; border-radius:6px; font-size:13px;">'
+                '<div class="chat-system-error">'
                 '⚠️ 没有可回滚的对话轮次。请先进行对话。</div>'
             )
             return
 
         try:
-            html = self._build_round_cards_html(rounds)
+            html_val = self._build_round_cards_html(rounds)
         except Exception as e:
             import traceback
             traceback.print_exc()
             self.append_html_to_webview(
-                f'<div style="color:#f43f5e; padding:8px 12px; margin:8px 0; '
-                f'border:1px solid #f43f5e; border-radius:6px; font-size:13px;">'
+                f'<div class="chat-system-error">'
                 f'❌ 生成回滚列表时出错: {html.escape(str(e))}</div>'
             )
             return
 
-        self.append_html_to_webview(html)
+        self.append_html_to_webview(html_val)
 
     def _handle_title_command(self, title_text: str):
         """Handle /title command: set custom title or regenerate via LLM.
@@ -2056,7 +2034,7 @@ class AIChatPanel(Gtk.Box):
         """
         if not self._ai_conversation_id or not self._ai_messages:
             self.append_html_to_webview(
-                '<div style="color:#f43f5e; padding:8px;">没有活跃的对话可供设置标题。</div>'
+                '<div class="chat-simple-error">没有活跃的对话可供设置标题。</div>'
             )
             return
 
@@ -2066,7 +2044,7 @@ class AIChatPanel(Gtk.Box):
             self._on_title_generated(self._ai_conversation_id, title_text)
             escaped = html.escape(title_text)
             self.append_html_to_webview(
-                f'<div style="color:#818cf8; padding:8px;">标题已设置为: {escaped}</div>'
+                f'<div class="chat-simple-info">标题已设置为: {escaped}</div>'
             )
         else:
             # Mode 1: generate via LLM using first 3 rounds
@@ -2082,7 +2060,7 @@ class AIChatPanel(Gtk.Box):
 
             if not context_text.strip():
                 self.append_html_to_webview(
-                    '<div style="color:#f43f5e; padding:8px;">对话内容为空，无法生成标题。</div>'
+                    '<div class="chat-simple-error">对话内容为空，无法生成标题。</div>'
                 )
                 return
 
@@ -2103,7 +2081,7 @@ class AIChatPanel(Gtk.Box):
                 self._ai_title_generated = True
                 self._ai_pending_title_notification = True
                 self.append_html_to_webview(
-                    '<div style="color:#818cf8; padding:8px;">正在根据对话内容重新生成标题...</div>'
+                    '<div class="chat-simple-info">正在根据对话内容重新生成标题...</div>'
                 )
                 threading.Thread(
                     target=self._generate_title_from_context,
@@ -2113,7 +2091,7 @@ class AIChatPanel(Gtk.Box):
                 ).start()
             else:
                 self.append_html_to_webview(
-                    '<div style="color:#f43f5e; padding:8px;">LLM 配置不完整，无法生成标题。</div>'
+                    '<div class="chat-simple-error">LLM 配置不完整，无法生成标题。</div>'
                 )
 
     def _rollback_to_round(self, round_index: int):
@@ -2148,24 +2126,6 @@ class AIChatPanel(Gtk.Box):
 
     def _build_round_cards_html(self, rounds):
         """Build HTML displaying conversation rounds as clickable cards."""
-        is_dark = getattr(self, "_theme", "dark") == "dark"
-        if is_dark:
-            user_c = "#818cf8"
-            asst_c = "#2dd4bf"
-            border_c = "rgba(255,255,255,0.12)"
-            card_bg = "rgba(255,255,255,0.03)"
-            title_c = "#818cf8"
-            btn_bg = "#818cf8"
-            btn_fg = "#ffffff"
-        else:
-            user_c = "#6366f1"
-            asst_c = "#0d9488"
-            border_c = "rgba(0,0,0,0.1)"
-            card_bg = "rgba(0,0,0,0.02)"
-            title_c = "#6366f1"
-            btn_bg = "#6366f1"
-            btn_fg = "#ffffff"
-
         def _strip_html(text):
             return re.sub(r'<[^>]+>', '', text).strip()
 
@@ -2185,35 +2145,28 @@ class AIChatPanel(Gtk.Box):
             is_last = (i == total_rounds - 1)
             round_label = f"第 {i + 1} 轮" + ("（当前）" if is_last else "")
             if is_last:
-                action_html = '<span style="font-size:12px; opacity:0.4;">← 当前</span>'
+                action_html = '<span class="rollback-current-tag">← 当前</span>'
             else:
                 action_html = (
                     f'<button onclick="window.location=\'opencode://rollback-round?round={i}\'" '
-                    f'style="background:{btn_bg}; color:{btn_fg}; border:none; '
-                    f'border-radius:4px; padding:3px 10px; font-size:12px; cursor:pointer;">'
-                    f'↩ 回滚到此</button>'
+                    f'class="rollback-btn">↩ 回滚到此</button>'
                 )
             cards_html.append(
-                f'<div style="border:1px solid {border_c}; border-radius:6px; '
-                f'padding:8px 10px; margin:6px 0; background:{card_bg};">'
-                f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:3px;">'
-                f'<span style="font-weight:bold; font-size:13px; color:{user_c};">{round_label}</span>'
+                f'<div class="rollback-card">'
+                f'<div class="rollback-card-header">'
+                f'<span class="rollback-round-label">{round_label}</span>'
                 f'{action_html}</div>'
-                f'<div style="font-size:12px; color:{user_c}; opacity:0.85; margin-bottom:2px;">'
-                f'You: {user_preview}</div>'
-                f'<div style="font-size:12px; color:{asst_c}; opacity:0.8;">'
-                f'AI: {asst_preview}</div></div>'
+                f'<div class="rollback-user-preview">You: {user_preview}</div>'
+                f'<div class="rollback-asst-preview">AI: {asst_preview}</div></div>'
             )
 
         rollback_html = (
-            f'<div class="rollback-panel" style="border:1px solid {border_c}; border-radius:8px; '
-            f'padding:12px 14px; margin:8px 0;">'
-            f'<div style="font-size:14px; font-weight:bold; margin-bottom:6px; color:{title_c};">'
-            f'══ 对话回滚 ══ '
-            f'<span style="font-size:12px; font-weight:normal; opacity:0.6;">共 {total_rounds} 轮</span>'
+            f'<div class="rollback-panel">'
+            f'<div class="rollback-title">══ 对话回滚 ══ '
+            f'<span>共 {total_rounds} 轮</span>'
             f'</div>{"".join(cards_html)}'
             f'<div style="text-align:right; margin-top:4px;">'
-            f'<span style="font-size:12px; opacity:0.4; cursor:pointer;" '
+            f'<span class="rollback-close-btn" '
             f'onclick="this.closest(\'.rollback-panel\').style.display=\'none\';">'
             f'[× 关闭]</span></div></div>'
         )
@@ -2690,8 +2643,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_send_btn.set_sensitive(False)
         self._ai_entry.placeholder_text = "摘要压缩中..."
         self.append_html_to_webview(
-            '<div id="summary-status" style="padding:8px 12px;margin:8px 0;'
-            'background:rgba(100,100,100,0.15);border-radius:8px;font-size:13px;color:#999;">'
+            '<div id="summary-status" class="summary-status">'
             '⏳ 正在压缩历史对话为摘要...</div>'
         )
 
@@ -3056,7 +3008,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_pending_title_notification = False
             escaped = html.escape(title)
             self.append_html_to_webview(
-                f'<div style="color:#818cf8; padding:8px;">标题已生成: {escaped}</div>'
+                f'<div class="chat-simple-info">标题已生成: {escaped}</div>'
             )
 
     def is_visible(self) -> bool:
@@ -3253,9 +3205,7 @@ class AIChatPanel(Gtk.Box):
                     from tool_registry import set_bash_cwd
                     result = set_bash_cwd(chosen, session_key=self._ai_conversation_id)
                     self.append_html_to_webview(
-                        f'<div style="color: #38bdf8; padding: 8px 12px; margin: 4px 0; '
-                        f'border: 1px solid #38bdf8; border-radius: 6px; font-size: 13px;">'
-                        f'{html.escape(result)}</div>'
+                        f'<div class="chat-status-notice">{html.escape(result)}</div>'
                     )
             else:
                 dlg.destroy()
