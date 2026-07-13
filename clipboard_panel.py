@@ -56,7 +56,6 @@ from ai_chat_panel import AIChatPanel
 
 AI_BTN_LABEL_SEND = "发送"
 AI_BTN_LABEL_STOP = "暂停"
-MAX_TOOL_ITERATIONS = 25  # ReAct loop safety limit
 
 # LaTeX commands that LLMs commonly double-escape (\\frac → \frac, etc.)
 _LATEX_COMMANDS = frozenset({

@@ -57,7 +57,6 @@ from ai_tool_loop import run_llm_react_loop
 
 AI_BTN_LABEL_SEND = "发送"
 AI_BTN_LABEL_STOP = "暂停"
-MAX_TOOL_ITERATIONS = 25
 
 
 def _to_chat_messages(msgs: List[Dict]) -> List[ChatMessage]:
