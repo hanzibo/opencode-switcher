@@ -116,22 +116,24 @@ def get_sessions(limit: int = 100) -> List[Session]:
         placeholders = ",".join("?" * len(session_ids))
         part_cur = conn.execute(
             f"""
-            SELECT session_id, data
-            FROM part
-            WHERE session_id IN ({placeholders})
-            ORDER BY session_id, time_created DESC
+            SELECT p1.session_id, p1.data
+            FROM part p1
+            INNER JOIN (
+                SELECT session_id, MAX(time_created) as max_tc
+                FROM part
+                WHERE session_id IN ({placeholders})
+                GROUP BY session_id
+            ) p2 ON p1.session_id = p2.session_id AND p1.time_created = p2.max_tc
+            GROUP BY p1.session_id
             """,
             session_ids,
         )
 
         snippet_map: Dict[str, str] = {}
         for part_row in part_cur.fetchall():
-            sid = part_row["session_id"]
-            if sid in snippet_map:
-                continue
             text = _extract_snippet_text(part_row["data"])
             if text:
-                snippet_map[sid] = text
+                snippet_map[part_row["session_id"]] = text
 
         now = time.time() * 1000
         live_dirs, live_session_ids = _detect_live_sessions()
