@@ -31,7 +31,7 @@ from ai_text_utils import (
     _clean_history_title, _extract_local_title, _rebuild_markdown_from_messages,
     _vision_content_to_markdown, _resolve_vision_image_src,
     _vision_content_to_text, _image_hash_path, _image_to_data_uri, _cached_image_to_data_uri,
-    _model_supports_vision, USER_AVATAR_HTML,     _render_active_turn_to_html, _render_reasoning_html, _render_tool_steps_html, _render_answer_html,
+    _model_supports_vision, USER_AVATAR_HTML, ASSISTANT_AVATAR_HTML, _render_active_turn_to_html, _render_reasoning_html, _render_tool_steps_html, _render_answer_html,
     _strip_ai_markup,
     _preserve_newlines,
 )
@@ -1006,6 +1006,32 @@ class AIChatPanel(Gtk.Box):
             extra_system_messages=extra_system_messages,
         )
 
+    def _append_assistant_turn_to_cache(self, turn_msgs: List[Dict], combined_html: str, start_idx: int):
+        """增量更新当前会话的 Markdown 和 HTML 缓存。"""
+        assistant_md = (
+            f'<div class="msg-row assistant" markdown="1">\n'
+            f'{ASSISTANT_AVATAR_HTML}\n'
+            f'<div class="msg-bubble assistant" markdown="1">\n'
+            f'{combined_html}\n'
+            f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
+            f'</div>\n'
+            f'</div>\n\n'
+        )
+        self._ai_markdown_text += assistant_md
+
+        assistant_html = (
+            f'<div class="msg-row assistant">\n'
+            f'{ASSISTANT_AVATAR_HTML}\n'
+            f'<div class="msg-bubble assistant">\n'
+            f'{combined_html}\n'
+            f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
+            f'</div>\n'
+            f'</div>\n\n'
+        )
+        self._last_rendered_html += assistant_html
+        if self._ai_conversation_id:
+            self._ai_html_cache[self._ai_conversation_id] = self._last_rendered_html
+
     def _finalize_after_tool_loop(self, req_id: int):
         """Finalize after tool loop ends (used when tool iteration limit hit)."""
         conv_id = None
@@ -1043,12 +1069,10 @@ class AIChatPanel(Gtk.Box):
             if hasattr(self, "_ai_webview") and self._ai_webview:
                 self._ai_webview.run_javascript(js_final, None, None)
 
-            # Still rebuild for cache, but skip _render_markdown (DOM already correct)
-            self._ai_markdown_text = self._rebuild_markdown_from_messages(target_messages)
-            full_html = _markdown_to_html_safe(self._ai_markdown_text, fallback_content="")
-            self._last_rendered_html = full_html
-            if self._ai_conversation_id:
-                self._ai_html_cache[self._ai_conversation_id] = full_html
+            # Incrementally append the final assistant turn to cache and skip full rebuild/recompile
+            start_idx = last_user_idx + 1
+            self._append_assistant_turn_to_cache(turn_msgs, combined_html, start_idx)
+
             js_sync = (
                 "window._isStreaming = false;"
                 "_scrollToBottom();"
@@ -1064,9 +1088,44 @@ class AIChatPanel(Gtk.Box):
             self._ai_entry.placeholder_text = ""
         else:
             if state:
-                rebuilt_markdown = self._rebuild_markdown_from_messages(state["messages"])
-                html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
-                self._ai_html_cache[conv_id] = html
+                cached_html = self._ai_html_cache.get(conv_id)
+                if cached_html is not None:
+                    target_messages = state["messages"]
+                    last_user_idx = -1
+                    for idx in range(len(target_messages) - 1, -1, -1):
+                        if target_messages[idx].get("role") == "user":
+                            last_user_idx = idx
+                            break
+                    turn_msgs = target_messages[last_user_idx + 1:] if last_user_idx != -1 else target_messages
+                    reasoning_html = _render_reasoning_html(turn_msgs, is_streaming=False)
+                    tool_html = _render_tool_steps_html(turn_msgs)
+                    answer_html = _render_answer_html(turn_msgs)
+                    combined_html = f"{reasoning_html}{tool_html}{answer_html}"
+                    
+                    start_idx = last_user_idx + 1
+                    assistant_html = (
+                        f'<div class="msg-row assistant">\n'
+                        f'{ASSISTANT_AVATAR_HTML}\n'
+                        f'<div class="msg-bubble assistant">\n'
+                        f'{combined_html}\n'
+                        f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
+                        f'</div>\n'
+                        f'</div>\n\n'
+                    )
+                    self._ai_html_cache[conv_id] = cached_html + assistant_html
+                    state["ai_markdown_text"] += (
+                        f'<div class="msg-row assistant" markdown="1">\n'
+                        f'{ASSISTANT_AVATAR_HTML}\n'
+                        f'<div class="msg-bubble assistant" markdown="1">\n'
+                        f'{combined_html}\n'
+                        f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
+                        f'</div>\n'
+                        f'</div>\n\n'
+                    )
+                else:
+                    rebuilt_markdown = self._rebuild_markdown_from_messages(state["messages"])
+                    html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
+                    self._ai_html_cache[conv_id] = html
                 try:
                     conv = self._conversation_store.load_conversation(conv_id)
                     messages_objs = _to_chat_messages(state["messages"])
@@ -1362,12 +1421,10 @@ class AIChatPanel(Gtk.Box):
                 GLib.source_remove(self._ai_render_timeout_id)
                 self._ai_render_timeout_id = 0
 
-            # Still rebuild for cache, but skip _render_markdown (DOM already correct)
-            self._ai_markdown_text = self._rebuild_markdown_from_messages(target_messages)
-            full_html = _markdown_to_html_safe(self._ai_markdown_text, fallback_content="")
-            self._last_rendered_html = full_html
-            if self._ai_conversation_id:
-                self._ai_html_cache[self._ai_conversation_id] = full_html
+            # Incrementally append the final assistant turn to cache and skip full rebuild/recompile
+            start_idx = last_user_idx + 1
+            self._append_assistant_turn_to_cache(turn_msgs, combined_html, start_idx)
+
             js_sync = (
                 "window._isStreaming = false;"
                 "_scrollToBottom();"
@@ -1382,9 +1439,33 @@ class AIChatPanel(Gtk.Box):
             self._update_send_button(False)
             self._ai_entry.placeholder_text = ""
         else:
-            rebuilt_markdown = self._rebuild_markdown_from_messages(target_messages)
-            html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
-            self._ai_html_cache[conv_id] = html
+            cached_html = self._ai_html_cache.get(conv_id)
+            if cached_html is not None:
+                start_idx = last_user_idx + 1
+                assistant_html = (
+                    f'<div class="msg-row assistant">\n'
+                    f'{ASSISTANT_AVATAR_HTML}\n'
+                    f'<div class="msg-bubble assistant">\n'
+                    f'{combined_html}\n'
+                    f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
+                    f'</div>\n'
+                    f'</div>\n\n'
+                )
+                self._ai_html_cache[conv_id] = cached_html + assistant_html
+                if state:
+                    state["ai_markdown_text"] += (
+                        f'<div class="msg-row assistant" markdown="1">\n'
+                        f'{ASSISTANT_AVATAR_HTML}\n'
+                        f'<div class="msg-bubble assistant" markdown="1">\n'
+                        f'{combined_html}\n'
+                        f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
+                        f'</div>\n'
+                        f'</div>\n\n'
+                    )
+            else:
+                rebuilt_markdown = self._rebuild_markdown_from_messages(target_messages)
+                html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
+                self._ai_html_cache[conv_id] = html
             try:
                 conv = self._conversation_store.load_conversation(conv_id)
                 messages_objs = _to_chat_messages(target_messages)
