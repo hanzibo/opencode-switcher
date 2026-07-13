@@ -137,6 +137,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_summary: str = ""
         self._ai_summary_generating: bool = False
         self._ai_pending_title_notification = False
+        self._webview_suspended = False
+        self._suspend_timeout_id = 0
 
         # Callback hooks
         self.on_dialog_shown = None
@@ -2938,7 +2940,52 @@ class AIChatPanel(Gtk.Box):
     def is_visible(self) -> bool:
         return self.get_visible()
 
+    def on_panel_shown(self):
+        if getattr(self, "_suspend_timeout_id", 0) != 0:
+            GLib.source_remove(self._suspend_timeout_id)
+            self._suspend_timeout_id = 0
+        
+        if getattr(self, "_webview_suspended", False):
+            self._webview_suspended = False
+            cached_html = self._ai_html_cache.get(self._ai_conversation_id)
+            html = self.get_html_template(self._theme, cached_html or "")
+            self._ai_webview.load_html(html, "file:///")
+            print("[AI] WebView restored from suspension.", flush=True)
+
+    def on_panel_hidden(self):
+        if getattr(self, "_suspend_timeout_id", 0) != 0:
+            GLib.source_remove(self._suspend_timeout_id)
+            self._suspend_timeout_id = 0
+        
+        self._suspend_timeout_id = GLib.timeout_add_seconds(15, self._suspend_webview_cb)
+
+    def _suspend_webview_cb(self) -> bool:
+        self._suspend_timeout_id = 0
+        
+        any_running = any(st.get("streaming", False) for st in self._ai_running_convs.values())
+        if any_running:
+            return True
+
+        if not getattr(self, "_webview_suspended", False):
+            if self._ai_conversation_id:
+                self._ai_html_cache[self._ai_conversation_id] = getattr(self, "_last_rendered_html", "")
+            
+            self._ai_webview.load_html("<html></html>", "about:blank")
+            WebKit2.WebContext.get_default().clear_cache()
+            self._webview_suspended = True
+            print("[AI] WebView suspended, memory cleared.", flush=True)
+            
+            import ctypes
+            try:
+                libc = ctypes.CDLL("libc.so.6")
+                libc.malloc_trim(0)
+            except Exception:
+                pass
+            
+        return False
+
     def hide_panel(self):
+        self.on_panel_hidden()
         self._update_send_button(False)
         self.set_no_show_all(True)
         self.hide()
@@ -3011,6 +3058,7 @@ class AIChatPanel(Gtk.Box):
         self._reset_ai_panel_silent()
 
     def open_ai_and_load_recent(self):
+        self.on_panel_shown()
         self.separator.set_no_show_all(False)
         self.separator.show()
         self.set_no_show_all(False)
@@ -3032,6 +3080,7 @@ class AIChatPanel(Gtk.Box):
             self._reset_ai_panel_silent()
 
     def show_panel(self):
+        self.on_panel_shown()
         self.set_no_show_all(False)
         self.show()
         self.show_all()

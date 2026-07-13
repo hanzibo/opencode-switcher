@@ -1305,6 +1305,12 @@ class ClipboardPanel(Gtk.Box):
     def is_ai_panel_visible(self) -> bool:
         return self._ai_chat_panel.is_visible()
 
+    def on_panel_shown(self):
+        self._ai_chat_panel.on_panel_shown()
+
+    def on_panel_hidden(self):
+        self._ai_chat_panel.on_panel_hidden()
+
     def start_new_conversation(self):
         self._ai_chat_panel.start_new_conversation()
 

@@ -103,6 +103,7 @@ Heuristic regex scoring in `clipboard_store.py` (`classify_text()`, `detect_lang
 ### AI Assistant (WebKit2 WebView)
 - OpenAI-compatible API. Config: `~/.config/opencode-switcher/llm_settings.json` — **saved with `0o600`** (API keys).
 - WebKit settings: WebGL/HTML5 DBs/localStorage disabled (memory).
+- WebView Suspension: Automatically suspends the WebView by loading `about:blank` and calling `WebContext.clear_cache()` when the panel is hidden for more than 15 seconds (provided no streams are actively running). Restores the full HTML template and conversation content seamlessly when the panel is shown again.
 - Conversation files: `~/.cache/opencode-switcher/conversations/` (JSON).
 - `/cd <path>` command switches active bash cwd in AI panel.
 - Subagent status bar: real-time status blocks with click-selection, adaptive polling lifecycle.

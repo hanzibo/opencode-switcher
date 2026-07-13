@@ -500,11 +500,15 @@ class SearchPanel:
         else:
             self._window.present()
         self._search_entry.grab_focus()
+        if self._clipboard_panel:
+            self._clipboard_panel.on_panel_shown()
 
     def is_visible(self) -> bool:
         return self._window.is_visible()
 
     def hide(self):
+        if self._clipboard_panel:
+            self._clipboard_panel.on_panel_hidden()
         # Cancel category rename editing state if any
         if self._clipboard_panel:
             self._clipboard_panel.cancel_rename()
