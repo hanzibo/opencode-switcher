@@ -31,7 +31,7 @@ from ai_text_utils import (
     _clean_history_title, _extract_local_title, _rebuild_markdown_from_messages,
     _vision_content_to_markdown, _resolve_vision_image_src,
     _vision_content_to_text, _image_hash_path, _image_to_data_uri, _cached_image_to_data_uri,
-    _model_supports_vision, USER_AVATAR_HTML, _render_active_turn_to_html,
+    _model_supports_vision, USER_AVATAR_HTML,     _render_active_turn_to_html, _render_reasoning_html, _render_tool_steps_html, _render_answer_html,
     _strip_ai_markup,
     _preserve_newlines,
 )
@@ -1204,6 +1204,15 @@ class AIChatPanel(Gtk.Box):
             
         return st.get("streaming", False)
 
+    def _get_turn_messages(self) -> List[Dict]:
+        """Get messages for the current active turn (from last user msg onward)."""
+        last_user_idx = -1
+        for idx in range(len(self._ai_messages) - 1, -1, -1):
+            if self._ai_messages[idx].get("role") == "user":
+                last_user_idx = idx
+                break
+        return self._ai_messages[last_user_idx + 1:] if last_user_idx != -1 else self._ai_messages
+
     def _render_current_assistant_message(self, req_id: int):
         conv_id = None
         for cid, st in self._ai_running_convs.items():
@@ -1218,31 +1227,22 @@ class AIChatPanel(Gtk.Box):
             return
         
         msg_id = f"msg-{req_id}"
+        turn_msgs = self._get_turn_messages()
+
         if not st.get("response_div_added", False):
-            js_append = f"appendMessageContainer('{msg_id}');"
-            self._ai_webview.run_javascript(js_append, None, None)
+            js = f"appendMessageContainer('{msg_id}');"
+            self._ai_webview.run_javascript(js, None, None)
             st["response_div_added"] = True
             if self._ai_conversation_id == conv_id:
                 self._ai_response_div_added = True
-            
-        # Find messages for the current active turn
-        last_user_idx = -1
-        for idx in range(len(self._ai_messages) - 1, -1, -1):
-            if self._ai_messages[idx].get("role") == "user":
-                last_user_idx = idx
-                break
-                
-        turn_msgs = self._ai_messages[last_user_idx + 1:] if last_user_idx != -1 else self._ai_messages
+
+        reasoning_html = _render_reasoning_html(turn_msgs, st.get("current_reasoning_text", ""), is_streaming=True)
+        tool_html = _render_tool_steps_html(turn_msgs)
+        current_text = st.get("current_assistant_text", "")
+        answer_html = _render_answer_html(turn_msgs, streaming_content=current_text)
         
-        # Render the turn's html
-        html_content = _render_active_turn_to_html(
-            turn_msgs,
-            streaming_reasoning=st.get("current_reasoning_text", ""),
-            streaming_content=st.get("current_assistant_text", ""),
-            is_streaming=True
-        )
-        
-        js_update = f"updateMessageContainer('{msg_id}', {json.dumps(html_content)});"
+        combined_html = f"{reasoning_html}{tool_html}{answer_html}"
+        js_update = f"updateMessageContainer('{msg_id}', {json.dumps(combined_html)});"
         self._ai_webview.run_javascript(js_update, None, None)
 
     def _get_pygments_css(self, theme: str) -> str:

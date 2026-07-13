@@ -743,34 +743,36 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
     )
 
 
-def _render_active_turn_to_html(
+def _render_reasoning_html(
     turn_messages: List[Dict],
     streaming_reasoning: str = "",
-    streaming_content: str = "",
     is_streaming: bool = False
 ) -> str:
-    # 1. Gather all reasoning
+    """渲染思考过程区域，输出带 .bubble-region 包裹。"""
     reasoning_parts = []
     for msg in turn_messages:
         if msg.get("role") == "assistant" and msg.get("reasoning_content"):
             reasoning_parts.append(msg["reasoning_content"])
     if streaming_reasoning:
         reasoning_parts.append(streaming_reasoning)
-        
-    reasoning_text = "\n".join(reasoning_parts).strip()
-    reasoning_html = ""
-    if reasoning_text:
-        # If streaming, keep it open; otherwise collapse it
-        open_attr = ' open' if is_streaming and streaming_reasoning else ''
-        escaped = html.escape(reasoning_text)
-        reasoning_html = (
-            f'<details class="thinking-details"{open_attr}>\n'
-            f'<summary class="thinking-summary">💭 Thinking Process</summary>\n'
-            f'<div class="thinking-content">{escaped}</div>\n'
-            f'</details>\n\n'
-        )
 
-    # 2. Pair tool calls and results
+    reasoning_text = "\n".join(reasoning_parts).strip()
+    if not reasoning_text:
+        return ""
+    open_attr = ' open' if is_streaming and streaming_reasoning else ''
+    escaped = html.escape(reasoning_text)
+    return (
+        f'<div class="bubble-region reasoning-region">\n'
+        f'<details class="thinking-details"{open_attr}>\n'
+        f'<summary class="thinking-summary">💭 Thinking Process</summary>\n'
+        f'<div class="thinking-content">{escaped}</div>\n'
+        f'</details>\n'
+        f'</div>\n\n'
+    )
+
+
+def _render_tool_steps_html(turn_messages: List[Dict]) -> str:
+    """渲染工具调用步骤区域，输出带 .bubble-region 包裹。"""
     tool_results_by_id = {}
     legacy_tool_results = []
     for msg in turn_messages:
@@ -787,26 +789,33 @@ def _render_active_turn_to_html(
             for tc in msg["tool_calls"]:
                 tool_calls_list.append(tc)
 
-    tool_steps_html = ""
-    if tool_calls_list:
-        steps_list = []
-        for i, tc in enumerate(tool_calls_list):
-            cid = tc.get("id")
-            result_msg = None
-            if cid and cid in tool_results_by_id:
-                result_msg = tool_results_by_id[cid]
-            elif i < len(legacy_tool_results):
-                result_msg = legacy_tool_results[i]
-                
-            steps_list.append(_render_tool_step(tc, result_msg))
-            
-        tool_steps_html = (
-            f'<div class="tool-steps-container">\n'
-            f'{"".join(steps_list)}'
-            f'</div>\n\n'
-        )
+    if not tool_calls_list:
+        return ""
 
-    # 3. Gather final answer content
+    steps_list = []
+    for i, tc in enumerate(tool_calls_list):
+        cid = tc.get("id")
+        result_msg = None
+        if cid and cid in tool_results_by_id:
+            result_msg = tool_results_by_id[cid]
+        elif i < len(legacy_tool_results):
+            result_msg = legacy_tool_results[i]
+        steps_list.append(_render_tool_step(tc, result_msg))
+
+    return (
+        f'<div class="bubble-region tool-region">\n'
+        f'<div class="tool-steps-container">\n'
+        f'{"".join(steps_list)}'
+        f'</div>\n'
+        f'</div>\n\n'
+    )
+
+
+def _render_answer_html(
+    turn_messages: List[Dict],
+    streaming_content: str = "",
+) -> str:
+    """渲染 AI 回答内容区域，输出带 .bubble-region 包裹。"""
     content_parts = []
     for msg in turn_messages:
         if msg.get("role") == "assistant" and msg.get("content"):
@@ -814,20 +823,33 @@ def _render_active_turn_to_html(
             content_str = _strip_ai_markup(content_str)
             if content_str.strip():
                 content_parts.append(content_str)
-                
+
     if streaming_content:
         content_parts.append(streaming_content)
 
     final_content = "\n".join(content_parts).strip()
-    content_html = ""
-    if final_content:
-        rendered_md = _markdown_to_html_safe(final_content)
-        content_html = (
-            f'<div class="answer-header">💡 Answer:</div>\n'
-            f'{rendered_md}\n'
-        )
+    if not final_content:
+        return ""
+    rendered_md = _markdown_to_html_safe(final_content)
+    return (
+        f'<div class="bubble-region answer-region">\n'
+        f'<div class="answer-header">💡 Answer:</div>\n'
+        f'{rendered_md}\n'
+        f'</div>\n\n'
+    )
 
-    return f'{reasoning_html}{tool_steps_html}{content_html}'
+
+def _render_active_turn_to_html(
+    turn_messages: List[Dict],
+    streaming_reasoning: str = "",
+    streaming_content: str = "",
+    is_streaming: bool = False
+) -> str:
+    """包装器：组装三个子区域 HTML（向后兼容，返回格式不变）。"""
+    reasoning_html = _render_reasoning_html(turn_messages, streaming_reasoning, is_streaming)
+    tool_html = _render_tool_steps_html(turn_messages)
+    answer_html = _render_answer_html(turn_messages, streaming_content)
+    return f'{reasoning_html}{tool_html}{answer_html}'
 
 
 def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:

@@ -666,7 +666,15 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 .user-content {{
                     word-break: break-word;
                 }}
-                
+
+                /* Bubble region — 三区结构 (reasoning / tool / answer) */
+                .bubble-region {{
+                    width: 100%;
+                }}
+                .bubble-region + .bubble-region {{
+                    margin-top: 8px;
+                }}
+
                 /* Muted and collapsible thinking styles */
                 details.thinking-details {{
                     margin: 8px 0 14px 0;
@@ -1126,7 +1134,14 @@ def get_html_template(theme_name: str, initial_html: str = "",
                         const bubble = document.createElement('div');
                         bubble.className = 'msg-bubble assistant';
                         bubble.id = msgId + '-bubble';
-                        bubble.innerHTML = '<div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>';
+                        // 三区结构：reasoning / tool / answer
+                        bubble.innerHTML = ''
+                            + '<div class="bubble-region reasoning-region"></div>'
+                            + '<div class="bubble-region tool-region"></div>'
+                            + '<div class="bubble-region answer-region">'
+                            +   '<div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>'
+                            + '</div>'
+                            + '<copy-marker></copy-marker>';
                         row.appendChild(bubble);
                         
                         content.appendChild(row);
@@ -1136,7 +1151,27 @@ def get_html_template(theme_name: str, initial_html: str = "",
                 }}
                 function updateMessageContainer(msgId, html) {{
                     const div = document.getElementById(msgId + '-bubble') || document.getElementById(msgId);
-                    if (div) {{
+                    if (!div) return;
+                    var regions = div.querySelectorAll('.bubble-region');
+                    if (regions.length === 3) {{
+                        // 三区结构：分别更新各区域，保留未提供的区域不变
+                        var temp = document.createElement('div');
+                        temp.innerHTML = html;
+                        var reasoning = temp.querySelector('.reasoning-region');
+                        var tools = temp.querySelector('.tool-region');
+                        var answer = temp.querySelector('.answer-region');
+                        if (reasoning && regions[0]) regions[0].innerHTML = reasoning.innerHTML;
+                        if (tools && regions[1]) regions[1].innerHTML = tools.innerHTML;
+                        if (answer && regions[2]) {{
+                            // 移除 typing-indicator（如果存在）
+                            var typing = regions[2].querySelector('.typing-indicator');
+                            if (typing) typing.remove();
+                            regions[2].innerHTML = answer.innerHTML;
+                        }}
+                        addCopyButtons();
+                        _renderMath(div);
+                    }} else {{
+                        // 旧结构：向后兼容
                         div.innerHTML = html;
                         addCopyButtons();
                         _renderMath(div);
