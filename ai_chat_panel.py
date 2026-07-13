@@ -78,6 +78,7 @@ class AIChatPanel(Gtk.Box):
         ("/model", "切换模型"),
         ("/cd", "切换 bash 工作路径"),
     ]
+    _SUSPEND_DELAY_SECONDS = 15
 
     def __init__(self, conversation_store, llm_settings_store, ai_settings_store=None, theme="dark", ai_commands=None, pygments_css_cache=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -2957,14 +2958,16 @@ class AIChatPanel(Gtk.Box):
             GLib.source_remove(self._suspend_timeout_id)
             self._suspend_timeout_id = 0
         
-        self._suspend_timeout_id = GLib.timeout_add_seconds(15, self._suspend_webview_cb)
+        self._suspend_timeout_id = GLib.timeout_add_seconds(
+            self._SUSPEND_DELAY_SECONDS, self._suspend_webview_cb
+        )
 
     def _suspend_webview_cb(self) -> bool:
-        self._suspend_timeout_id = 0
-        
         any_running = any(st.get("streaming", False) for st in self._ai_running_convs.values())
         if any_running:
             return True
+
+        self._suspend_timeout_id = 0
 
         if not getattr(self, "_webview_suspended", False):
             if self._ai_conversation_id:
