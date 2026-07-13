@@ -1026,9 +1026,37 @@ class AIChatPanel(Gtk.Box):
         if self._ai_conversation_id == conv_id:
             target_messages = state["messages"] if state else self._ai_messages
             self._ai_messages = target_messages
-            # Rebuild full markdown from messages (which now include tool call/results)
+
+            # ── 流结束兜底渲染：确保最后一批 token 进入 DOM ──
+            msg_id = f"msg-{req_id}"
+            last_user_idx = -1
+            for idx in range(len(target_messages) - 1, -1, -1):
+                if target_messages[idx].get("role") == "user":
+                    last_user_idx = idx
+                    break
+            turn_msgs = target_messages[last_user_idx + 1:] if last_user_idx != -1 else target_messages
+            reasoning_html = _render_reasoning_html(turn_msgs, is_streaming=False)
+            tool_html = _render_tool_steps_html(turn_msgs)
+            answer_html = _render_answer_html(turn_msgs)
+            combined_html = f"{reasoning_html}{tool_html}{answer_html}"
+            js_final = f"updateMessageContainer('{msg_id}', {json.dumps(combined_html)});"
+            if hasattr(self, "_ai_webview") and self._ai_webview:
+                self._ai_webview.run_javascript(js_final, None, None)
+
+            # Still rebuild for cache, but skip _render_markdown (DOM already correct)
             self._ai_markdown_text = self._rebuild_markdown_from_messages(target_messages)
-            self._render_markdown(self._ai_markdown_text)
+            full_html = _markdown_to_html_safe(self._ai_markdown_text, fallback_content="")
+            self._last_rendered_html = full_html
+            if self._ai_conversation_id:
+                self._ai_html_cache[self._ai_conversation_id] = full_html
+            js_sync = (
+                "window._isStreaming = false;"
+                "_scrollToBottom();"
+                "applyWindowing();"
+                "_initRoundNav();"
+            )
+            if hasattr(self, "_ai_webview") and self._ai_webview:
+                self._ai_webview.run_javascript(js_sync, None, None)
             self._ai_spinner.stop()
             self._ai_spinner.hide()
             self._ai_streaming = False
@@ -1298,6 +1326,22 @@ class AIChatPanel(Gtk.Box):
         elif target_messages and assistant_text:
             target_messages.append(assistant_msg)
 
+        # ── 流结束兜底渲染：确保最后一批 token 进入 DOM ──
+        msg_id = f"msg-{req_id}"
+        last_user_idx = -1
+        for idx in range(len(target_messages) - 1, -1, -1):
+            if target_messages[idx].get("role") == "user":
+                last_user_idx = idx
+                break
+        turn_msgs = target_messages[last_user_idx + 1:] if last_user_idx != -1 else target_messages
+        reasoning_html = _render_reasoning_html(turn_msgs, is_streaming=False)
+        tool_html = _render_tool_steps_html(turn_msgs)
+        answer_html = _render_answer_html(turn_msgs)
+        combined_html = f"{reasoning_html}{tool_html}{answer_html}"
+        js_final = f"updateMessageContainer('{msg_id}', {json.dumps(combined_html)});"
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript(js_final, None, None)
+
         if state:
             state["current_assistant_text"] = ""
             state["current_reasoning_text"] = ""
@@ -1318,9 +1362,20 @@ class AIChatPanel(Gtk.Box):
                 GLib.source_remove(self._ai_render_timeout_id)
                 self._ai_render_timeout_id = 0
 
-            # Full rebuild from messages list
+            # Still rebuild for cache, but skip _render_markdown (DOM already correct)
             self._ai_markdown_text = self._rebuild_markdown_from_messages(target_messages)
-            self._render_markdown(self._ai_markdown_text)
+            full_html = _markdown_to_html_safe(self._ai_markdown_text, fallback_content="")
+            self._last_rendered_html = full_html
+            if self._ai_conversation_id:
+                self._ai_html_cache[self._ai_conversation_id] = full_html
+            js_sync = (
+                "window._isStreaming = false;"
+                "_scrollToBottom();"
+                "applyWindowing();"
+                "_initRoundNav();"
+            )
+            if hasattr(self, "_ai_webview") and self._ai_webview:
+                self._ai_webview.run_javascript(js_sync, None, None)
 
             self._ai_spinner.stop()
             self._ai_spinner.hide()
