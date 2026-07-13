@@ -1,6 +1,6 @@
 # OpenCode Switcher — Agent Instructions
 
-Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipboard history management, and an AI assistant sidebar. Python 3 + GTK3 + AyatanaAppIndicator. **No CI/linter/formatter/typechecker. No automated tests.** ~461 commits, all by single author.
+Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipboard history management, and an AI assistant sidebar. Python 3 + GTK3 + AyatanaAppIndicator. **No CI/linter/formatter/typechecker. No automated tests.** 484 commits, all by single author.
 
 ## Commands
 
@@ -37,28 +37,28 @@ systemd/.desktop → run.sh → main.py (flock lock)
 | File | Lines | Role |
 |------|-------|------|
 | `main.py` | 288 | Entrypoint: flock lock, App(), Gtk.main() |
-| `panel.py` | 1387 | Search panel — tab switcher, slash cmds, CSS-in-code, session list |
-| `clipboard_panel.py` | 2165 | Clipboard panel — assembles subcomponents + event routing |
-| `clipboard_store.py` | 1277 | God module — clipboard, categories, conversations, memory (`MemStore`), prompts |
-| `ai_chat_panel.py` | 3109 | AI assistant — WebView, ReAct loops, background threads, subagent UI |
-| `ai_tool_loop.py` | 253 | ReAct loop (max 25 iterations) |
+| `ai_chat_panel.py` | 3166 | AI assistant — WebView, ReAct loops, background threads, subagent UI |
+| `clipboard_panel.py` | 2137 | Clipboard panel — assembles subcomponents + event routing |
+| `panel.py` | 1369 | Search panel — tab switcher, slash cmds, CSS-in-code, session list |
+| `clipboard_store.py` | 1272 | God module — clipboard, categories, conversations, memory (`MemStore`), prompts |
 | `ai_html_template.py` | 1197 | WebView HTML template + KaTeX + lightbox JS |
-| `ai_popovers.py` | 522 | AI command autocomplete + conversation history popover |
+| `prompts_config_dialog.py` | 910 | Prompt/category management dialog |
 | `ai_text_utils.py` | 917 | Pure markdown/math/vision helpers (zero GTK dep) |
+| `ai_popovers.py` | 522 | AI command autocomplete + conversation history popover |
+| `settings_dialog.py` | 427 | Settings dialog layout and fields |
 | `llm_client.py` | 368 | LLM HTTP client + `_ToolCallAccumulator` for SSE delta merge |
+| `gnome-extension/` | 350 | GNOME Shell extension (Wayland clipboard + focus IPC) |
 | `session_store.py` | 202 | SQLite reader + live-session detection via `/proc` |
+| `memory_manager_dialog.py` | 193 | Semantic memory CRUD and search dialog |
 | `launcher.py` | 128 | Terminal detection + session spawner |
 | `hotkey.py` | 87 | Unix socket server for GNOME Extension hotkey toggling (Wayland) |
-| `settings_dialog.py` | 427 | Settings dialog layout and fields |
-| `memory_manager_dialog.py` | 193 | Semantic memory CRUD and search dialog |
-| `tool_registry/` | 5115 | 26 AI tools across 14 modules |
-| `gnome-extension/` | 350 | GNOME Shell extension (Wayland clipboard + focus IPC) |
+| `tool_registry/` | 28 tools across 14 modules | AI tool executors (see below) |
 
-**Flat root** — no `__init__.py`, not an importable Python package. All `.py` files imported directly by `main.py`.
+**Flat root** — no `__init__.py` at project level, not an importable Python package. All `.py` files imported directly by `main.py`.
 
 ### Tool Registry (`tool_registry/`)
 
-26 AI tool executors dispatched via `TOOL_EXECUTORS` dict. Assembled from per-module `TOOL_SCHEMAS` lists in `__init__.py`. Key modules:
+28 AI tool executors dispatched via `TOOL_EXECUTORS` dict. Assembled from per-module `TOOL_SCHEMAS` lists in `__init__.py`. Key modules:
 - `bash.py` — persistent bash session, sentinel protocol, interactive command blocking (hard blocks: `vi`, `less`, `top`, `ssh`; conditional: `ssh-keygen`, `openssl`, `gpg`)
 - `web.py` — `web_search`/`web_fetch` with Obscura browser + trafilatura extraction, `cancel_event` support
 - `filesystem.py` — safe-path guarded read/write/edit/delete/rename
@@ -68,10 +68,14 @@ systemd/.desktop → run.sh → main.py (flock lock)
 - `todo.py` — persistent task management with dependency tracking
 - `mail.py` — `read_qq_mail` for IMAP mailbox reading with credential caching
 - `memory.py` — `memory_save`, `memory_list`, `memory_recall` for long-term semantic memory storage
+- `display.py` — tool call/result HTML formatting for WebView
+- `common.py` — `get_current_time`, `ask_user_question`
+- `notification.py` — `send_notification`
+- `_state.py` — shared state flags (e.g., `_TOOL_CANCELLED`)
 
 Tool calls: LLM streams → `_ToolCallAccumulator` merges SSE deltas → `execute_tool_call()` dispatches → result fed back as `role: "tool"`. Cancel via `cancel_event` threading.Event.
 
-Each tool call now carries a `purpose` parameter (agent-generated description), displayed in the tool summary line alongside file/query/URL (via `_TOOL_DISPLAY_FIELD` mapping in `ai_text_utils.py` — 13 tools covered, module-level constant).
+Each tool call carries a `purpose` parameter (agent-generated description), displayed in the tool summary line alongside file/query/URL (via `_TOOL_DISPLAY_FIELD` mapping in `ai_text_utils.py` — 13 tools covered, module-level constant).
 
 ### Wayland Integration (GNOME Shell Extension)
 
@@ -81,6 +85,8 @@ The application operates exclusively on Wayland:
 - **Window Focus**: The Python app writes the target window class to `~/.cache/opencode-switcher/focus.request`, which the GNOME Shell extension monitors and activates using `win.activate()`.
 
 **Wayland clipboard.updated marker**: Single-file timestamp overwritten by rapid clipboard events — not a queue. Lossy.
+
+See `gnome-extension/AGENTS.md` for full extension internals.
 
 ## Key Features & Quirks
 
@@ -103,7 +109,8 @@ Heuristic regex scoring in `clipboard_store.py` (`classify_text()`, `detect_lang
 ### AI Assistant (WebKit2 WebView)
 - OpenAI-compatible API. Config: `~/.config/opencode-switcher/llm_settings.json` — **saved with `0o600`** (API keys).
 - WebKit settings: WebGL/HTML5 DBs/localStorage disabled (memory).
-- WebView Suspension: Automatically suspends the WebView by loading `about:blank` and calling `WebContext.clear_cache()` when the panel is hidden for more than 15 seconds (provided no streams are actively running). Restores the full HTML template and conversation content seamlessly when the panel is shown again.
+- **MemoryPressureSettings**: Configured at `ai_chat_panel.py:258-262` — 300MB limit, 5s poll, 0.2/0.4 conservative/strict thresholds. Applied via `WebKit2.WebContext(memory_pressure_settings=mps)`. Must be set at context creation — no runtime update.
+- **WebView Suspension**: Suspends by first calling `terminate_web_process()` (releases ~200MB WebKit RSS), then `clear_cache()` and `load_html("about:blank")`. Do NOT skip terminate — `load_html("")` alone barely reduces memory.
 - Conversation files: `~/.cache/opencode-switcher/conversations/` (JSON).
 - `/cd <path>` command switches active bash cwd in AI panel.
 - Subagent status bar: real-time status blocks with click-selection, adaptive polling lifecycle.
@@ -122,7 +129,7 @@ When re-rendering chat after AI responds, the original Shift+Enter line breaks i
 - Increment `self._ai_request_id` during switches to prevent old threads from corrupting the active viewport.
 
 ### Subagent Status Bar Flash Guard
-- Dynamically add/remove `.subagent-status-bar` class on `self._ai_subagent_bar` FlowBox before `hide()` and `.remove(child)` to avoid visual gray-blue flashing in GTK3 due to layout recalculations.
+Dynamically add/remove `.subagent-status-bar` class on `self._ai_subagent_bar` FlowBox before `hide()` and `.remove(child)` to avoid visual gray-blue flashing in GTK3 due to layout recalculations.
 
 ### Semantic Memory (MemStore)
 - Long-term memory query/recall tools (`memory_save`, `memory_list`, `memory_recall`) using `MemStore` (with BM25 ranking and `jieba` tokenizer fallback).
@@ -134,6 +141,7 @@ When re-rendering chat after AI responds, the original Shift+Enter line breaks i
 - **Exclude**: archived sessions, subagent sessions (`title LIKE '%(@%subagent)%'`), non-existent dirs.
 - **Live detection**: `pgrep -f opencode` → scan `/proc/<pid>/cmdline` + `/proc/<pid>/cwd`. Filters out switcher itself. Also checks `--session` flag.
 - **Status**: "live" (running), "recent" (<24h), "closed".
+- **Known optimization**: `part` table snippet query was reduced from 49,740→100 rows via `INNER JOIN + MAX(time_created)` subquery (`session_store.py`). Data transfer dropped ~97MB→0.03MB.
 
 ## Config & Cache Paths
 
@@ -159,7 +167,6 @@ When re-rendering chat after AI responds, the original Shift+Enter line breaks i
 - **Strings**: double quotes (~10:1 over single). Docstrings: `"""`
 - **Imports**: stdlib → third-party → local. `gi.require_version()` BEFORE `from gi.repository import ...`
 - **Thread safety**: `GLib.idle_add(callback, *args)` for background→UI updates. No `asyncio`.
-- **Platform check**: Wayland is assumed, no complex platform checks required.
 - **Comments**: `# <space><text>`, Chinese or English.
 - **`# ponytail:`** marks intentionally removed code — searchable breadcrumb for deleted blocks.
 - **`console.error('opencode-switcher: ...')`** prefix in GNOME extension JS error messages.
@@ -177,6 +184,7 @@ When re-rendering chat after AI responds, the original Shift+Enter line breaks i
 - **Shared `clipboard_history.json`** — written by both Python and JS, no locking → potential corruption.
 - **`TEMPLATE_REGEX` duplicated** in 3 files — must keep in sync.
 - **Lossy marker IPC** (`clipboard.updated`): single-file timestamp, not a queue.
+- **Image garbage buildup**: `clipboard_history.json` can reference fewer files than `images/` directory contains. Startup calls `_delete_orphan_images()` in `clipboard_store.py:_load()` to clean unreferenced PNGs.
 
 ## Critical GTK & PyGObject Crash Guards
 
@@ -191,8 +199,17 @@ When re-rendering chat after AI responds, the original Shift+Enter line breaks i
 - **Signal loop storms**: ListBox row removal/addition inside selection callbacks triggers recursion. Use `handler_block`/`handler_unblock`, check `row.get_parent() == listbox`, prefer in-place label updates.
 - **Swallowed exceptions**: PyGObject callbacks swallow tracebacks. Check `run.log` for NameErrors/syntax errors.
 
+## WebView Memory Optimization Patterns
+
+Hard-earned from the optimization branch. Apply these when touching WebView lifecycle:
+
+- **`terminate_web_process()` is the only effective memory release** for WebKit. `load_html('<html></html>')` + `clear_cache()` + `malloc_trim()` reduces only ~30MB of ~200MB WebProcess RSS.
+- **MemoryPressureSettings** must be set at `WebContext` construction time (`WebKit2.WebContext.new_with_context()`). Runtime changes are ignored.
+- **After terminate**, call `set_background_color(rgba)` with opaque color — terminated WebView renders transparent, showing desktop behind.
+- For clean suspension: terminate → set background → clear_cache.
+
 ## Reference
 
-- `.hzb-agents/experience/` — ~108 per-feature postmortems (pitfalls, solutions, reasoning)
-- `.omo/plans/` — 41 structured work plans from past development
+- `.hzb-agents/experience/` — 126 per-feature postmortems (pitfalls, solutions, reasoning)
+- `.omo/plans/` — 48 structured work plans from past development
 - `gnome-extension/` — GNOME Shell extension for Wayland clipboard + focus IPC. See `gnome-extension/AGENTS.md`.
