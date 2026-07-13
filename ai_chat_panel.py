@@ -2942,7 +2942,9 @@ class AIChatPanel(Gtk.Box):
         return self.get_visible()
 
     def on_panel_shown(self):
+        print(f"[DEBUG] on_panel_shown called, _webview_suspended={self._webview_suspended}", flush=True)
         if getattr(self, "_suspend_timeout_id", 0) != 0:
+            print(f"[DEBUG] on_panel_shown: cancelling timer {self._suspend_timeout_id}", flush=True)
             GLib.source_remove(self._suspend_timeout_id)
             self._suspend_timeout_id = 0
         
@@ -2954,6 +2956,7 @@ class AIChatPanel(Gtk.Box):
             print("[AI] WebView restored from suspension.", flush=True)
 
     def on_panel_hidden(self):
+        print(f"[DEBUG] on_panel_hidden called, _webview_suspended={self._webview_suspended}", flush=True)
         if getattr(self, "_suspend_timeout_id", 0) != 0:
             GLib.source_remove(self._suspend_timeout_id)
             self._suspend_timeout_id = 0
@@ -2961,10 +2964,13 @@ class AIChatPanel(Gtk.Box):
         self._suspend_timeout_id = GLib.timeout_add_seconds(
             self._SUSPEND_DELAY_SECONDS, self._suspend_webview_cb
         )
+        print(f"[DEBUG] suspend timer started, id={self._suspend_timeout_id}", flush=True)
 
     def _suspend_webview_cb(self) -> bool:
+        print(f"[DEBUG] _suspend_webview_cb fired, _webview_suspended={self._webview_suspended}, _ai_running_convs={ {k: v.get('streaming') for k, v in self._ai_running_convs.items()} }", flush=True)
         any_running = any(st.get("streaming", False) for st in self._ai_running_convs.values())
         if any_running:
+            print("[DEBUG] _suspend_webview_cb: skipped, streaming active", flush=True)
             return True
 
         self._suspend_timeout_id = 0
