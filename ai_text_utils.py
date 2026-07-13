@@ -378,14 +378,14 @@ def _fix_details_blocks(text: str) -> str:
     return '\n'.join(result)
 
 
-def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) -> str:
-    escaped_text, placeholders = _escape_math(text)
-    placeholders = [_fix_latex(p) for p in placeholders]
-    escaped_text, tool_placeholders = _escape_tool_results(escaped_text)
-    escaped_text = _ensure_list_blankline(escaped_text)
-    escaped_text = _ensure_table_blankline(escaped_text)
-    escaped_text = _fix_blockquote_fences(escaped_text)
-    escaped_text = _fix_details_blocks(escaped_text)
+_markdown_lib = None
+_markdown_initialized = False
+
+
+def _get_markdown_lib():
+    global _markdown_lib, _markdown_initialized
+    if _markdown_initialized:
+        return _markdown_lib
     try:
         import markdown
         try:
@@ -401,8 +401,26 @@ def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) ->
                 block_elements.add('summary')
         except Exception:
             pass
-        html_text = markdown.markdown(escaped_text, extensions=_MARKDOWN_EXTENSIONS)
+        _markdown_lib = markdown
     except ImportError:
+        _markdown_lib = None
+    _markdown_initialized = True
+    return _markdown_lib
+
+
+def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) -> str:
+    escaped_text, placeholders = _escape_math(text)
+    placeholders = [_fix_latex(p) for p in placeholders]
+    escaped_text, tool_placeholders = _escape_tool_results(escaped_text)
+    escaped_text = _ensure_list_blankline(escaped_text)
+    escaped_text = _ensure_table_blankline(escaped_text)
+    escaped_text = _fix_blockquote_fences(escaped_text)
+    escaped_text = _fix_details_blocks(escaped_text)
+    
+    md_lib = _get_markdown_lib()
+    if md_lib is not None:
+        html_text = md_lib.markdown(escaped_text, extensions=_MARKDOWN_EXTENSIONS)
+    else:
         if fallback_content is not None:
             html_text = fallback_content
         else:
