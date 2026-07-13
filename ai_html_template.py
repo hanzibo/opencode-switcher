@@ -1061,8 +1061,10 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     var firstVisibleUser = userRows[firstVisibleUserIdx];
                     var revealing = false;
                     for (var i = 0; i < allRows.length; i++) {{
-                        if (allRows[i] === newFirstUser) revealing = true;
-                        if (revealing) allRows[i].classList.remove('msg-windowed');
+                        if (allRows[i] === newFirstUser || revealing) {{
+                            revealing = true;
+                            allRows[i].classList.remove('msg-windowed');
+                        }}
                         if (allRows[i] === firstVisibleUser) break;
                     }}
                     updateShowOlderBar();
@@ -1071,7 +1073,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
 
                 function showAllMessages() {{
                     _showAllMessages = true;
-                    var hidden = document.querySelectorAll('.msg-windowed');
+                    var hidden = document.querySelectorAll('#content > .msg-windowed');
                     for (var i = 0; i < hidden.length; i++) {{
                         hidden[i].classList.remove('msg-windowed');
                     }}
