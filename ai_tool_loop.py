@@ -53,6 +53,7 @@ def run_llm_react_loop(
     set_reasoning_text_fn=None,
     set_assistant_text_fn=None,
     on_token_delta_fn=None,
+    on_reasoning_delta_fn=None,
     switch_to_html_mode_fn=None,
     conv_id: str = None,
     extra_system_messages: Optional[list] = None,
@@ -97,6 +98,7 @@ def run_llm_react_loop(
                 set_reasoning_text_fn=set_reasoning_text_fn,
                 set_assistant_text_fn=set_assistant_text_fn,
                 on_token_delta_fn=on_token_delta_fn,
+                on_reasoning_delta_fn=on_reasoning_delta_fn,
                 switch_to_html_mode_fn=switch_to_html_mode_fn,
                 extra_system_messages=extra_system_messages,
             )
@@ -129,6 +131,7 @@ def _perform_llm_call(
     set_reasoning_text_fn=None,
     set_assistant_text_fn=None,
     on_token_delta_fn=None,
+    on_reasoning_delta_fn=None,
     switch_to_html_mode_fn=None,
     extra_system_messages: Optional[list] = None,
 ) -> bool:
@@ -160,6 +163,8 @@ def _perform_llm_call(
 
             if event.type == StreamEventType.REASONING_DELTA:
                 if event.reasoning_delta:
+                    if on_reasoning_delta_fn is not None:
+                        on_reasoning_delta_fn(event.reasoning_delta)
                     reasoning_text += event.reasoning_delta
                     if set_reasoning_text_fn is not None:
                         set_reasoning_text_fn(reasoning_text)
