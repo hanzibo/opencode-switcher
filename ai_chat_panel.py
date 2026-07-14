@@ -1438,10 +1438,22 @@ class AIChatPanel(Gtk.Box):
                 last_user_idx = idx
                 break
         turn_msgs = target_messages[last_user_idx + 1:] if last_user_idx != -1 else target_messages
-        reasoning_html = _render_reasoning_html(turn_msgs, is_streaming=False)
-        tool_html = _render_tool_steps_html(turn_msgs)
-        answer_html = _render_answer_html(turn_msgs)
-        combined_html = f"{reasoning_html}{tool_html}{answer_html}"
+        
+        contains_ask = any(
+            (msg.get("role") == "tool" and msg.get("name") == "ask_user_question") or
+            (msg.get("role") == "assistant" and any(tc.get("function", {}).get("name") == "ask_user_question" for tc in msg.get("tool_calls", []) or []))
+            for msg in turn_msgs
+        )
+
+        if contains_ask:
+            rebuilt_markdown = self._rebuild_markdown_from_messages(turn_msgs)
+            combined_html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
+        else:
+            reasoning_html = _render_reasoning_html(turn_msgs, is_streaming=False)
+            tool_html = _render_tool_steps_html(turn_msgs, target_messages)
+            answer_html = _render_answer_html(turn_msgs)
+            combined_html = f"{reasoning_html}{tool_html}{answer_html}"
+
         js_final = f"updateMessageContainer('{msg_id}', {json.dumps(combined_html)});"
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(js_final, None, None)
