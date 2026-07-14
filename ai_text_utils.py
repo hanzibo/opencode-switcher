@@ -985,6 +985,10 @@ def _rebuild_markdown_from_messages(
         i += 1
 
     if is_streaming:
+        # Dangling Stream Case:
+        # 如果当前正在流式输出，但消息列表以 user 或 ask_user_question 工具响应（代表用户的回答）结尾，
+        # 则说明当前的流式内容属于正在孕育的全新 Assistant 回答，尚未被正式添加进 messages 列表中。
+        # 此时需要单独在最末尾追加渲染一个全新的 Assistant 气泡来显示当前正在流式生成的文本/思考过程。
         has_rendered_stream = False
         if messages:
             last_msg = messages[-1]

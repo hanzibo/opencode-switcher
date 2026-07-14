@@ -1010,15 +1010,17 @@ class AIChatPanel(Gtk.Box):
             extra_system_messages=extra_system_messages,
         )
 
-    def _append_assistant_turn_to_cache(self, turn_msgs: List[Dict], combined_html: str, start_idx: int):
-        """增量更新当前会话的 Markdown 和 HTML 缓存。"""
-        contains_ask = any(
+    def _contains_ask_user_question(self, turn_msgs: List[Dict]) -> bool:
+        """检查给定的 turn_msgs 中是否包含 ask_user_question 相关的工具调用或响应。"""
+        return any(
             (msg.get("role") == "tool" and msg.get("name") == "ask_user_question") or
             (msg.get("role") == "assistant" and any(tc.get("function", {}).get("name") == "ask_user_question" for tc in msg.get("tool_calls", []) or []))
             for msg in turn_msgs
         )
 
-        if contains_ask:
+    def _append_assistant_turn_to_cache(self, turn_msgs: List[Dict], combined_html: str, start_idx: int):
+        """增量更新当前会话的 Markdown 和 HTML 缓存。"""
+        if self._contains_ask_user_question(turn_msgs):
             self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
             self._last_rendered_html = _markdown_to_html_safe(self._ai_markdown_text, fallback_content="")
             if self._ai_conversation_id:
@@ -1079,13 +1081,7 @@ class AIChatPanel(Gtk.Box):
                     break
             turn_msgs = target_messages[last_user_idx + 1:] if last_user_idx != -1 else target_messages
             
-            contains_ask = any(
-                (msg.get("role") == "tool" and msg.get("name") == "ask_user_question") or
-                (msg.get("role") == "assistant" and any(tc.get("function", {}).get("name") == "ask_user_question" for tc in msg.get("tool_calls", []) or []))
-                for msg in turn_msgs
-            )
-
-            if contains_ask:
+            if self._contains_ask_user_question(turn_msgs):
                 rebuilt_markdown = self._rebuild_markdown_from_messages(turn_msgs)
                 combined_html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
             else:
@@ -1127,13 +1123,7 @@ class AIChatPanel(Gtk.Box):
                             break
                     turn_msgs = target_messages[last_user_idx + 1:] if last_user_idx != -1 else target_messages
                     
-                    contains_ask = any(
-                        (msg.get("role") == "tool" and msg.get("name") == "ask_user_question") or
-                        (msg.get("role") == "assistant" and any(tc.get("function", {}).get("name") == "ask_user_question" for tc in msg.get("tool_calls", []) or []))
-                        for msg in turn_msgs
-                    )
-
-                    if contains_ask:
+                    if self._contains_ask_user_question(turn_msgs):
                         rebuilt_markdown = self._rebuild_markdown_from_messages(turn_msgs)
                         combined_html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
                         assistant_html = combined_html
@@ -1353,13 +1343,7 @@ class AIChatPanel(Gtk.Box):
             if self._ai_conversation_id == conv_id:
                 self._ai_response_div_added = True
 
-        contains_ask = any(
-            (msg.get("role") == "tool" and msg.get("name") == "ask_user_question") or
-            (msg.get("role") == "assistant" and any(tc.get("function", {}).get("name") == "ask_user_question" for tc in msg.get("tool_calls", []) or []))
-            for msg in turn_msgs
-        )
-
-        if contains_ask:
+        if self._contains_ask_user_question(turn_msgs):
             rebuilt_markdown = self._rebuild_markdown_from_messages(
                 turn_msgs,
                 streaming_reasoning=st.get("current_reasoning_text", ""),
@@ -1439,13 +1423,7 @@ class AIChatPanel(Gtk.Box):
                 break
         turn_msgs = target_messages[last_user_idx + 1:] if last_user_idx != -1 else target_messages
         
-        contains_ask = any(
-            (msg.get("role") == "tool" and msg.get("name") == "ask_user_question") or
-            (msg.get("role") == "assistant" and any(tc.get("function", {}).get("name") == "ask_user_question" for tc in msg.get("tool_calls", []) or []))
-            for msg in turn_msgs
-        )
-
-        if contains_ask:
+        if self._contains_ask_user_question(turn_msgs):
             rebuilt_markdown = self._rebuild_markdown_from_messages(turn_msgs)
             combined_html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
         else:
