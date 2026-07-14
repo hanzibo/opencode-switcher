@@ -1158,51 +1158,98 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     opacity: 0.8;
                 }}
 
+                @keyframes ask-user-pulse {{
+                    0% {{
+                        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.05);
+                        border-color: rgba(99, 102, 241, 0.25);
+                    }}
+                    50% {{
+                        box-shadow: 0 6px 18px rgba(99, 102, 241, 0.18), 0 0 0 1px rgba(99, 102, 241, 0.1);
+                        border-color: rgba(99, 102, 241, 0.55);
+                    }}
+                    100% {{
+                        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.05);
+                        border-color: rgba(99, 102, 241, 0.25);
+                    }}
+                }}
+                @keyframes ask-user-pulse-dark {{
+                    0% {{
+                        box-shadow: 0 4px 12px rgba(129, 140, 248, 0.05);
+                        border-color: rgba(129, 140, 248, 0.25);
+                    }}
+                    50% {{
+                        box-shadow: 0 6px 18px rgba(129, 140, 248, 0.22), 0 0 0 1px rgba(129, 140, 248, 0.15);
+                        border-color: rgba(129, 140, 248, 0.6);
+                    }}
+                    100% {{
+                        box-shadow: 0 4px 12px rgba(129, 140, 248, 0.05);
+                        border-color: rgba(129, 140, 248, 0.25);
+                    }}
+                }}
+
                 /* Agent confirmation box (Ask User Question) */
                 .tool-ask-user {{
-                    margin: 12px 0;
+                    margin: 16px 0;
                     border-radius: 8px;
-                    border: 1px solid rgba(99, 102, 241, 0.15);
+                    border: 1px solid rgba(99, 102, 241, 0.25);
+                    border-left: 4px solid #6366f1;
                     overflow: hidden;
                     background: rgba(99, 102, 241, 0.02);
+                    animation: ask-user-pulse 3s infinite ease-in-out;
+                    transition: transform 0.2s ease, box-shadow 0.2s ease;
                 }}
                 .dark .tool-ask-user {{
                     border: 1px solid rgba(129, 140, 248, 0.25);
+                    border-left: 4px solid #818cf8;
                     background: rgba(129, 140, 248, 0.02);
+                    animation: ask-user-pulse-dark 3s infinite ease-in-out;
                 }}
+                .tool-ask-user:hover {{
+                    transform: translateY(-1px);
+                }}
+                
                 .tool-ask-user-header {{
                     padding: 10px 14px;
-                    background: rgba(99, 102, 241, 0.06);
+                    background: linear-gradient(90deg, rgba(99, 102, 241, 0.08) 0%, rgba(99, 102, 241, 0.01) 100%);
                     border-bottom: 1px solid rgba(99, 102, 241, 0.1);
-                    font-size: 12px;
+                    font-size: 13px;
                     color: #6366f1;
                     font-weight: 600;
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
                 }}
                 .dark .tool-ask-user-header {{
-                    background: rgba(129, 140, 248, 0.08);
+                    background: linear-gradient(90deg, rgba(129, 140, 248, 0.12) 0%, rgba(129, 140, 248, 0.02) 100%);
                     border-bottom: 1px solid rgba(129, 140, 248, 0.15);
                     color: #818cf8;
                 }}
+                
                 .tool-ask-user-body {{
-                    padding: 14px 16px;
-                    background: rgba(99, 102, 241, 0.02);
+                    padding: 16px;
+                    background: transparent;
                     font-size: 14px;
                     line-height: 1.6;
+                    color: rgba(15, 23, 42, 0.9);
                 }}
                 .dark .tool-ask-user-body {{
-                    background: rgba(129, 140, 248, 0.05);
+                    background: transparent;
+                    color: rgba(255, 255, 255, 0.95);
                 }}
+                
                 .tool-ask-user-footer {{
                     padding: 8px 14px;
-                    background: rgba(99, 102, 241, 0.02);
-                    border-top: 1px solid rgba(99, 102, 241, 0.1);
-                    font-size: 12px;
-                    color: #6366f1;
+                    background: rgba(99, 102, 241, 0.01);
+                    border-top: 1px solid rgba(99, 102, 241, 0.08);
+                    font-size: 11.5px;
+                    color: #4f46e5;
+                    font-style: italic;
+                    opacity: 0.95;
                 }}
                 .dark .tool-ask-user-footer {{
-                    background: rgba(129, 140, 248, 0.05);
-                    border-top: 1px solid rgba(129, 140, 248, 0.15);
-                    color: #818cf8;
+                    background: rgba(129, 140, 248, 0.01);
+                    border-top: 1px solid rgba(129, 140, 248, 0.1);
+                    color: #a5b4fc;
                 }}
 
                 .summary-status {{
