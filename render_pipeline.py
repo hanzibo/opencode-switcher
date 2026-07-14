@@ -28,8 +28,8 @@ from typing import List, Dict, Optional
 import json
 
 # ── 依赖 ai_text_utils 中的渲染函数 ──────────────────────────────
-from ai_text_utils import (
-    _markdown_to_html_safe,
+from ai_text_utils.markdown import _markdown_to_html_safe
+from ai_text_utils.render import (
     _rebuild_markdown_from_messages,
     _render_reasoning_html,
     _render_tool_steps_html,

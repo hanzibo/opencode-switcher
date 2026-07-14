@@ -153,7 +153,7 @@ install_files() {
     cp -r "$SCRIPT_DIR/tool_registry"              "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/migrate_history.py"          "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/utils.py"                    "$INSTALL_DIR/"
-    cp "$SCRIPT_DIR/ai_text_utils.py"            "$INSTALL_DIR/"
+    cp -r "$SCRIPT_DIR/ai_text_utils"            "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/ai_html_template.py"         "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/dynamic_copy_dialog.py"      "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/sort_dialog.py"              "$INSTALL_DIR/"
