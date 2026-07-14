@@ -161,6 +161,8 @@ class AIChatPanel(Gtk.Box):
         # ── Streaming v2: Token batching state ──
         self._token_buffer = ""
         self._flush_scheduled = False
+        self._reasoning_buffer = ""
+        self._reasoning_flush_scheduled = False
         self._last_flushed_len = 0
         self._streaming_mode = self._STREAM_MODE_OFF
         self._streaming_container_created = False
@@ -707,6 +709,8 @@ class AIChatPanel(Gtk.Box):
         """在每轮对话开始时初始化流式状态。"""
         self._token_buffer = ""
         self._flush_scheduled = False
+        self._reasoning_buffer = ""
+        self._reasoning_flush_scheduled = False
         self._last_flushed_len = 0
         self._streaming_container_created = False
 
@@ -753,14 +757,58 @@ class AIChatPanel(Gtk.Box):
         self._token_buffer = ""
         return False
 
+    # ── Reasoning delta batching (与 token batching 对称) ──
+
+    def _on_reasoning_delta(self, text: str):
+        """收到 LLM 推理增量，累积到 buffer 并安排 60ms flush。"""
+        if self._streaming_mode == self._STREAM_MODE_OFF:
+            return
+        self._reasoning_buffer += text
+        if not self._reasoning_flush_scheduled:
+            self._reasoning_flush_scheduled = True
+            GLib.timeout_add(self._BATCH_FLUSH_MS, self._flush_reasoning_buffer)
+
+    def _flush_reasoning_buffer(self) -> bool:
+        """60ms 定时器回调：将累积的推理文本批量 flush 到 WebView。"""
+        self._reasoning_flush_scheduled = False
+        if self._streaming_mode == self._STREAM_MODE_OFF:
+            self._reasoning_buffer = ""
+            return False
+        if not self._reasoning_buffer:
+            return False
+        if not self._streaming_container_created and hasattr(self, "_ai_webview") and self._ai_webview:
+            req_id = getattr(self, "_ai_request_id", 0)
+            msg_id = f"msg-{req_id}"
+            js = f"appendMessageContainer('{msg_id}');"
+            self._ai_webview.run_javascript(js, None, None)
+            self._streaming_container_created = True
+        js_code = f"appendStreamReasoning({json.dumps(self._reasoning_buffer)});"
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript(js_code, None, None)
+        self._reasoning_buffer = ""
+        return False
+
+    def _flush_all_buffers(self):
+        """flush 所有累积 buffer（在流结束/模式切换时调用）。"""
+        if self._reasoning_buffer:
+            js_code = f"appendStreamReasoning({json.dumps(self._reasoning_buffer)});"
+            if hasattr(self, "_ai_webview") and self._ai_webview:
+                self._ai_webview.run_javascript(js_code, None, None)
+            self._reasoning_buffer = ""
+        if self._token_buffer:
+            self._flush_token_buffer()
+
     def _switch_to_html_mode(self, req_id: int):
         """工具调用阶段：结束纯文本追加，切换到 HTML 全量渲染模式。"""
         if self._streaming_mode != self._STREAM_MODE_TEXT:
             return
 
+        # 1. 先 flush 所有累积 buffer
+        self._flush_all_buffers()
+
+        # 2. 构建完整渲染
         msg_id = f"msg-{req_id}"
         turn_msgs = self._get_turn_messages()
-
         output = render_turn(TurnRenderInput(
             turn_messages=turn_msgs,
             all_messages=self._ai_messages,
@@ -769,13 +817,16 @@ class AIChatPanel(Gtk.Box):
             is_streaming=False,
         ))
 
-        js_code = f"finalizeStreamingContent({json.dumps(output.answer_html)});"
+        # 3. 发送 reasoning + answer 的最终 HTML
+        js_code = f"finalizeStreamingContent({json.dumps(output.answer_html)}, {json.dumps(output.reasoning_html)});"
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(js_code, None, None)
 
         self._streaming_mode = self._STREAM_MODE_FULL
         self._token_buffer = ""
         self._flush_scheduled = False
+        self._reasoning_buffer = ""
+        self._reasoning_flush_scheduled = False
 
     # ────────────────────────────────────────────────────────────────────
 
@@ -1044,9 +1095,11 @@ class AIChatPanel(Gtk.Box):
                 self._ai_assistant_html_base = ""
                 self._ai_current_reasoning_text = ""
                 self._ai_dirty_stream = False
-                # v2: 清理 token buffer
+                # v2: 清理 token + reasoning buffer
                 self._token_buffer = ""
                 self._flush_scheduled = False
+                self._reasoning_buffer = ""
+                self._reasoning_flush_scheduled = False
 
         def append_message_callback(msg):
             st = self._ai_running_convs.get(conv_id)
@@ -1091,6 +1144,11 @@ class AIChatPanel(Gtk.Box):
             if self._ai_conversation_id == conv_id:
                 GLib.idle_add(self._on_token_delta, text)
 
+        def on_reasoning_delta_fn(text):
+            """v2: 推理增量回调，后台线程收到 reasoning delta 时调用。"""
+            if self._ai_conversation_id == conv_id:
+                GLib.idle_add(self._on_reasoning_delta, text)
+
         run_llm_react_loop(
             llm_client=self._llm_client,
             base_url=base_url,
@@ -1113,6 +1171,7 @@ class AIChatPanel(Gtk.Box):
             set_reasoning_text_fn=set_reasoning_callback,
             set_assistant_text_fn=set_assistant_callback,
             on_token_delta_fn=on_token_delta_fn,
+            on_reasoning_delta_fn=on_reasoning_delta_fn,
             switch_to_html_mode_fn=self._switch_to_html_mode,
             conv_id=conv_id,
             extra_system_messages=extra_system_messages,
@@ -1371,10 +1430,13 @@ class AIChatPanel(Gtk.Box):
         if self._streaming_mode == self._STREAM_MODE_OFF:
             return
 
+        # 1. flush 所有累积 buffer
+        self._flush_all_buffers()
+
+        # 2. 构建最终 HTML
         req_id = getattr(self, "_ai_request_id", 0)
         msg_id = f"msg-{req_id}"
         turn_msgs = self._get_turn_messages()
-
         output = render_turn(TurnRenderInput(
             turn_messages=turn_msgs,
             all_messages=self._ai_messages,
@@ -1383,10 +1445,13 @@ class AIChatPanel(Gtk.Box):
             is_streaming=False,
         ))
 
-        js_code = f"onStreamEnd({json.dumps(output.answer_html)});"
+        # 3. 使用 build_update_js + updateMessageContainer 做最终渲染
+        #    复用旧版渲染路径，比 onStreamEnd 方式更可靠
+        js_final = build_update_js(msg_id, output)
         if hasattr(self, "_ai_webview") and self._ai_webview:
-            self._ai_webview.run_javascript(js_code, None, None)
+            self._ai_webview.run_javascript(js_final, None, None)
 
+        # 4. cache 更新
         last_user_idx = -1
         for idx in range(len(self._ai_messages) - 1, -1, -1):
             if self._ai_messages[idx].get("role") == "user":
@@ -1395,6 +1460,7 @@ class AIChatPanel(Gtk.Box):
         start_idx = last_user_idx + 1
         self._append_assistant_turn_to_cache(turn_msgs, output.combined_html, start_idx, has_ask=output.is_split)
 
+        # 5. JS 同步
         js_sync = (
             "window._isStreaming = false;"
             "_scrollToBottom();"
@@ -1404,8 +1470,11 @@ class AIChatPanel(Gtk.Box):
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(js_sync, None, None)
 
+        # 6. 清理
         self._token_buffer = ""
         self._flush_scheduled = False
+        self._reasoning_buffer = ""
+        self._reasoning_flush_scheduled = False
         self._streaming_container_created = False
 
     def _handle_stream_end(self, req_id: int):
