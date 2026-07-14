@@ -2570,9 +2570,19 @@ class AIChatPanel(Gtk.Box):
             self._ai_cmd_popover.dismiss()
 
     @staticmethod
-    def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
+    def _rebuild_markdown_from_messages(
+        messages: List[Dict],
+        streaming_reasoning: str = "",
+        streaming_content: str = "",
+        is_streaming: bool = False
+    ) -> str:
         """Convert OpenAI-format message list back to rendered markdown text."""
-        return _rebuild_markdown_from_messages(messages)
+        return _rebuild_markdown_from_messages(
+            messages,
+            streaming_reasoning=streaming_reasoning,
+            streaming_content=streaming_content,
+            is_streaming=is_streaming
+        )
 
     def _prune_messages(self):
         # Read latest values from shared settings store (supports live UI changes)
