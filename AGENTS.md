@@ -1,6 +1,6 @@
 # OpenCode Switcher — Agent Instructions
 
-Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipboard history management, and an AI assistant sidebar. Python 3 + GTK3 + AyatanaAppIndicator. **No CI/linter/formatter/typechecker. No automated tests.** 484 commits, all by single author.
+Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipboard history management, and an AI assistant sidebar. Python 3 + GTK3 + AyatanaAppIndicator. **No CI/linter/formatter/typechecker. No automated tests.** 507 commits, all by single author.
 
 ## Commands
 
@@ -25,7 +25,7 @@ Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipb
 `main.py` (~288 lines) is the sole entrypoint. Startup sequence:
 ```
 systemd/.desktop → run.sh → main.py (flock lock)
-  → _load_config() → migrate_history.run_migration()
+  → _load_config() → migrate_history.run_migration() (from `migrate_history.py`)
   → ClipboardStore → CategoryStore → SearchPanel+ClipboardPanel → HotkeyManager
   → App.run(): hotkey start → Gtk.main()
   → Ctrl+C: app.stop() → flock release
@@ -37,21 +37,29 @@ systemd/.desktop → run.sh → main.py (flock lock)
 | File | Lines | Role |
 |------|-------|------|
 | `main.py` | 288 | Entrypoint: flock lock, App(), Gtk.main() |
-| `ai_chat_panel.py` | 3166 | AI assistant — WebView, ReAct loops, background threads, subagent UI |
+| `ai_chat_panel.py` | 3329 | AI assistant — WebView, ReAct loops, background threads, subagent UI |
 | `clipboard_panel.py` | 2137 | Clipboard panel — assembles subcomponents + event routing |
 | `panel.py` | 1369 | Search panel — tab switcher, slash cmds, CSS-in-code, session list |
 | `clipboard_store.py` | 1272 | God module — clipboard, categories, conversations, memory (`MemStore`), prompts |
-| `ai_html_template.py` | 1197 | WebView HTML template + KaTeX + lightbox JS |
+| `ai_html_template.py` | 1682 | WebView HTML template + KaTeX + lightbox JS + DOM Windowing + 3-zone streaming |
 | `prompts_config_dialog.py` | 910 | Prompt/category management dialog |
-| `ai_text_utils.py` | 917 | Pure markdown/math/vision helpers (zero GTK dep) |
+| `ai_text_utils.py` | 1047 | Pure markdown/math/vision helpers (zero GTK dep), 3 sub-renderers for streaming |
 | `ai_popovers.py` | 522 | AI command autocomplete + conversation history popover |
 | `settings_dialog.py` | 427 | Settings dialog layout and fields |
 | `llm_client.py` | 368 | LLM HTTP client + `_ToolCallAccumulator` for SSE delta merge |
 | `gnome-extension/` | 350 | GNOME Shell extension (Wayland clipboard + focus IPC) |
+| `sort_cats_dialog.py` | 329 | Category drag-and-drop sorting dialog |
+| `sort_dialog.py` | 277 | Clipboard item drag-and-drop sorting dialog |
+| `recycle_bin_dialog.py` | 240 | Recycle bin browsing/restore/delete dialog |
+| `ai_tool_loop.py` | 231 | ReAct loop orchestrator — LLM call + tool iteration execution |
 | `session_store.py` | 202 | SQLite reader + live-session detection via `/proc` |
 | `memory_manager_dialog.py` | 193 | Semantic memory CRUD and search dialog |
-| `launcher.py` | 128 | Terminal detection + session spawner |
-| `hotkey.py` | 87 | Unix socket server for GNOME Extension hotkey toggling (Wayland) |
+| `prompt_dialog.py` | 77 | Prompt create/edit dialog |
+| `launcher.py` | 75 | Terminal detection + session spawner |
+| `hotkey.py` | 66 | Unix socket server for GNOME Extension hotkey toggling (Wayland) |
+| `migrate_history.py` | 59 | Clipboard history type migration runner (startup) |
+| `utils.py` | 49 | Utility helpers (`is_wayland`, `relative_time`, `request_window_focus`) |
+| `docs/` | 2 files | Usage guide (`docs/usage.md`) + agent tools roadmap (`docs/agent-tools-roadmap.md`) |
 | `tool_registry/` | 28 tools across 14 modules | AI tool executors (see below) |
 
 **Flat root** — no `__init__.py` at project level, not an importable Python package. All `.py` files imported directly by `main.py`.
@@ -117,6 +125,8 @@ Heuristic regex scoring in `clipboard_store.py` (`classify_text()`, `detect_lang
 - Conversation HTML caching: history switching renders from cached HTML instead of re-rendering.
 - Truncation threshold configurable via Settings UI (`soft_limit`/`trim_target` in `~/.config/opencode-switcher/ai_settings.json`).
 - Tool calls display `purpose` description + file path in summary line via `_TOOL_DISPLAY_FIELD` + `_render_tool_step()`.
+- **Streaming rendering architecture** (Phase 1→3a): Three-zone DOM structure (`.bubble-region` for reasoning/tool/answer). `_render_current_assistant_message()` calls JS `updateMessageContainer()` to incrementally update only the answer region during streaming. `_render_active_turn_to_html()` in `ai_text_utils.py` is a wrapper calling 3 sub-renderers (`_render_reasoning_html`, `_render_tool_steps_html`, `_render_answer_html`). `_render_markdown()` is only used for non-streaming final renders (conversation switching, full rebuilds). Poll interval: 200ms. No full DOM rebuild at stream end — final tokens delivered via 兜底渲染 that sets `window._isStreaming=false` then calls `updateMessageContainer`.
+- **DOM Windowing**: Keeps only the last 10 conversation rounds visible (older ones hidden with `display:none`). Batch-loads 3 more rounds per click. Controlled by JS functions `applyWindowing()`/`showOlderBatch()`/`showAllMessages()`/`updateShowOlderBar()` in `ai_html_template.py`. CSS classes: `.msg-windowed`, `.show-older-bar`. Injected into 5 key lifecycle functions.
 
 ### AI Input: Multi-line Preservation
 When re-rendering chat after AI responds, the original Shift+Enter line breaks in user messages are preserved via `_preserve_newlines()`. This function detects fenced code blocks to avoid adding `<br>` inside them.
@@ -210,6 +220,6 @@ Hard-earned from the optimization branch. Apply these when touching WebView life
 
 ## Reference
 
-- `.hzb-agents/experience/` — 126 per-feature postmortems (pitfalls, solutions, reasoning)
+- `.hzb-agents/experience/` — 128 per-feature postmortems (pitfalls, solutions, reasoning)
 - `.omo/plans/` — 48 structured work plans from past development
 - `gnome-extension/` — GNOME Shell extension for Wayland clipboard + focus IPC. See `gnome-extension/AGENTS.md`.
