@@ -160,6 +160,7 @@ def _dict_to_chat_message(m: dict) -> ChatMessage:
         tool_call_id=m.get("tool_call_id"),
         name=m.get("name"),
         tool_calls=m.get("tool_calls"),
+        reasoning_content=m.get("reasoning_content"),
     )
 
 

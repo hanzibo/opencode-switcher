@@ -688,6 +688,7 @@ class ChatMessage:
     tool_call_id: Optional[str] = None  # for "tool" role: links to the tool call that produced this result
     name: Optional[str] = None          # for "tool" role: name of the tool that was called
     tool_calls: Optional[List[Dict]] = None  # for "assistant" role: tool_calls array from LLM
+    reasoning_content: Optional[str] = None  # for "assistant" role: reasoning / thinking text
 
 
 @dataclass

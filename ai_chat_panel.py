@@ -71,7 +71,8 @@ def _to_chat_messages(msgs: List[Dict]) -> List[ChatMessage]:
     return [ChatMessage(role=m["role"], content=m["content"], 
                         tool_call_id=m.get("tool_call_id"),
                         name=m.get("name"),
-                        tool_calls=m.get("tool_calls")) for m in msgs]
+                        tool_calls=m.get("tool_calls"),
+                        reasoning_content=m.get("reasoning_content")) for m in msgs]
 
 
 class AIChatPanel(Gtk.Box):
@@ -2885,6 +2886,8 @@ class AIChatPanel(Gtk.Box):
                     msg["name"] = m.name
                 if m.tool_calls:
                     msg["tool_calls"] = m.tool_calls
+                if m.reasoning_content:
+                    msg["reasoning_content"] = m.reasoning_content
                 self._ai_messages.append(msg)
             self._ai_conversation_id = conv.id
             self._ai_conversation_created_at = conv.created_at
