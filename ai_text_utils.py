@@ -950,11 +950,6 @@ def _rebuild_markdown_from_messages(
             # so that it will be rendered as a user bubble in the next loop iteration.
             turn_msgs = []
             start_idx = i
-            is_last_assistant_turn = True
-            for j in range(i + 1, len(messages)):
-                if messages[j].get("role") == "user":
-                    is_last_assistant_turn = False
-                    break
 
             while i < len(messages):
                 next_msg = messages[i]
@@ -966,9 +961,13 @@ def _rebuild_markdown_from_messages(
                 turn_msgs.append(next_msg)
                 i += 1
             
-            s_reas = streaming_reasoning if (is_streaming and is_last_assistant_turn) else ""
-            s_cont = streaming_content if (is_streaming and is_last_assistant_turn) else ""
-            s_active = is_streaming if (is_streaming and is_last_assistant_turn) else False
+            is_active_streaming_turn = False
+            if is_streaming and i == len(messages):
+                is_active_streaming_turn = True
+
+            s_reas = streaming_reasoning if is_active_streaming_turn else ""
+            s_cont = streaming_content if is_active_streaming_turn else ""
+            s_active = is_streaming if is_active_streaming_turn else False
             
             turn_html = _render_active_turn_to_html(turn_msgs, s_reas, s_cont, s_active, all_messages=messages)
             if turn_html.strip():
@@ -984,6 +983,31 @@ def _rebuild_markdown_from_messages(
             continue
             
         i += 1
+
+    if is_streaming:
+        has_rendered_stream = False
+        if messages:
+            last_msg = messages[-1]
+            if last_msg.get("role") == "user" or (last_msg.get("role") == "tool" and last_msg.get("name") == "ask_user_question"):
+                has_rendered_stream = False
+            else:
+                has_rendered_stream = True
+        else:
+            has_rendered_stream = False
+
+        if not has_rendered_stream:
+            turn_html = _render_active_turn_to_html([], streaming_reasoning, streaming_content, is_streaming, all_messages=messages)
+            if turn_html.strip():
+                parts.append(
+                    f'<div class="msg-row assistant" markdown="1">\n'
+                    f'{ASSISTANT_AVATAR_HTML}\n'
+                    f'<div class="msg-bubble assistant" markdown="1">\n'
+                    f'{turn_html}\n'
+                    f'<copy-marker data-msg-index="{len(messages)}"></copy-marker>\n'
+                    f'</div>\n'
+                    f'</div>\n\n'
+                )
+
     return "".join(parts)
 
 
