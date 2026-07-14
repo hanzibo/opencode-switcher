@@ -29,6 +29,10 @@ const KATEX_DELIMITERS = [
                 let dragDistance = 0;
                 let rafId = null;
 
+                // ── Streaming v2: 增量纯文本追加 ──
+                let _streamingTextNode = null;
+                let _streamingContainerId = null;
+
                 document.addEventListener('DOMContentLoaded', function() {
                     if (typeof renderMathInElement === 'function') {
                         renderMathInElement(document.body, {
@@ -341,6 +345,9 @@ function _renderMath(element) {
                         
                         content.appendChild(row);
                     }
+                    // ── Streaming v2: 记录当前流式容器的 ID ──
+                    _streamingContainerId = msgId;
+                    _streamingTextNode = null;
                     applyWindowing();
                     _scrollToBottom();
                 }
@@ -556,6 +563,69 @@ function _renderMath(element) {
                 }
                 function _scrollToTopForce() {
                     window.scrollTo({top: 0, behavior: 'smooth'});
+                }
+
+                /**
+                 * appendStreamToken - 增量追加流式文本到当前助手消息的 answer 区域。
+                 * 在流式活跃期（text mode），只追加纯文本节点，不触发 HTML 解析或 KaTeX 渲染。
+                 * 在流结束时由 finalizeStreamingContent() 替换为最终渲染的 HTML。
+                 */
+                function appendStreamToken(text) {
+                    if (!text) return;
+
+                    const container = document.getElementById(_streamingContainerId);
+                    if (!container) return;
+
+                    const answerRegion = container.querySelector('.bubble-region.answer-region');
+                    if (!answerRegion) return;
+
+                    if (!_streamingTextNode) {
+                        _streamingTextNode = document.createTextNode(text);
+                        const typing = answerRegion.querySelector('.typing-indicator');
+                        if (typing) typing.remove();
+                        answerRegion.appendChild(_streamingTextNode);
+                    } else {
+                        _streamingTextNode.appendData(text);
+                    }
+
+                    _scrollToBottom();
+                }
+
+                /**
+                 * finalizeStreamingContent - 用最终 HTML 替换纯文本占位。
+                 * 调用时机：1. 工具调用阶段（TEXT→HTML 切换）2. 流结束阶段（最终渲染）
+                 */
+                function finalizeStreamingContent(html) {
+                    const container = document.getElementById(_streamingContainerId);
+                    if (!container) return;
+
+                    const answerRegion = container.querySelector('.bubble-region.answer-region');
+                    if (!answerRegion) return;
+
+                    if (html) {
+                        answerRegion.innerHTML = html;
+                    }
+
+                    _renderMath(answerRegion);
+                    addCopyButtons();
+                    applyWindowing();
+                    _scrollToBottom();
+
+                    _streamingTextNode = null;
+                }
+
+                /**
+                 * onStreamEnd - 流结束时的前端通知。由 Python 端在流结束时调用。
+                 */
+                function onStreamEnd(answerHtml) {
+                    window._isStreaming = false;
+
+                    if (answerHtml) {
+                        finalizeStreamingContent(answerHtml);
+                    }
+
+                    _scrollToBottom();
+                    _initRoundNav();
                 }
 
 _scrollToBottom();

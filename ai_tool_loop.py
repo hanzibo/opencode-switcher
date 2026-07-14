@@ -52,6 +52,8 @@ def run_llm_react_loop(
     reset_iteration_state_fn,
     set_reasoning_text_fn=None,
     set_assistant_text_fn=None,
+    on_token_delta_fn=None,
+    switch_to_html_mode_fn=None,
     conv_id: str = None,
     extra_system_messages: Optional[list] = None,
 ):
@@ -94,6 +96,8 @@ def run_llm_react_loop(
                 iteration=iteration,
                 set_reasoning_text_fn=set_reasoning_text_fn,
                 set_assistant_text_fn=set_assistant_text_fn,
+                on_token_delta_fn=on_token_delta_fn,
+                switch_to_html_mode_fn=switch_to_html_mode_fn,
                 extra_system_messages=extra_system_messages,
             )
             if not should_continue:
@@ -124,6 +128,8 @@ def _perform_llm_call(
     iteration: int,
     set_reasoning_text_fn=None,
     set_assistant_text_fn=None,
+    on_token_delta_fn=None,
+    switch_to_html_mode_fn=None,
     extra_system_messages: Optional[list] = None,
 ) -> bool:
     assistant_text = ""
@@ -147,6 +153,8 @@ def _perform_llm_call(
 
             if event.type == StreamEventType.TOOL_CALLS:
                 if event.tool_calls:
+                    if switch_to_html_mode_fn is not None:
+                        GLib.idle_add(switch_to_html_mode_fn, req_id)
                     tool_calls_found.extend(event.tool_calls)
                 continue
 
@@ -159,6 +167,8 @@ def _perform_llm_call(
 
             if event.type == StreamEventType.TEXT_DELTA:
                 if event.text_delta:
+                    if on_token_delta_fn is not None:
+                        on_token_delta_fn(event.text_delta)
                     assistant_text += event.text_delta
                     if set_assistant_text_fn is not None:
                         set_assistant_text_fn(assistant_text)
