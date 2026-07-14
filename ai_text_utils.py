@@ -687,6 +687,25 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
     # Generic: extract purpose from any tool's arguments for display
     purpose = args.get("purpose", "")
 
+    if name == "ask_user_question":
+        question = args.get("question", "") if isinstance(args, dict) else ""
+        if not question:
+            question = purpose or arguments_str
+        rendered_question = _markdown_to_html_safe(question)
+        if tool_result_msg:
+            footer_text = "✏️ 已回答"
+        else:
+            footer_text = "✏️ 在下方输入框中回答，或输入 /cancel 取消"
+            
+        return (
+            f'<div class="tool-ask-user">\n'
+            f'<div class="tool-ask-user-header">💬 Agent 需要确认</div>\n'
+            f'<div class="tool-ask-user-body">{rendered_question}</div>\n'
+            f'<div class="tool-ask-user-footer">{footer_text}</div>\n'
+            f'</div>\n'
+            f'<!-- tool-step-marker -->\n'
+        )
+
     # Extract per-tool display value (e.g., file path for read_file)
     display_value = args.get(display_field, "") if display_field else ""
 
@@ -789,11 +808,12 @@ def _render_reasoning_html(
     )
 
 
-def _render_tool_steps_html(turn_messages: List[Dict]) -> str:
+def _render_tool_steps_html(turn_messages: List[Dict], all_messages: Optional[List[Dict]] = None) -> str:
     """渲染工具调用步骤区域，输出带 .bubble-region 包裹。"""
+    search_messages = all_messages if all_messages is not None else turn_messages
     tool_results_by_id = {}
     legacy_tool_results = []
-    for msg in turn_messages:
+    for msg in search_messages:
         if msg.get("role") == "tool":
             cid = msg.get("tool_call_id")
             if cid:
@@ -861,17 +881,23 @@ def _render_active_turn_to_html(
     turn_messages: List[Dict],
     streaming_reasoning: str = "",
     streaming_content: str = "",
-    is_streaming: bool = False
+    is_streaming: bool = False,
+    all_messages: Optional[List[Dict]] = None
 ) -> str:
     """包装器：组装三个子区域 HTML（向后兼容，返回格式不变）。"""
     reasoning_html = _render_reasoning_html(turn_messages, streaming_reasoning, is_streaming)
-    tool_html = _render_tool_steps_html(turn_messages)
+    tool_html = _render_tool_steps_html(turn_messages, all_messages)
     answer_html = _render_answer_html(turn_messages, streaming_content)
     return f'{reasoning_html}{tool_html}{answer_html}'
 
 
-def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
-    """Convert OpenAI-format message list back to rendered markdown text."""
+def _rebuild_markdown_from_messages(
+    messages: List[Dict],
+    streaming_reasoning: str = "",
+    streaming_content: str = "",
+    is_streaming: bool = False
+) -> str:
+    """Convert OpenAI-format message list back to rendered markdown text with ask_user_question split turn support."""
     if not messages:
         return ""
     parts = []
@@ -901,15 +927,46 @@ def _rebuild_markdown_from_messages(messages: List[Dict]) -> str:
             continue
             
         elif role == "assistant" or role == "tool":
-            # Start of assistant response turn.
-            # Gather all assistant and tool messages in this turn.
+            # If this is specifically the tool response of ask_user_question, render it as a user bubble!
+            if role == "tool" and m.get("name") == "ask_user_question":
+                rendered_content = html.escape(content or "")
+                parts.append(
+                    f'<div class="msg-row user" markdown="1">\n'
+                    f'{USER_AVATAR_HTML}\n'
+                    f'<div class="msg-bubble user" markdown="1">\n'
+                    f'{rendered_content}\n'
+                    f'</div>\n'
+                    f'</div>\n\n'
+                )
+                i += 1
+                continue
+
+            # Otherwise, gather messages in this turn.
+            # We stop gathering if we encounter an ask_user_question tool response,
+            # so that it will be rendered as a user bubble in the next loop iteration.
             turn_msgs = []
             start_idx = i
-            while i < len(messages) and messages[i].get("role") in ("assistant", "tool"):
-                turn_msgs.append(messages[i])
+            is_last_assistant_turn = True
+            for j in range(i + 1, len(messages)):
+                if messages[j].get("role") == "user":
+                    is_last_assistant_turn = False
+                    break
+
+            while i < len(messages):
+                next_msg = messages[i]
+                next_role = next_msg.get("role", "")
+                if next_role not in ("assistant", "tool"):
+                    break
+                if next_role == "tool" and next_msg.get("name") == "ask_user_question":
+                    break
+                turn_msgs.append(next_msg)
                 i += 1
             
-            turn_html = _render_active_turn_to_html(turn_msgs, is_streaming=False)
+            s_reas = streaming_reasoning if (is_streaming and is_last_assistant_turn) else ""
+            s_cont = streaming_content if (is_streaming and is_last_assistant_turn) else ""
+            s_active = is_streaming if (is_streaming and is_last_assistant_turn) else False
+            
+            turn_html = _render_active_turn_to_html(turn_msgs, s_reas, s_cont, s_active, all_messages=messages)
             if turn_html.strip():
                 parts.append(
                     f'<div class="msg-row assistant" markdown="1">\n'

@@ -1012,6 +1012,19 @@ class AIChatPanel(Gtk.Box):
 
     def _append_assistant_turn_to_cache(self, turn_msgs: List[Dict], combined_html: str, start_idx: int):
         """增量更新当前会话的 Markdown 和 HTML 缓存。"""
+        contains_ask = any(
+            (msg.get("role") == "tool" and msg.get("name") == "ask_user_question") or
+            (msg.get("role") == "assistant" and any(tc.get("function", {}).get("name") == "ask_user_question" for tc in msg.get("tool_calls", []) or []))
+            for msg in turn_msgs
+        )
+
+        if contains_ask:
+            self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+            self._last_rendered_html = _markdown_to_html_safe(self._ai_markdown_text, fallback_content="")
+            if self._ai_conversation_id:
+                self._ai_html_cache[self._ai_conversation_id] = self._last_rendered_html
+            return
+
         assistant_md = (
             f'<div class="msg-row assistant" markdown="1">\n'
             f'{ASSISTANT_AVATAR_HTML}\n'
@@ -1065,10 +1078,22 @@ class AIChatPanel(Gtk.Box):
                     last_user_idx = idx
                     break
             turn_msgs = target_messages[last_user_idx + 1:] if last_user_idx != -1 else target_messages
-            reasoning_html = _render_reasoning_html(turn_msgs, is_streaming=False)
-            tool_html = _render_tool_steps_html(turn_msgs)
-            answer_html = _render_answer_html(turn_msgs)
-            combined_html = f"{reasoning_html}{tool_html}{answer_html}"
+            
+            contains_ask = any(
+                (msg.get("role") == "tool" and msg.get("name") == "ask_user_question") or
+                (msg.get("role") == "assistant" and any(tc.get("function", {}).get("name") == "ask_user_question" for tc in msg.get("tool_calls", []) or []))
+                for msg in turn_msgs
+            )
+
+            if contains_ask:
+                rebuilt_markdown = self._rebuild_markdown_from_messages(turn_msgs)
+                combined_html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
+            else:
+                reasoning_html = _render_reasoning_html(turn_msgs, is_streaming=False)
+                tool_html = _render_tool_steps_html(turn_msgs, target_messages)
+                answer_html = _render_answer_html(turn_msgs)
+                combined_html = f"{reasoning_html}{tool_html}{answer_html}"
+
             js_final = f"updateMessageContainer('{msg_id}', {json.dumps(combined_html)});"
             if hasattr(self, "_ai_webview") and self._ai_webview:
                 self._ai_webview.run_javascript(js_final, None, None)
@@ -1101,31 +1126,45 @@ class AIChatPanel(Gtk.Box):
                             last_user_idx = idx
                             break
                     turn_msgs = target_messages[last_user_idx + 1:] if last_user_idx != -1 else target_messages
-                    reasoning_html = _render_reasoning_html(turn_msgs, is_streaming=False)
-                    tool_html = _render_tool_steps_html(turn_msgs)
-                    answer_html = _render_answer_html(turn_msgs)
-                    combined_html = f"{reasoning_html}{tool_html}{answer_html}"
                     
-                    start_idx = last_user_idx + 1
-                    assistant_html = (
-                        f'<div class="msg-row assistant">\n'
-                        f'{ASSISTANT_AVATAR_HTML}\n'
-                        f'<div class="msg-bubble assistant">\n'
-                        f'{combined_html}\n'
-                        f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
-                        f'</div>\n'
-                        f'</div>\n\n'
+                    contains_ask = any(
+                        (msg.get("role") == "tool" and msg.get("name") == "ask_user_question") or
+                        (msg.get("role") == "assistant" and any(tc.get("function", {}).get("name") == "ask_user_question" for tc in msg.get("tool_calls", []) or []))
+                        for msg in turn_msgs
                     )
+
+                    if contains_ask:
+                        rebuilt_markdown = self._rebuild_markdown_from_messages(turn_msgs)
+                        combined_html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
+                        assistant_html = combined_html
+                        assistant_md = rebuilt_markdown
+                    else:
+                        reasoning_html = _render_reasoning_html(turn_msgs, is_streaming=False)
+                        tool_html = _render_tool_steps_html(turn_msgs, target_messages)
+                        answer_html = _render_answer_html(turn_msgs)
+                        combined_html = f"{reasoning_html}{tool_html}{answer_html}"
+                        
+                        start_idx = last_user_idx + 1
+                        assistant_html = (
+                            f'<div class="msg-row assistant">\n'
+                            f'{ASSISTANT_AVATAR_HTML}\n'
+                            f'<div class="msg-bubble assistant">\n'
+                            f'{combined_html}\n'
+                            f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
+                            f'</div>\n'
+                            f'</div>\n\n'
+                        )
+                        assistant_md = (
+                            f'<div class="msg-row assistant" markdown="1">\n'
+                            f'{ASSISTANT_AVATAR_HTML}\n'
+                            f'<div class="msg-bubble assistant" markdown="1">\n'
+                            f'{combined_html}\n'
+                            f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
+                            f'</div>\n'
+                            f'</div>\n\n'
+                        )
                     self._ai_html_cache[conv_id] = cached_html + assistant_html
-                    state["ai_markdown_text"] += (
-                        f'<div class="msg-row assistant" markdown="1">\n'
-                        f'{ASSISTANT_AVATAR_HTML}\n'
-                        f'<div class="msg-bubble assistant" markdown="1">\n'
-                        f'{combined_html}\n'
-                        f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
-                        f'</div>\n'
-                        f'</div>\n\n'
-                    )
+                    state["ai_markdown_text"] += assistant_md
                 else:
                     rebuilt_markdown = self._rebuild_markdown_from_messages(state["messages"])
                     html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
@@ -1200,7 +1239,6 @@ class AIChatPanel(Gtk.Box):
             '<div class="tool-ask-user-footer">✏️ 在下方输入框中回答，或输入 /cancel 取消</div>'
             '</div>'
         )
-        GLib.idle_add(self.append_html_to_webview, question_html)
         GLib.idle_add(self._enable_ask_user_entry)
 
         if not event.wait(timeout=300):
@@ -1315,12 +1353,27 @@ class AIChatPanel(Gtk.Box):
             if self._ai_conversation_id == conv_id:
                 self._ai_response_div_added = True
 
-        reasoning_html = _render_reasoning_html(turn_msgs, st.get("current_reasoning_text", ""), is_streaming=True)
-        tool_html = _render_tool_steps_html(turn_msgs)
-        current_text = st.get("current_assistant_text", "")
-        answer_html = _render_answer_html(turn_msgs, streaming_content=current_text)
+        contains_ask = any(
+            (msg.get("role") == "tool" and msg.get("name") == "ask_user_question") or
+            (msg.get("role") == "assistant" and any(tc.get("function", {}).get("name") == "ask_user_question" for tc in msg.get("tool_calls", []) or []))
+            for msg in turn_msgs
+        )
+
+        if contains_ask:
+            rebuilt_markdown = self._rebuild_markdown_from_messages(
+                turn_msgs,
+                streaming_reasoning=st.get("current_reasoning_text", ""),
+                streaming_content=st.get("current_assistant_text", ""),
+                is_streaming=True
+            )
+            combined_html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
+        else:
+            reasoning_html = _render_reasoning_html(turn_msgs, st.get("current_reasoning_text", ""), is_streaming=True)
+            tool_html = _render_tool_steps_html(turn_msgs, self._ai_messages)
+            current_text = st.get("current_assistant_text", "")
+            answer_html = _render_answer_html(turn_msgs, streaming_content=current_text)
+            combined_html = f"{reasoning_html}{tool_html}{answer_html}"
         
-        combined_html = f"{reasoning_html}{tool_html}{answer_html}"
         js_update = f"updateMessageContainer('{msg_id}', {json.dumps(combined_html)});"
         self._ai_webview.run_javascript(js_update, None, None)
 
@@ -1748,15 +1801,6 @@ class AIChatPanel(Gtk.Box):
                 self._ai_entry.placeholder_text = "输入后续问题..."
                 return
 
-            safe_answer = html.escape(text)
-            self.append_html_to_webview(
-                f'\n\n<div class="msg-row user" markdown="1">\n'
-                f'{USER_AVATAR_HTML}\n'
-                f'<div class="msg-bubble user" markdown="1">\n'
-                f'{safe_answer}\n'
-                f'</div>\n'
-                f'</div>\n\n'
-            )
             ask_state["answer"] = text
             ask_state["event"].set()
             return

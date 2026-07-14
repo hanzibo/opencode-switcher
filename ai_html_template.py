@@ -1436,31 +1436,39 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     _scrollToBottom();
                 }}
                 function updateMessageContainer(msgId, html) {{
-                    const div = document.getElementById(msgId + '-bubble') || document.getElementById(msgId);
-                    if (!div) return;
-                    var regions = div.querySelectorAll('.bubble-region');
-                    if (regions.length === 3) {{
-                        // 三区结构：分别更新各区域，保留未提供的区域不变
-                        var temp = document.createElement('div');
-                        temp.innerHTML = html;
-                        var reasoning = temp.querySelector('.reasoning-region');
-                        var tools = temp.querySelector('.tool-region');
-                        var answer = temp.querySelector('.answer-region');
-                        if (reasoning && regions[0]) regions[0].innerHTML = reasoning.innerHTML;
-                        if (tools && regions[1]) regions[1].innerHTML = tools.innerHTML;
-                        if (answer && regions[2]) {{
-                            // 移除 typing-indicator（如果存在）
-                            var typing = regions[2].querySelector('.typing-indicator');
-                            if (typing) typing.remove();
-                            regions[2].innerHTML = answer.innerHTML;
-                        }}
+                    const container = document.getElementById(msgId);
+                    if (!container) return;
+                    if (html.indexOf('msg-row') !== -1) {{
+                        container.className = ''; // Remove container styling for split layout
+                        container.innerHTML = html;
                         addCopyButtons();
-                        _renderMath(div);
+                        _renderMath(container);
                     }} else {{
-                        // 旧结构：向后兼容
-                        div.innerHTML = html;
-                        addCopyButtons();
-                        _renderMath(div);
+                        const div = document.getElementById(msgId + '-bubble') || container;
+                        var regions = div.querySelectorAll('.bubble-region');
+                        if (regions.length === 3) {{
+                            // 三区结构：分别更新各区域，保留未提供的区域不变
+                            var temp = document.createElement('div');
+                            temp.innerHTML = html;
+                            var reasoning = temp.querySelector('.reasoning-region');
+                            var tools = temp.querySelector('.tool-region');
+                            var answer = temp.querySelector('.answer-region');
+                            if (reasoning && regions[0]) regions[0].innerHTML = reasoning.innerHTML;
+                            if (tools && regions[1]) regions[1].innerHTML = tools.innerHTML;
+                            if (answer && regions[2]) {{
+                                // 移除 typing-indicator（如果存在）
+                                var typing = regions[2].querySelector('.typing-indicator');
+                                if (typing) typing.remove();
+                                regions[2].innerHTML = answer.innerHTML;
+                            }}
+                            addCopyButtons();
+                            _renderMath(div);
+                        }} else {{
+                            // 旧结构：向后兼容
+                            div.innerHTML = html;
+                            addCopyButtons();
+                            _renderMath(div);
+                        }}
                     }}
                     applyWindowing();
                     _scrollToBottom();
