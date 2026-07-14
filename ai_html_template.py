@@ -1435,10 +1435,10 @@ def get_html_template(theme_name: str, initial_html: str = "",
                     applyWindowing();
                     _scrollToBottom();
                 }}
-                function updateMessageContainer(msgId, html) {{
+                function updateMessageContainer(msgId, html, isSplit) {{
                     const container = document.getElementById(msgId);
                     if (!container) return;
-                    if (html.indexOf('msg-row') !== -1) {{
+                    if (isSplit) {{
                         container.className = ''; // Remove container styling for split layout
                         container.innerHTML = html;
                         addCopyButtons();

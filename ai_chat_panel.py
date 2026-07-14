@@ -1085,13 +1085,15 @@ class AIChatPanel(Gtk.Box):
             if self._contains_ask_user_question(turn_msgs):
                 rebuilt_markdown = self._rebuild_markdown_from_messages(turn_msgs)
                 combined_html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
+                is_split = True
             else:
                 reasoning_html = _render_reasoning_html(turn_msgs, is_streaming=False)
                 tool_html = _render_tool_steps_html(turn_msgs, target_messages)
                 answer_html = _render_answer_html(turn_msgs)
                 combined_html = f"{reasoning_html}{tool_html}{answer_html}"
+                is_split = False
 
-            js_final = f"updateMessageContainer('{msg_id}', {json.dumps(combined_html)});"
+            js_final = f"updateMessageContainer('{msg_id}', {json.dumps(combined_html)}, {json.dumps(is_split)});"
             if hasattr(self, "_ai_webview") and self._ai_webview:
                 self._ai_webview.run_javascript(js_final, None, None)
 
@@ -1352,14 +1354,16 @@ class AIChatPanel(Gtk.Box):
                 is_streaming=True
             )
             combined_html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
+            is_split = True
         else:
             reasoning_html = _render_reasoning_html(turn_msgs, st.get("current_reasoning_text", ""), is_streaming=True)
             tool_html = _render_tool_steps_html(turn_msgs, self._ai_messages)
             current_text = st.get("current_assistant_text", "")
             answer_html = _render_answer_html(turn_msgs, streaming_content=current_text)
             combined_html = f"{reasoning_html}{tool_html}{answer_html}"
+            is_split = False
         
-        js_update = f"updateMessageContainer('{msg_id}', {json.dumps(combined_html)});"
+        js_update = f"updateMessageContainer('{msg_id}', {json.dumps(combined_html)}, {json.dumps(is_split)});"
         self._ai_webview.run_javascript(js_update, None, None)
 
     def _get_pygments_css(self, theme: str) -> str:
@@ -1427,13 +1431,15 @@ class AIChatPanel(Gtk.Box):
         if self._contains_ask_user_question(turn_msgs):
             rebuilt_markdown = self._rebuild_markdown_from_messages(turn_msgs)
             combined_html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
+            is_split = True
         else:
             reasoning_html = _render_reasoning_html(turn_msgs, is_streaming=False)
             tool_html = _render_tool_steps_html(turn_msgs, target_messages)
             answer_html = _render_answer_html(turn_msgs)
             combined_html = f"{reasoning_html}{tool_html}{answer_html}"
+            is_split = False
 
-        js_final = f"updateMessageContainer('{msg_id}', {json.dumps(combined_html)});"
+        js_final = f"updateMessageContainer('{msg_id}', {json.dumps(combined_html)}, {json.dumps(is_split)});"
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(js_final, None, None)
 
