@@ -1019,9 +1019,12 @@ class AIChatPanel(Gtk.Box):
             for msg in turn_msgs
         )
 
-    def _append_assistant_turn_to_cache(self, turn_msgs: List[Dict], combined_html: str, start_idx: int):
+    def _append_assistant_turn_to_cache(self, turn_msgs: List[Dict], combined_html: str, start_idx: int, has_ask: Optional[bool] = None):
         """增量更新当前会话的 Markdown 和 HTML 缓存。"""
-        if self._contains_ask_user_question(turn_msgs):
+        if has_ask is None:
+            has_ask = self._contains_ask_user_question(turn_msgs)
+
+        if has_ask:
             self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
             self._last_rendered_html = _markdown_to_html_safe(self._ai_markdown_text, fallback_content="")
             if self._ai_conversation_id:
@@ -1099,7 +1102,7 @@ class AIChatPanel(Gtk.Box):
 
             # Incrementally append the final assistant turn to cache and skip full rebuild/recompile
             start_idx = last_user_idx + 1
-            self._append_assistant_turn_to_cache(turn_msgs, combined_html, start_idx)
+            self._append_assistant_turn_to_cache(turn_msgs, combined_html, start_idx, has_ask=is_split)
 
             js_sync = (
                 "window._isStreaming = false;"
@@ -1465,7 +1468,7 @@ class AIChatPanel(Gtk.Box):
 
             # Incrementally append the final assistant turn to cache and skip full rebuild/recompile
             start_idx = last_user_idx + 1
-            self._append_assistant_turn_to_cache(turn_msgs, combined_html, start_idx)
+            self._append_assistant_turn_to_cache(turn_msgs, combined_html, start_idx, has_ask=is_split)
 
             js_sync = (
                 "window._isStreaming = false;"
