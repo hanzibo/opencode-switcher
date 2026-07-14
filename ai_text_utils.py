@@ -263,6 +263,10 @@ def _escape_tool_results(text: str) -> Tuple[str, List[str]]:
     # Protects tool step HTML from being mangled by the markdown renderer.
     pattern2 = re.compile(r'(?:^|\n)(<details class="tool-step-details">.*?<!-- tool-step-marker -->)(?=\n|$)', re.DOTALL)
     escaped_text = pattern2.sub(_repl, escaped_text)
+
+    # Pattern 3: tool-ask-user confirmation box
+    pattern3 = re.compile(r'(?:^|\n)(<div class="tool-ask-user">.*?<!-- tool-step-marker -->)(?=\n|$)', re.DOTALL)
+    escaped_text = pattern3.sub(_repl, escaped_text)
     return escaped_text, placeholders
 
 
