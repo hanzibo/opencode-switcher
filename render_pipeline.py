@@ -223,7 +223,7 @@ def build_update_js(msg_id: str, output: TurnRenderOutput) -> str:
 # ═══════════════════════════════════════════════════════════════════
 
 # 全局开关：设置为 True 时，每次渲染都会打印摘要到 stderr
-_DEBUG_RENDER_PIPELINE = False
+_DEBUG_RENDER_PIPELINE = True
 
 
 def set_debug(enabled: bool):

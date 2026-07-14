@@ -189,14 +189,17 @@ def _render_tool_steps_html(turn_messages: List[Dict], all_messages: Optional[Li
     """渲染工具调用步骤区域，输出带 .bubble-region 包裹。"""
     search_messages = all_messages if all_messages is not None else turn_messages
     tool_results_by_id = {}
+    # legacy_tool_results 仅从 turn_messages 收集，避免跨轮次索引错位
     legacy_tool_results = []
+    for msg in turn_messages:
+        if msg.get("role") == "tool" and not msg.get("tool_call_id"):
+            legacy_tool_results.append(msg)
+    # ID 匹配集仍从全量消息构建（工具结果可能在后续消息中）
     for msg in search_messages:
         if msg.get("role") == "tool":
             cid = msg.get("tool_call_id")
             if cid:
                 tool_results_by_id[cid] = msg
-            else:
-                legacy_tool_results.append(msg)
 
     tool_calls_list = []
     for msg in turn_messages:
