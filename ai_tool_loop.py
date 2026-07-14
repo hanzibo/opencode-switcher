@@ -3,6 +3,7 @@ from typing import Optional
 from gi.repository import GLib
 import tool_registry
 from ai_text_utils import _strip_ai_markup
+from event_types import StreamEventType, ToolCallData, tool_call_to_dict
 from llm_client import _LLMHttpError
 
 # lazily initialized from AISettingsStore
@@ -133,7 +134,7 @@ def _perform_llm_call(
 
     try:
         cleaned_msgs = _clean_messages_for_llm(messages)
-        for delta in llm_client.stream_chat_completion(
+        for event in llm_client.stream_chat_completion(
             base_url, api_key, model_name, cleaned_msgs,
             timeout=30, cancel_event=cancel_event,
             temperature=temperature, max_tokens=max_tokens, top_p=top_p,
@@ -144,29 +145,34 @@ def _perform_llm_call(
             if get_current_request_id_fn() != req_id:
                 return False
 
-            tc_delta = delta.get("tool_calls")
-            if tc_delta:
-                tool_calls_found.extend(tc_delta)
+            if event.type == StreamEventType.TOOL_CALLS:
+                if event.tool_calls:
+                    tool_calls_found.extend(event.tool_calls)
                 continue
 
-            reasoning = delta.get("reasoning_content")
-            content = delta.get("content")
+            if event.type == StreamEventType.REASONING_DELTA:
+                if event.reasoning_delta:
+                    reasoning_text += event.reasoning_delta
+                    if set_reasoning_text_fn is not None:
+                        set_reasoning_text_fn(reasoning_text)
+                continue
 
-            if reasoning:
-                reasoning_text += reasoning
-                if set_reasoning_text_fn is not None:
-                    set_reasoning_text_fn(reasoning_text)
-            elif content:
-                assistant_text += content
-                if set_assistant_text_fn is not None:
-                    set_assistant_text_fn(assistant_text)
+            if event.type == StreamEventType.TEXT_DELTA:
+                if event.text_delta:
+                    assistant_text += event.text_delta
+                    if set_assistant_text_fn is not None:
+                        set_assistant_text_fn(assistant_text)
+                continue
+
+            if event.type == StreamEventType.STREAM_END:
+                break
 
 
         if tool_calls_found:
             tool_call_msg = {
                 "role": "assistant",
                 "content": assistant_text,
-                "tool_calls": tool_calls_found,
+                "tool_calls": [tool_call_to_dict(tc) for tc in tool_calls_found],
             }
             if reasoning_text:
                 tool_call_msg["reasoning_content"] = reasoning_text
@@ -175,18 +181,18 @@ def _perform_llm_call(
             for tc_idx, tc in enumerate(tool_calls_found):
                 if get_current_request_id_fn() != req_id:
                     return False
-                tc_name = tc.get("function", {}).get("name", "")
+                tc_name = tc.name
                 if tc_name == "ask_user_question":
-                    result = handle_ask_user_question_fn(tc)
+                    result = handle_ask_user_question_fn(tool_call_to_dict(tc))
                 else:
-                    result = tool_registry.execute_tool_call(tc, cancel_event=cancel_event)
+                    result = tool_registry.execute_tool_call(tool_call_to_dict(tc), cancel_event=cancel_event)
                 if get_current_request_id_fn() != req_id:
                     return False
                 if cancel_event and cancel_event.is_set():
                     # Append result for the cancelled tool itself
                     append_message_fn({
                         "role": "tool",
-                        "tool_call_id": tc.get("id", ""),
+                        "tool_call_id": tc.id,
                         "name": tc_name,
                         "content": result,
                     })
@@ -194,14 +200,14 @@ def _perform_llm_call(
                     for remaining_tc in tool_calls_found[tc_idx + 1:]:
                         append_message_fn({
                             "role": "tool",
-                            "tool_call_id": remaining_tc.get("id", ""),
-                            "name": remaining_tc.get("function", {}).get("name", ""),
+                            "tool_call_id": remaining_tc.id,
+                            "name": remaining_tc.name,
                             "content": tool_registry.TOOL_CANCELLED,
                         })
                     return False
                 append_message_fn({
                     "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
+                    "tool_call_id": tc.id,
                     "name": tc_name,
                     "content": result,
                 })

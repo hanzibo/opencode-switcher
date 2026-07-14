@@ -14,6 +14,11 @@ from ai_text_utils import (
     _cached_image_to_data_uri,
 )
 import tool_registry
+from event_types import (
+    StreamEvent, StreamEventType, ToolCallData,
+    text_delta, reasoning_delta, tool_calls_event, stream_end,
+    parse_tool_call_from_dict,
+)
 
 
 class _ToolCallAccumulator:
@@ -196,18 +201,15 @@ class _LLMHttpClient:
         tool_choice: Optional[str] = None,
         extra_system_messages: Optional[list] = None,
     ):
-        """SSE streaming. Yields delta dicts.
+        """SSE streaming. Yields StreamEvent instances.
 
-        Each yielded delta has:
-          - content: text delta (str, optional)
-          - reasoning_content: reasoning text delta (str, optional)
-          - tool_calls: list of complete ToolCall dicts, yielded once per tool_call
-                        (after all chunks for that tool_call are accumulated)
-          - finish_reason: "stop", "tool_calls", etc.
+        Each yielded event has a ``type`` field (StreamEventType enum) and
+        exactly one of ``text_delta``, ``reasoning_delta``, or ``tool_calls``
+        populated (determined by ``type``).
 
-        For tool_calls, this method accumulates SSE chunks internally and yields
-        complete tool_call dicts when each is done. Callers receive one yield
-        per tool_call with key "tool_calls" containing the fully assembled call.
+        For tool_calls, this method accumulates SSE chunks internally via
+        ``_ToolCallAccumulator`` and yields a single ``TOOL_CALLS`` event
+        with all accumulated calls when the stream signals tool_calls finish.
         """
         url, headers, body = self._build_request(
             base_url, api_key, model_name, messages, stream=True,
@@ -242,7 +244,8 @@ class _LLMHttpClient:
                         if data_str == "[DONE]":
                             calls = tc_accum.get_calls()
                             if calls:
-                                yield {"tool_calls": calls}
+                                typed_calls = [parse_tool_call_from_dict(c) for c in calls]
+                                yield tool_calls_event(typed_calls)
                             return
                         if not data_str:
                             continue
@@ -261,7 +264,8 @@ class _LLMHttpClient:
                                 calls = tc_accum.get_calls()
                                 if calls:
                                     tc_accum.clear()
-                                    yield {"tool_calls": calls}
+                                    typed_calls = [parse_tool_call_from_dict(c) for c in calls]
+                                    yield tool_calls_event(typed_calls)
                             continue
 
                         finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
@@ -269,18 +273,22 @@ class _LLMHttpClient:
                             calls = tc_accum.get_calls()
                             if calls:
                                 tc_accum.clear()
-                                yield {"tool_calls": calls}
+                                typed_calls = [parse_tool_call_from_dict(c) for c in calls]
+                                yield tool_calls_event(typed_calls)
                             continue
 
                         content = delta.get("content")
                         reasoning = delta.get("reasoning_content")
-                        if content is not None or reasoning is not None:
-                            yield delta
+                        if content is not None:
+                            yield text_delta(content)
+                        if reasoning is not None:
+                            yield reasoning_delta(reasoning)
 
                 # Fallback: if loop exits naturally without [DONE] message, yield remaining tool_calls
                 calls = tc_accum.get_calls()
                 if calls:
-                    yield {"tool_calls": calls}
+                    typed_calls = [parse_tool_call_from_dict(c) for c in calls]
+                    yield tool_calls_event(typed_calls)
 
             self._active_response = None
 
