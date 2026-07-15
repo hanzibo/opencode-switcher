@@ -450,18 +450,14 @@ class AIChatPanel(Gtk.Box):
         self._ai_model_popover.add(model_sw)
         self._ai_model_popover.connect("closed", self._on_model_popover_closed)
 
-        cmd_hints = "  |  ".join(f"/{cmd[1:]} {desc}"
-                                 for cmd, desc in self._AI_COMMANDS)
-        hint_text = f"Shift+Enter \u21b5 \u00b7 Enter \u53d1\u9001  |  {cmd_hints}"
-        self._ai_hint_label = Gtk.Label.new(hint_text)
+        # ── 输入框下方状态栏：token 计数 + 快捷键提示（替换原斜杠命令说明） ──
+        self._ai_hint_label = Gtk.Label.new("")
         self._ai_hint_label.set_xalign(1)
         self._ai_hint_label.get_style_context().add_class("dim-label")
         self._ai_hint_label.set_margin_end(4)
         self._ai_hint_label.set_opacity(0.6)
-        self._ai_hint_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self._ai_hint_label.set_max_width_chars(55)
-        self._ai_hint_label.set_tooltip_text(hint_text)
         self._ai_input_area.pack_start(self._ai_hint_label, False, False, 0)
+        self._update_token_display()
 
         self._ai_cmd_popover = AICommandPopover(self._ai_entry, self._AI_COMMANDS)
 
@@ -1564,6 +1560,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_history_popover.refresh_dropdown()
         except Exception as e:
             print(f"Dropdown refresh error: {e}", flush=True)
+        self._update_token_display()
 
     def _get_turn_messages(self) -> List[Dict]:
         """Get messages for the current active turn (from last user msg onward)."""
@@ -3002,6 +2999,50 @@ class AIChatPanel(Gtk.Box):
             show_details=show_details,
         )
 
+    # ── Token 计数（混合方案） ──
+
+    def _estimate_token_count(self, messages: Optional[List[Dict]] = None) -> int:
+        """估算消息列表的 token 数。
+
+        混合方案：
+          - tiktoken cl100k_base × 校准因子 0.89（兼容 DeepSeek/Qwen 等中文模型）
+          - 无 tiktoken 时退化为字符级启发式（总字符 / 2.5）
+        """
+        if messages is None:
+            messages = self._ai_messages
+        if not messages:
+            return 0
+        try:
+            # 方案 A：tiktoken 编码 + 校准
+            import tiktoken
+            enc = tiktoken.get_encoding("cl100k_base")
+            n = 3  # <|start|>assistant<|message|>
+            for msg in messages:
+                n += 4  # role / content / name 分隔符
+                for key, value in msg.items():
+                    n += len(enc.encode(str(value)))
+                    if key == "name":
+                        n -= 1
+            # 校准系数：cl100k_base 对中文优化模型约高估 12%
+            return int(n * 0.89)
+        except ImportError:
+            # 方案 B：字符级启发式回退
+            total_chars = 0
+            for msg in messages:
+                for key, value in msg.items():
+                    total_chars += len(str(value))
+                total_chars += 20
+            return int(total_chars / 2.5)
+
+    def _update_token_display(self):
+        """更新输入框下方的 token 计数显示。"""
+        n = self._estimate_token_count()
+        label = f"Shift+Enter \u21b5 \u00b7 Enter \u53d1\u9001"
+        if n > 0:
+            label = f"\U0001f4dd {n:,} tokens  |  " + label
+        if hasattr(self, "_ai_hint_label"):
+            self._ai_hint_label.set_text(label)
+
     def _prune_messages(self):
         # Read latest values from shared settings store (supports live UI changes)
         if self._ai_settings_store is not None:
@@ -3074,6 +3115,7 @@ class AIChatPanel(Gtk.Box):
         if save_summary:
             self._save_summary_to_conversation()
         self._clear_summary_status()
+        self._update_token_display()
 
     def _generate_summary_async(self, pruned_messages: list, trim_target: int):
         """在后台线程中调用 LLM（流式），将即将丢弃的消息压缩为摘要并实时显示。"""
@@ -3396,6 +3438,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_history_popover.refresh_dropdown()
         except Exception as e:
             print(f"Failed to refresh dropdown in switch: {e}", flush=True)
+        self._update_token_display()
 
     def _get_sorted_conversations(self) -> List[Dict[str, Any]]:
         """Return all conversations sorted by updated_at descending (newest first)."""
@@ -3657,6 +3700,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_entry.grab_focus()
         self.queue_resize()
         self._ai_history_popover.refresh_dropdown()
+        self._update_token_display()
 
     def start_new_conversation(self):
         """保存当前对话（若有内容），确保 AI 看盘面板可见，并启动一个全新的空白对话。"""
