@@ -284,8 +284,7 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
         parent = os.path.dirname(resolved)
         fname = os.path.basename(resolved)
         if include:
-            _existing = include
-            if fname not in _existing.split(","):
+            if fname not in include.split(","):
                 include = f"{include},{fname}"
         else:
             include = fname
