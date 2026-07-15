@@ -35,6 +35,7 @@ from ai_text_utils import (
     _strip_ai_markup,
     _preserve_newlines,
 )
+from ai_text_utils.render import _render_tool_card_standalone
 from render_pipeline import render_turn, TurnRenderInput, build_update_js
 
 # Regex to match placeholders: ${index[:prompt][=default]}
@@ -92,7 +93,6 @@ class AIChatPanel(Gtk.Box):
     _STREAM_MODE_OFF = "off"                # 特性开关：关闭 v2
     _STREAM_MODE_TEXT = "text"              # 特性开关：仅纯文本流式
     _STREAM_MODE_FULL = "full"             # 特性开关：含工具调用兼容
-    _ENABLE_STREAMING_V2 = "text_only"      # 当前模式：off / text_only / full
     _MPS = None
     _STREAM_PERF_LOG = False
 
@@ -625,9 +625,10 @@ class AIChatPanel(Gtk.Box):
         self._last_flushed_len = 0
         self._streaming_container_created = False
 
-        if self._ENABLE_STREAMING_V2 == self._STREAM_MODE_OFF:
+        v2_mode = getattr(self._ai_settings_store, 'streaming_v2_mode', 'full') if self._ai_settings_store else 'full'
+        if v2_mode == self._STREAM_MODE_OFF:
             self._streaming_mode = self._STREAM_MODE_OFF
-        elif self._ENABLE_STREAMING_V2 == "full":
+        elif v2_mode == "full":
             self._streaming_mode = self._STREAM_MODE_FULL
         else:
             self._streaming_mode = self._STREAM_MODE_TEXT
@@ -741,6 +742,37 @@ class AIChatPanel(Gtk.Box):
             self._ai_webview.run_javascript(js_code, None, None)
 
         self._streaming_mode = self._STREAM_MODE_FULL
+
+    def _find_tool_call_by_id(self, tool_call_id: str) -> Optional[dict]:
+        """在 _ai_messages 中查找指定 tool_call_id 的工具调用定义。"""
+        for msg in self._ai_messages:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    if tc.get("id") == tool_call_id:
+                        return tc
+        return None
+
+    def _on_tool_result(self, tool_call_id: str, result_text: str, status: str, req_id: int):
+        if (not self._ai_settings_store
+                or not self._ai_settings_store.enable_incremental_tools):
+            return
+        if self._streaming_mode == self._STREAM_MODE_OFF:
+            return
+
+        # 确保是当前可见对话
+        if req_id != getattr(self, "_ai_request_id", 0):
+            return
+
+        if not hasattr(self, "_ai_webview") or not self._ai_webview:
+            return
+
+        tool_call = self._find_tool_call_by_id(tool_call_id)
+        if not tool_call:
+            return
+
+        card_html = _render_tool_card_standalone(tool_call, result_text, status)
+        js_code = f"updateToolCard({json.dumps(tool_call_id)}, {json.dumps(card_html)});"
+        self._ai_webview.run_javascript(js_code, None, None)
 
     # ────────────────────────────────────────────────────────────────────
 
@@ -1023,7 +1055,19 @@ class AIChatPanel(Gtk.Box):
                     self._ai_messages.append(msg)
                     if msg.get("role") == "tool" and self._ai_streaming is False:
                         GLib.idle_add(self._re_render_after_tool_cancel)
-                GLib.idle_add(self._render_current_assistant_message, req_id)
+
+                # v3: tool result 由增量管道处理，跳过全量渲染
+                # is_active_stream 确保历史对话重建时不走增量（会漏渲染）
+                # dom_ready 确保初始骨架渲染（_render_current_assistant_message）已执行完毕
+                enable_inc = (self._ai_settings_store
+                              and self._ai_settings_store.enable_incremental_tools)
+                is_active_stream = (req_id == getattr(self, "_ai_request_id", 0))
+                dom_ready = (self._streaming_container_created
+                             and (st.get("response_div_added", False) if st else False))
+                if msg.get("role") == "tool" and self._streaming_mode != self._STREAM_MODE_OFF and enable_inc and is_active_stream and dom_ready:
+                    pass
+                else:
+                    GLib.idle_add(self._render_current_assistant_message, req_id)
 
         def set_reasoning_callback(text):
             st = self._ai_running_convs.get(conv_id)
@@ -1058,6 +1102,11 @@ class AIChatPanel(Gtk.Box):
             if self._ai_conversation_id == conv_id:
                 GLib.idle_add(self._on_reasoning_delta, text)
 
+        def on_tool_result_fn(tool_call_id: str, result_text: str, status: str):
+            """v3: 工具结果回调，后台线程收到工具执行结果时调用。"""
+            if self._ai_conversation_id == conv_id:
+                GLib.idle_add(self._on_tool_result, tool_call_id, result_text, status, req_id)
+
         run_llm_react_loop(
             llm_client=self._llm_client,
             base_url=base_url,
@@ -1081,6 +1130,7 @@ class AIChatPanel(Gtk.Box):
             set_assistant_text_fn=set_assistant_callback,
             on_token_delta_fn=on_token_delta_fn,
             on_reasoning_delta_fn=on_reasoning_delta_fn,
+            on_tool_result_fn=on_tool_result_fn,
             switch_to_html_mode_fn=self._switch_to_html_mode,
             conv_id=conv_id,
             extra_system_messages=extra_system_messages,

@@ -45,6 +45,7 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
     func = tool_call.get("function", {})
     name = func.get("name", "unknown")
     arguments_str = func.get("arguments", "{}")
+    tc_id = tool_call.get("id", "")
 
     display_field = _TOOL_DISPLAY_FIELD.get(name)
 
@@ -141,7 +142,7 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
     display_html = f'<span class="tool-step-purpose">{html.escape(display_value)}</span>\n' if display_value else ""
 
     return (
-        f'<details class="tool-step-details">\n'
+        f'<details class="tool-step-details" data-tool-call-id="{html.escape(tc_id)}">\n'
         f'<summary class="tool-step-summary">\n'
         f'<span class="tool-step-status">{status_icon}</span>\n'
         f'<strong>调用工具: {icon} {name}</strong>\n'
@@ -155,6 +156,24 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
         f'</details>\n'
         f'<!-- tool-step-marker -->\n'
     )
+
+
+def _render_tool_card_standalone(tool_call: dict, result_text: str, status: str = "running") -> str:
+    """渲染单张工具卡片的 HTML（不依赖 turn_messages 上下文）。
+
+    用于增量更新场景：在工具结果到达时，只渲染这一张卡片的新状态。
+
+    Args:
+        tool_call: 工具调用的完整 dict（含 id, function.name, function.arguments）
+        result_text: 工具执行结果文本
+        status: "running" | "success" | "error" | "cancelled"
+
+    Returns:
+        工具卡片的完整 HTML 字符串（含 details 结构）
+    """
+    # _render_tool_step 已根据 tool_result_msg 是否为 None 决定显示"🔄 正在运行中..."还是结果
+    tool_result_msg = {"content": result_text} if result_text else None
+    return _render_tool_step(tool_call, tool_result_msg)
 
 
 def _render_reasoning_html(
@@ -173,6 +192,7 @@ def _render_reasoning_html(
     reasoning_text = "\n".join(reasoning_parts).strip()
     if not reasoning_text:
         return ""
+    reasoning_text = _close_unclosed_code_blocks(reasoning_text)
     open_attr = ' open' if is_streaming and streaming_reasoning else ''
     escaped = html.escape(reasoning_text)
     return (
@@ -248,6 +268,7 @@ def _render_answer_html(
     final_content = "\n".join(content_parts).strip()
     if not final_content:
         return ""
+    final_content = _close_unclosed_code_blocks(final_content)
     rendered_md = _markdown_to_html_safe(final_content)
     return (
         f'<div class="bubble-region answer-region">\n'

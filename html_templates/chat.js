@@ -679,5 +679,26 @@ function _renderMath(element) {
                     _streamingReasoningNode = null;
                 }
 
+                /**
+                 * updateToolCard - 增量更新工具卡片的内容。
+                 * 在工具结果到达时调用，只更新指定卡片，不触发全量渲染。
+                 */
+                function updateToolCard(toolCallId, cardHtml) {
+                    if (!toolCallId || !cardHtml) return;
+
+                    const details = document.querySelector('details[data-tool-call-id="' + toolCallId + '"]');
+                    if (!details) return;
+
+                    details.outerHTML = cardHtml;
+
+                    const newDetails = document.querySelector('details[data-tool-call-id="' + toolCallId + '"]');
+                    if (newDetails) {
+                        _debouncedRenderMath(newDetails);
+                        addCopyButtons();
+                    }
+
+                    _scrollToBottom();
+                }
+
 _scrollToBottom();
                 _initRoundNav();
