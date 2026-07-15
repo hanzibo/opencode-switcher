@@ -304,6 +304,36 @@ class SettingsDialog:
         max_hbox.pack_start(self._summary_max_spin, False, False, 0)
         vbox.pack_start(max_hbox, False, False, 0)
 
+        # ── Summary prompt template ──
+        prompt_lbl = Gtk.Label.new("摘要提示词模板（支持占位符）:")
+        prompt_lbl.set_xalign(0)
+        prompt_lbl.set_margin_top(12)
+        vbox.pack_start(prompt_lbl, False, False, 0)
+
+        scrolled = Gtk.ScrolledWindow.new()
+        scrolled.set_min_content_height(120)
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self._summary_prompt_view = Gtk.TextView.new()
+        self._summary_prompt_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self._summary_prompt_view.set_monospace(True)
+        buffer = self._summary_prompt_view.get_buffer()
+        buffer.set_text(self._ai_settings_store.summary_prompt_template)
+        scrolled.add(self._summary_prompt_view)
+        vbox.pack_start(scrolled, False, False, 0)
+
+        prompt_hint = Gtk.Label.new()
+        prompt_hint.set_markup(
+            "<span size='small' foreground='#888888'>"
+            "可用占位符："
+            "{prev_summary} 已有摘要 / "
+            "{conversation_text} 对话内容 / "
+            "{max_chars} 最大字符数"
+            "</span>"
+        )
+        prompt_hint.set_xalign(0)
+        prompt_hint.set_margin_top(4)
+        vbox.pack_start(prompt_hint, False, False, 0)
+
         # ── Help text for summary ──
         summary_hint = Gtk.Label.new()
         summary_hint.set_markup(
@@ -528,6 +558,10 @@ class SettingsDialog:
         self._ai_settings_store.enable_summary = self._enable_summary_check.get_active()
         self._ai_settings_store.summary_threshold = int(self._summary_thresh_spin.get_value())
         self._ai_settings_store.summary_max_chars = int(self._summary_max_spin.get_value())
+        buf = self._summary_prompt_view.get_buffer()
+        self._ai_settings_store.summary_prompt_template = buf.get_text(
+            buf.get_start_iter(), buf.get_end_iter(), False
+        )
         self._ai_settings_store.max_clipboard = int(self._clip_max_spin.get_value())
         self._ai_settings_store.max_tool_iterations = int(self._tool_iter_spin.get_value())
         # 流式输出设置

@@ -3007,12 +3007,17 @@ class AIChatPanel(Gtk.Box):
 
             convo_text = "\n".join(convo_lines)
 
-            prev = f"已有摘要：\n{self._ai_summary}\n\n" if self._ai_summary else ""
-            prompt = (
-                f"{prev}请将以下对话压缩为简洁摘要，保留用户需求、决策、偏好、"
-                f"关键约定（如代码风格、命名规范）和已取得的进展：\n\n"
-                f"{convo_text}\n\n"
-                f"要求：第三人称、客观简洁、不超过{max_chars}字。"
+            prev_summary = f"已有摘要：\n{self._ai_summary}\n\n" if self._ai_summary else ""
+            template = (self._ai_settings_store.summary_prompt_template
+                        if self._ai_settings_store else
+                        "{prev_summary}请将以下对话压缩为简洁摘要，保留用户需求、决策、偏好、"
+                        "关键约定（如代码风格、命名规范）和已取得的进展：\n\n"
+                        "{conversation_text}\n\n"
+                        "要求：第三人称、客观简洁、不超过{max_chars}字。")
+            prompt = template.format(
+                prev_summary=prev_summary,
+                conversation_text=convo_text,
+                max_chars=max_chars,
             )
 
             base_url, api_key, model_name, _, temperature, max_tokens, top_p = \
