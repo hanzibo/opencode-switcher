@@ -32,15 +32,18 @@ def _grep_with_ripgrep(pattern: str, resolved: str, max_results: int,
                         include: str = "", ignore_case: bool = False,
                         literal: bool = False, context: int = 0,
                         max_chars: int = 8000,
-                        format: str = "flat") -> str:
+                        format: str = "flat",
+                        include_hidden: bool = False) -> str:
     import subprocess as _sp
     import json as _json
 
     max_lines_per_file = _MAX_LINES_PER_FILE
 
     cmd = ["rg", "--json", "--line-number", "--no-heading", "--color=never",
-           "--hidden", "--max-columns", "500", "--max-count",
+           "--max-columns", "500", "--max-count",
            str(max_lines_per_file)]
+    if include_hidden:
+        cmd.append("--hidden")
     if ignore_case:
         cmd.append("--ignore-case")
     if literal:
@@ -157,7 +160,8 @@ def _grep_with_python(pattern: str, resolved: str, max_results: int,
                        include: str = "", ignore_case: bool = False,
                        literal: bool = False, context: int = 0,
                        max_chars: int = 8000,
-                       format: str = "flat") -> str:
+                       format: str = "flat",
+                       include_hidden: bool = False) -> str:
     max_lines_per_file = _MAX_LINES_PER_FILE
 
     try:
@@ -179,7 +183,10 @@ def _grep_with_python(pattern: str, resolved: str, max_results: int,
 
     ignore_dirs = _get_ignore_dirs()
     for root, dirs, files in os.walk(resolved, topdown=True):
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ignore_dirs]
+        if not include_hidden:
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in ignore_dirs]
+        else:
+            dirs[:] = [d for d in dirs if d not in ignore_dirs]
 
         if total_matches >= max_results:
             break
@@ -188,7 +195,7 @@ def _grep_with_python(pattern: str, resolved: str, max_results: int,
             if total_matches >= max_results:
                 break
 
-            if fname.startswith("."):
+            if not include_hidden and fname.startswith("."):
                 continue
 
             if include:
@@ -270,7 +277,8 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
                         literal: bool = False, context: int = 0,
                         max_chars: int = 8000,
                         format: str = "flat",
-                        purpose: str = "") -> str:
+                        purpose: str = "",
+                        include_hidden: bool = False) -> str:
     """Search file contents by regex/keyword in a directory tree.
     Auto-detects ripgrep for fast search; falls back to pure-Python impl.
     """
@@ -309,13 +317,15 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
             pattern, resolved, max_results,
             include=include, ignore_case=ignore_case,
             literal=literal, context=context,
-            max_chars=max_chars, format=format)
+            max_chars=max_chars, format=format,
+            include_hidden=include_hidden)
         return result + auto_fix_note
     result = _grep_with_python(
         pattern, resolved, max_results,
         include=include, ignore_case=ignore_case,
         literal=literal, context=context,
-        max_chars=max_chars, format=format)
+        max_chars=max_chars, format=format,
+        include_hidden=include_hidden)
     return result + auto_fix_note
 
 
@@ -422,7 +432,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "grep_search",
-            "description": "在目录树中按正则表达式或关键词搜索文件内容。自动检测 ripgrep 加速，无 ripgrep 时使用 Python 实现。支持文件类型过滤。不适用于按文件名 glob 模式搜索文件（应使用 glob_find）。",
+            "description": "在目录树中按正则表达式或关键词搜索文件内容。自动检测 ripgrep 加速，无 ripgrep 时使用 Python 实现。支持文件类型过滤。默认不搜索隐藏文件/目录，设置 include_hidden=True 后可搜索。不适用于按文件名 glob 模式搜索文件（应使用 glob_find）。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -435,7 +445,8 @@ TOOL_SCHEMAS = [
                     "literal": {"type": "boolean", "description": "是否将 pattern 视为普通字符串而非正则", "default": False},
                     "context": {"type": "integer", "description": "匹配行前后显示的上下文行数（0-30）", "default": 0},
                     "max_chars": {"type": "integer", "description": "结果最大字符数（500-200000，默认 8000）", "default": 8000},
-                    "format": {"type": "string", "description": "输出格式：flat（默认，平铺列表）或 grouped（按文件分组）", "enum": ["flat", "grouped"], "default": "flat"}
+                    "format": {"type": "string", "description": "输出格式：flat（默认，平铺列表）或 grouped（按文件分组）", "enum": ["flat", "grouped"], "default": "flat"},
+                    "include_hidden": {"type": "boolean", "description": "是否搜索隐藏文件/目录（如 .env、.config），默认 False", "default": False}
                 },
                 "required": ["pattern", "path"]
             }
