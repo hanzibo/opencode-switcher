@@ -17,7 +17,7 @@ from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, Web
 from typing import Optional, Callable, List, Dict, Any, Tuple, Set
 from copy import deepcopy
 from uuid import uuid4
-from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, AISettingsStore, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P, CONFIG_DIR
+from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, AISettingsStore, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P, CONFIG_DIR, _DEFAULT_SUMMARY_TEMPLATE
 import time
 import requests
 import json
@@ -3027,16 +3027,16 @@ class AIChatPanel(Gtk.Box):
 
             prev_summary = f"已有摘要：\n{self._ai_summary}\n\n" if self._ai_summary else ""
             template = (self._ai_settings_store.summary_prompt_template
-                        if self._ai_settings_store else
-                        "{prev_summary}请将以下对话压缩为简洁摘要，保留用户需求、决策、偏好、"
-                        "关键约定（如代码风格、命名规范）和已取得的进展：\n\n"
-                        "{conversation_text}\n\n"
-                        "要求：第三人称、客观简洁、不超过{max_chars}字。")
-            prompt = template.format(
-                prev_summary=prev_summary,
-                conversation_text=convo_text,
-                max_chars=max_chars,
-            )
+                        if self._ai_settings_store else _DEFAULT_SUMMARY_TEMPLATE)
+            try:
+                prompt = template.format(
+                    prev_summary=prev_summary,
+                    conversation_text=convo_text,
+                    max_chars=max_chars,
+                )
+            except (KeyError, ValueError) as e:
+                print(f"[summary] 模板格式错误（可用占位符：{{prev_summary}}、{{conversation_text}}、{{max_chars}}）: {e}", flush=True)
+                return
 
             base_url, api_key, model_name, _, temperature, max_tokens, top_p = \
                 self._read_model_config(self._ai_last_prompt_obj,

@@ -1077,6 +1077,14 @@ class QQMailCredentialsStore:
 
 AI_SETTINGS_PATH = os.path.join(CONFIG_DIR, "ai_settings.json")
 
+# 摘要压缩默认模板——3 处共享同一常量，修改只需改此处
+_DEFAULT_SUMMARY_TEMPLATE = (
+    "{prev_summary}请将以下对话压缩为简洁摘要，保留用户需求、决策、偏好、"
+    "关键约定（如代码风格、命名规范）和已取得的进展：\n\n"
+    "{conversation_text}\n\n"
+    "要求：第三人称、客观简洁、不超过{max_chars}字。"
+)
+
 
 class AISettingsStore:
     """应用设置存储（AI 对话设置 + 常量配置），遵循 QQMailCredentialsStore 模式。"""
@@ -1087,12 +1095,7 @@ class AISettingsStore:
         self.enable_summary: bool = True      # 是否启用摘要压缩
         self.summary_threshold: int = 80      # 剩余多少条消息时触发摘要
         self.summary_max_chars: int = 500     # 摘要最大字符数
-        self.summary_prompt_template: str = (  # 摘要生成提示词模板
-            "{prev_summary}请将以下对话压缩为简洁摘要，保留用户需求、决策、偏好、"
-            "关键约定（如代码风格、命名规范）和已取得的进展：\n\n"
-            "{conversation_text}\n\n"
-            "要求：第三人称、客观简洁、不超过{max_chars}字。"
-        )
+        self.summary_prompt_template: str = _DEFAULT_SUMMARY_TEMPLATE
         self.max_clipboard: int = 150   # 剪切板最大历史项目数
         self.max_tool_iterations: int = 25  # AI 工具调用最大次数
         self.streaming_v2_mode: str = "full"  # 流式 v2 模式: off / text_only / full
@@ -1111,11 +1114,7 @@ class AISettingsStore:
             self.summary_threshold = data.get("summary_threshold", 80)
             self.summary_max_chars = data.get("summary_max_chars", 500)
             self.summary_prompt_template = data.get(
-                "summary_prompt_template",
-                "{prev_summary}请将以下对话压缩为简洁摘要，保留用户需求、决策、偏好、"
-                "关键约定（如代码风格、命名规范）和已取得的进展：\n\n"
-                "{conversation_text}\n\n"
-                "要求：第三人称、客观简洁、不超过{max_chars}字。"
+                "summary_prompt_template", _DEFAULT_SUMMARY_TEMPLATE
             )
             self.max_clipboard = data.get("max_clipboard", 150)
             self.max_tool_iterations = data.get("max_tool_iterations", 25)
