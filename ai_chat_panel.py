@@ -1361,43 +1361,11 @@ class AIChatPanel(Gtk.Box):
             show_tool_details=self._show_tool_details,
         ))
 
-        cached_html = self._ai_html_cache.get(conv_id)
-        if cached_html is not None:
-            combined_html = output.combined_html
-            if output.has_ask_question:
-                assistant_html = combined_html
-                assistant_md = output.raw_markdown
-            else:
-                last_user_idx = -1
-                for idx in range(len(target_messages) - 1, -1, -1):
-                    if target_messages[idx].get("role") == "user":
-                        last_user_idx = idx
-                        break
-                start_idx = last_user_idx + 1
-                assistant_html = (
-                    f'<div class="msg-row assistant">\n'
-                    f'{ASSISTANT_AVATAR_HTML}\n'
-                    f'<div class="msg-bubble assistant">\n'
-                    f'{combined_html}\n'
-                    f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
-                    f'</div>\n'
-                    f'</div>\n\n'
-                )
-                assistant_md = (
-                    f'<div class="msg-row assistant" markdown="1">\n'
-                    f'{ASSISTANT_AVATAR_HTML}\n'
-                    f'<div class="msg-bubble assistant" markdown="1">\n'
-                    f'{combined_html}\n'
-                    f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
-                    f'</div>\n'
-                    f'</div>\n\n'
-                )
-            self._ai_html_cache[conv_id] = cached_html + assistant_html
-            state["ai_markdown_text"] += assistant_md
-        else:
-            rebuilt_markdown = self._rebuild_markdown_from_messages(target_messages)
-            html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
-            self._ai_html_cache[conv_id] = html
+        # ★ 全量重建缓存，不使用增量追加，避免内容重复/混入
+        rebuilt_markdown = self._rebuild_markdown_from_messages(target_messages)
+        html = _markdown_to_html_safe(rebuilt_markdown, fallback_content="")
+        self._ai_html_cache[conv_id] = html
+        state["ai_markdown_text"] = rebuilt_markdown
 
         try:
             conv = self._conversation_store.load_conversation(conv_id)
