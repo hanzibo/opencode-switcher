@@ -198,6 +198,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
     <script>
         _scrollToBottom();
         _initRoundNav();
+        _throttledWindowing();
     </script>
 </body>
 </html>"""

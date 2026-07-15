@@ -35,6 +35,31 @@ const KATEX_DELIMITERS = [
                 let _streamingReasoningNode = null;
                 let _streamingReasoningDetails = null;
 
+                // ── Phase 2: Performance helpers ──
+                let _mathDebounceTimer = null;
+                let _windowingRafId = null;
+                const _STREAM_PERF_LOG = false;
+
+                function _debouncedRenderMath(element) {
+                    if (_mathDebounceTimer) clearTimeout(_mathDebounceTimer);
+                    if (!window._isStreaming) {
+                        _renderMath(element);
+                        return;
+                    }
+                    _mathDebounceTimer = setTimeout(() => {
+                        _renderMath(element);
+                        _mathDebounceTimer = null;
+                    }, 800);
+                }
+
+                function _throttledWindowing() {
+                    if (_windowingRafId) return;
+                    _windowingRafId = requestAnimationFrame(() => {
+                        _windowingRafId = null;
+                        applyWindowing();
+                    });
+                }
+
                 document.addEventListener('DOMContentLoaded', function() {
                     if (typeof renderMathInElement === 'function') {
                         renderMathInElement(document.body, {
@@ -315,7 +340,7 @@ function _renderMath(element) {
                     content.innerHTML = html;
                     addCopyButtons();
                     _renderMath(content);
-                    applyWindowing();
+                    _throttledWindowing();
                     _scrollToBottom();
                     _initRoundNav();
                 }
@@ -350,7 +375,7 @@ function _renderMath(element) {
                     // ── Streaming v2: 记录当前流式容器的 ID ──
                     _streamingContainerId = msgId;
                     _streamingTextNode = null;
-                    applyWindowing();
+                    _throttledWindowing();
                     _scrollToBottom();
                 }
                 function updateMessageContainer(msgId, html, isSplit) {
@@ -360,7 +385,7 @@ function _renderMath(element) {
                         container.className = ''; // Remove container styling for split layout
                         container.innerHTML = html;
                         addCopyButtons();
-                        _renderMath(container);
+                        _debouncedRenderMath(container);
                     } else {
                         const div = document.getElementById(msgId + '-bubble') || container;
                         var regions = div.querySelectorAll('.bubble-region');
@@ -380,25 +405,25 @@ function _renderMath(element) {
                                 regions[2].innerHTML = answer.innerHTML;
                             }
                             addCopyButtons();
-                            _renderMath(div);
+                            _debouncedRenderMath(div);
                         } else {
                             // 旧结构：向后兼容
                             div.innerHTML = html;
                             addCopyButtons();
-                            _renderMath(div);
+                            _debouncedRenderMath(div);
                         }
                     }
-                    applyWindowing();
+                    _throttledWindowing();
                     _scrollToBottom();
                 }
                 function appendHtml(msgId, html) {
                     const div = document.getElementById(msgId + '-bubble') || document.getElementById(msgId);
                     if (div && html) {
                         div.insertAdjacentHTML('beforeend', html);
-                        _renderMath(div);
+                        _debouncedRenderMath(div);
                         addCopyButtons();
                     }
-                    applyWindowing();
+                    _throttledWindowing();
                     _scrollToBottom();
                 }
                 function addCopyButtons() {
@@ -554,17 +579,17 @@ function _renderMath(element) {
                     var target = userRows[n - 1];
                     if (target) {
                         var top = target.getBoundingClientRect().top + window.scrollY - 10;
-                        window.scrollTo({top: top, behavior: 'smooth'});
+                        window.scrollTo({top: top});
                     }
                 }
                 function _prevRound() { _scrollToRound(_currentRound - 1); }
                 function _nextRound() { _scrollToRound(_currentRound + 1); }
                 function _scrollToBottomForce() {
                     void document.body.offsetHeight;
-                    window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});
+                    window.scrollTo({top: document.body.scrollHeight});
                 }
                 function _scrollToTopForce() {
-                    window.scrollTo({top: 0, behavior: 'smooth'});
+                    window.scrollTo({top: 0});
                 }
 
                 /**
@@ -643,9 +668,9 @@ function _renderMath(element) {
                         }
                     }
 
-                    _renderMath(answerRegion);
+                    _debouncedRenderMath(answerRegion);
                     addCopyButtons();
-                    applyWindowing();
+                    _throttledWindowing();
                     _scrollToBottom();
 
                     _streamingTextNode = null;
