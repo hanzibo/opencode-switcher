@@ -1182,7 +1182,7 @@ class AIChatPanel(Gtk.Box):
                 js_sync = (
                     "window._isStreaming = false;"
                     "_scrollToBottom();"
-                    "applyWindowing();"
+                    "_throttledWindowing();"
                     "_initRoundNav();"
                 )
                 if hasattr(self, "_ai_webview") and self._ai_webview:
@@ -1376,7 +1376,7 @@ class AIChatPanel(Gtk.Box):
         js_sync = (
             "window._isStreaming = false;"
             "_scrollToBottom();"
-            "applyWindowing();"
+            "_throttledWindowing();"
             "_initRoundNav();"
         )
         if hasattr(self, "_ai_webview") and self._ai_webview:
@@ -1600,7 +1600,7 @@ class AIChatPanel(Gtk.Box):
                 js_sync = (
                     "window._isStreaming = false;"
                     "_scrollToBottom();"
-                    "applyWindowing();"
+                    "_throttledWindowing();"
                     "_initRoundNav();"
                 )
                 if hasattr(self, "_ai_webview") and self._ai_webview:

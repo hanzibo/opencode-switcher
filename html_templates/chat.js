@@ -38,7 +38,6 @@ const KATEX_DELIMITERS = [
                 // ── Phase 2: Performance helpers ──
                 let _mathDebounceTimer = null;
                 let _windowingRafId = null;
-                const _STREAM_PERF_LOG = false;
 
                 function _debouncedRenderMath(element) {
                     if (_mathDebounceTimer) clearTimeout(_mathDebounceTimer);
@@ -668,7 +667,9 @@ function _renderMath(element) {
                         }
                     }
 
-                    _debouncedRenderMath(answerRegion);
+                    if (answerRegion) {
+                        _debouncedRenderMath(answerRegion);
+                    }
                     addCopyButtons();
                     _throttledWindowing();
                     _scrollToBottom();
