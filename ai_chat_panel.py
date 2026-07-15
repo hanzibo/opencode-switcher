@@ -95,6 +95,7 @@ class AIChatPanel(Gtk.Box):
     _STREAM_MODE_FULL = "full"             # 特性开关：含工具调用兼容
     _ENABLE_STREAMING_V2 = "text_only"      # 当前模式：off / text_only / full
     _MPS = None
+    _STREAM_PERF_LOG = False
 
     def __init__(self, conversation_store, llm_settings_store, ai_settings_store=None, theme="dark", ai_commands=None, pygments_css_cache=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -280,9 +281,9 @@ class AIChatPanel(Gtk.Box):
             _mps.set_conservative_threshold(_MPS_CONSERVATIVE)
             _mps.set_strict_threshold(_MPS_STRICT)
             AIChatPanel._MPS = _mps
-        _web_context = WebKit2.WebContext(memory_pressure_settings=AIChatPanel._MPS)
-        _web_context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
-        self._ai_webview = WebKit2.WebView.new_with_context(_web_context)
+            self._ai_web_context = WebKit2.WebContext(memory_pressure_settings=AIChatPanel._MPS)
+            self._ai_web_context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
+            self._ai_webview = WebKit2.WebView.new_with_context(self._ai_web_context)
         self._ai_webview.set_name("aiWebView")
 
         # Minimize WebKit resource footprint
@@ -414,6 +415,7 @@ class AIChatPanel(Gtk.Box):
             return False
         self._ai_webview.connect("decide-policy", on_decide_policy)
         self._ai_webview.connect("context-menu", lambda *_: True)
+        self._ai_webview.connect("web-process-terminated", self._on_webview_crashed)
         ai_scrolled.add(self._ai_webview)
 
         # Synchronize background colors to prevent Wayland resize flickering/leaks
@@ -723,6 +725,8 @@ class AIChatPanel(Gtk.Box):
 
     def _on_token_delta(self, text: str):
         """收到 LLM 文本增量，累积到 buffer 并安排 60ms flush（主线程调用）。"""
+        if self._STREAM_PERF_LOG:
+            print(f"[perf] token_delta: +{len(text)}ch, buffer={len(self._token_buffer)}ch", flush=True)
         if self._streaming_mode == self._STREAM_MODE_OFF:
             return
 
@@ -734,6 +738,8 @@ class AIChatPanel(Gtk.Box):
 
     def _flush_token_buffer(self) -> bool:
         """60ms 定时器回调：将累积的 token 文本批量 flush 到 WebView。"""
+        if self._STREAM_PERF_LOG:
+            print(f"[perf] flush_token: {len(self._token_buffer)}ch → JS", flush=True)
         self._flush_scheduled = False
 
         if self._streaming_mode == self._STREAM_MODE_OFF:
@@ -800,6 +806,8 @@ class AIChatPanel(Gtk.Box):
 
     def _switch_to_html_mode(self, req_id: int):
         """工具调用阶段：结束纯文本追加，切换到 HTML 全量渲染模式。"""
+        if self._STREAM_PERF_LOG:
+            print(f"[perf] switch_to_html_mode: req={req_id}", flush=True)
         if self._streaming_mode != self._STREAM_MODE_TEXT:
             return
 
@@ -911,8 +919,6 @@ class AIChatPanel(Gtk.Box):
             self._render_markdown(self._ai_markdown_text)
             return
 
-        GLib.timeout_add(_POLL_INTERVAL_MS, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
-
         self._ai_cancel_event.clear()
         self._update_send_button(True)
         self._ai_entry.placeholder_text = "等待回复中..."
@@ -924,7 +930,6 @@ class AIChatPanel(Gtk.Box):
                   self._ai_conversation_id, extra_sys),
             daemon=True
         ).start()
-
     def _retry_response(self, assistant_index: int):
         """删除指定的 assistant 回复并重新请求 LLM（丢弃该回复之后的所有消息）。"""
         if self._ai_streaming:
@@ -966,7 +971,6 @@ class AIChatPanel(Gtk.Box):
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
         self._ai_assistant_html_base = ""
-        GLib.timeout_add(_POLL_INTERVAL_MS, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
 
         self._ai_spinner.show()
         self._ai_spinner.start()
@@ -1052,7 +1056,6 @@ class AIChatPanel(Gtk.Box):
 
         self._ai_cancel_event.clear()
         self._update_send_button(True)
-        GLib.timeout_add(_POLL_INTERVAL_MS, self._poll_stream_queue, current_req_id, self._ai_conversation_id)
         msgs_for_llm, extra_sys = self._build_llm_messages()
         threading.Thread(
             target=self._run_llm_api_request,
@@ -1523,20 +1526,8 @@ class AIChatPanel(Gtk.Box):
             print(f"Dropdown refresh error: {e}", flush=True)
 
     def _poll_stream_queue(self, req_id: int, conv_id: str) -> bool:
-        if self._ai_conversation_id != conv_id:
-            return False
-        
-        st = self._ai_running_convs.get(conv_id)
-        if not st or st.get("req_id") != req_id:
-            return False
-
-        # v2: text mode 下渲染由 token batching 驱动，轮询仅用于检测流是否结束
-        if self._streaming_mode != self._STREAM_MODE_TEXT:
-            if getattr(self, "_ai_dirty_stream", False):
-                self._ai_dirty_stream = False
-                self._render_current_assistant_message(req_id)
-            
-        return st.get("streaming", False)
+        """不再使用。轮询已由 _on_llm_api_finished / _finalize_after_tool_loop 替代。"""
+        return False
 
     def _get_turn_messages(self) -> List[Dict]:
         """Get messages for the current active turn (from last user msg onward)."""
@@ -1788,6 +1779,37 @@ class AIChatPanel(Gtk.Box):
             unregister_subagent_status_listener(self._on_subagent_status_changed)
         except Exception:
             pass
+
+    def _on_webview_crashed(self, webview, event):
+        """WebView 进程崩溃时自动重建。"""
+        print(f"[opencode-switcher] WebView process crashed, rebuilding...", flush=True)
+
+        current_html = self._last_rendered_html or ""
+        old_webview = self._ai_webview
+        parent = old_webview.get_parent()
+
+        self._ai_web_context = WebKit2.WebContext(memory_pressure_settings=AIChatPanel._MPS)
+        self._ai_web_context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
+        self._ai_webview = WebKit2.WebView.new_with_context(self._ai_web_context)
+
+        for setting_name in ["enable_webgl", "enable_html5_database", "enable_html5_local_storage"]:
+            getattr(self._ai_webview.get_settings(), f"set_property")(setting_name, False)
+
+        self._ai_webview.load_html(
+            self.get_html_template(self._theme, current_html if current_html else ""),
+            "file:///"
+        )
+
+        if parent:
+            parent.remove(old_webview)
+            parent.add(self._ai_webview)
+            self._ai_webview.show()
+
+        if current_html:
+            self._ai_webview.run_javascript(f"updateContent({json.dumps(current_html)});", None, None)
+
+        self._ai_webview.connect("web-process-terminated", self._on_webview_crashed)
+        self._ai_webview.connect("context-menu", lambda *_: True)
 
     def _on_subagent_status_changed(self, sid: str, info: Optional[dict]):
         """Event-driven callback triggered when a subagent's status changes."""
@@ -3079,7 +3101,6 @@ class AIChatPanel(Gtk.Box):
             self._ai_spinner.show()
             self._ai_spinner.start()
             
-            GLib.timeout_add(_POLL_INTERVAL_MS, self._poll_stream_queue, st["req_id"], conv_id)
         else:
             self._ai_messages = []
             for m in conv.messages:
