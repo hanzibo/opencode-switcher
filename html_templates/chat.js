@@ -686,12 +686,12 @@ function _renderMath(element) {
                 function updateToolCard(toolCallId, cardHtml) {
                     if (!toolCallId || !cardHtml) return;
 
-                    const details = document.querySelector('details[data-tool-call-id="' + toolCallId + '"]');
+                    const details = document.querySelector('[data-tool-call-id="' + toolCallId + '"]');
                     if (!details) return;
 
                     details.outerHTML = cardHtml;
 
-                    const newDetails = document.querySelector('details[data-tool-call-id="' + toolCallId + '"]');
+                    const newDetails = document.querySelector('[data-tool-call-id="' + toolCallId + '"]');
                     if (newDetails) {
                         _debouncedRenderMath(newDetails);
                         addCopyButtons();

@@ -1091,6 +1091,7 @@ class AISettingsStore:
         self.max_tool_iterations: int = 25  # AI 工具调用最大次数
         self.streaming_v2_mode: str = "full"  # 流式 v2 模式: off / text_only / full
         self.enable_incremental_tools: bool = True  # v3 增量工具卡片
+        self.show_tool_details: bool = True  # 是否渲染工具调用结果详情
         self._load()
 
     def _load(self):
@@ -1107,6 +1108,7 @@ class AISettingsStore:
             self.max_tool_iterations = data.get("max_tool_iterations", 25)
             self.streaming_v2_mode = data.get("streaming_v2_mode", "full")
             self.enable_incremental_tools = data.get("enable_incremental_tools", True)
+            self.show_tool_details = data.get("show_tool_details", True)
         except Exception:
             pass  # 使用默认值
 
@@ -1127,6 +1129,7 @@ class AISettingsStore:
                     "max_tool_iterations": self.max_tool_iterations,
                     "streaming_v2_mode": self.streaming_v2_mode,
                     "enable_incremental_tools": self.enable_incremental_tools,
+                    "show_tool_details": self.show_tool_details,
                 }, f, indent=2)
         except Exception as e:
             print(f"Error saving AI settings: {e}", flush=True)

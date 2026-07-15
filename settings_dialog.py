@@ -404,6 +404,26 @@ class SettingsDialog:
         inc_hint.set_margin_top(8)
         vbox.pack_start(inc_hint, False, False, 0)
 
+        # ── Show tool details checkbox ──
+        details_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        details_hbox.set_margin_top(16)
+        self._show_tool_details_check = Gtk.CheckButton.new_with_label("显示工具调用结果详情")
+        self._show_tool_details_check.set_active(self._ai_settings_store.show_tool_details)
+        details_hbox.pack_start(self._show_tool_details_check, False, False, 0)
+        vbox.pack_start(details_hbox, False, False, 0)
+
+        details_hint = Gtk.Label.new()
+        details_hint.set_markup(
+            "<span size='small' foreground='#888888'>"
+            "勾选时：工具卡片可展开查看完整返回结果。\n"
+            "不勾选时：只显示工具名称和调用目的，不渲染结果内容，节省 CPU 和内存。\n"
+            "更改需重启应用。"
+            "</span>"
+        )
+        details_hint.set_xalign(0)
+        details_hint.set_margin_top(8)
+        vbox.pack_start(details_hint, False, False, 0)
+
         # ── Spacer ──
         spacer = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         spacer.set_vexpand(True)
@@ -515,6 +535,7 @@ class SettingsDialog:
         if streaming_id:
             self._ai_settings_store.streaming_v2_mode = streaming_id
         self._ai_settings_store.enable_incremental_tools = self._incremental_tools_check.get_active()
+        self._ai_settings_store.show_tool_details = self._show_tool_details_check.get_active()
         self._ai_settings_store.save()
 
         if self._dialog:

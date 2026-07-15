@@ -734,6 +734,7 @@ class AIChatPanel(Gtk.Box):
             streaming_reasoning=self._ai_current_reasoning_text,
             streaming_content=self._ai_current_assistant_text,
             is_streaming=False,
+            show_tool_details=getattr(self._ai_settings_store, 'show_tool_details', True),
         ))
 
         # 3. 发送 reasoning + answer 的最终 HTML
@@ -770,7 +771,9 @@ class AIChatPanel(Gtk.Box):
         if not tool_call:
             return
 
-        card_html = _render_tool_card_standalone(tool_call, result_text, status)
+        show_details = getattr(self._ai_settings_store, 'show_tool_details', True)
+        card_html = _render_tool_card_standalone(tool_call, result_text, status,
+                                                  show_details=show_details)
         js_code = f"updateToolCard({json.dumps(tool_call_id)}, {json.dumps(card_html)});"
         self._ai_webview.run_javascript(js_code, None, None)
 
@@ -1215,6 +1218,7 @@ class AIChatPanel(Gtk.Box):
                     turn_messages=turn_msgs,
                     all_messages=target_messages,
                     is_streaming=False,
+                    show_tool_details=getattr(self._ai_settings_store, 'show_tool_details', True),
                 ))
                 combined_html = output.combined_html
                 is_split = output.is_split
@@ -1227,10 +1231,15 @@ class AIChatPanel(Gtk.Box):
                 self._append_assistant_turn_to_cache(turn_msgs, combined_html, start_idx, has_ask=is_split)
 
                 js_sync = (
-                    "window._isStreaming = false;"
-                    "_scrollToBottom();"
-                    "_throttledWindowing();"
-                    "_initRoundNav();"
+                    f"window._isStreaming = false;"
+                    f"(function(){{"
+                    f"var m=document.getElementById('{msg_id}')?.querySelector('copy-marker');"
+                    f"if(m&&!m.dataset.msgIndex)m.dataset.msgIndex='{start_idx}';"
+                    f"addCopyButtons();"
+                    f"}})();"
+                    f"_scrollToBottom();"
+                    f"_throttledWindowing();"
+                    f"_initRoundNav();"
                 )
                 if hasattr(self, "_ai_webview") and self._ai_webview:
                     self._ai_webview.run_javascript(js_sync, None, None)
@@ -1303,6 +1312,7 @@ class AIChatPanel(Gtk.Box):
             turn_messages=target_messages,
             all_messages=target_messages,
             is_streaming=False,
+            show_tool_details=getattr(self._ai_settings_store, 'show_tool_details', True),
         ))
 
         cached_html = self._ai_html_cache.get(conv_id)
@@ -1402,6 +1412,7 @@ class AIChatPanel(Gtk.Box):
             streaming_reasoning="",
             streaming_content=self._ai_current_assistant_text,
             is_streaming=False,
+            show_tool_details=getattr(self._ai_settings_store, 'show_tool_details', True),
         ))
 
         # 3. 使用 build_update_js + updateMessageContainer 做最终渲染
@@ -1421,10 +1432,15 @@ class AIChatPanel(Gtk.Box):
 
         # 5. JS 同步
         js_sync = (
-            "window._isStreaming = false;"
-            "_scrollToBottom();"
-            "_throttledWindowing();"
-            "_initRoundNav();"
+            f"window._isStreaming = false;"
+            f"(function(){{"
+            f"var m=document.getElementById('{msg_id}')?.querySelector('copy-marker');"
+            f"if(m&&!m.dataset.msgIndex)m.dataset.msgIndex='{start_idx}';"
+            f"addCopyButtons();"
+            f"}})();"
+            f"_scrollToBottom();"
+            f"_throttledWindowing();"
+            f"_initRoundNav();"
         )
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(js_sync, None, None)
@@ -1538,6 +1554,7 @@ class AIChatPanel(Gtk.Box):
             streaming_reasoning=st.get("current_reasoning_text", ""),
             streaming_content=st.get("current_assistant_text", ""),
             is_streaming=True,
+            show_tool_details=getattr(self._ai_settings_store, 'show_tool_details', True),
         ))
         js_update = build_update_js(msg_id, output)
         self._ai_webview.run_javascript(js_update, None, None)
@@ -1609,6 +1626,7 @@ class AIChatPanel(Gtk.Box):
                 turn_messages=turn_msgs,
                 all_messages=target_messages,
                 is_streaming=False,
+                show_tool_details=getattr(self._ai_settings_store, 'show_tool_details', True),
             ))
             combined_html = output.combined_html
             is_split = output.is_split
@@ -1641,10 +1659,15 @@ class AIChatPanel(Gtk.Box):
                 self._append_assistant_turn_to_cache(turn_msgs, combined_html, start_idx, has_ask=is_split)
 
                 js_sync = (
-                    "window._isStreaming = false;"
-                    "_scrollToBottom();"
-                    "_throttledWindowing();"
-                    "_initRoundNav();"
+                    f"window._isStreaming = false;"
+                    f"(function(){{"
+                    f"var m=document.getElementById('{msg_id}')?.querySelector('copy-marker');"
+                    f"if(m&&!m.dataset.msgIndex)m.dataset.msgIndex='{start_idx}';"
+                    f"addCopyButtons();"
+                    f"}})();"
+                    f"_scrollToBottom();"
+                    f"_throttledWindowing();"
+                    f"_initRoundNav();"
                 )
                 if hasattr(self, "_ai_webview") and self._ai_webview:
                     self._ai_webview.run_javascript(js_sync, None, None)
@@ -2833,19 +2856,21 @@ class AIChatPanel(Gtk.Box):
         else:
             self._ai_cmd_popover.dismiss()
 
-    @staticmethod
     def _rebuild_markdown_from_messages(
+        self,
         messages: List[Dict],
         streaming_reasoning: str = "",
         streaming_content: str = "",
         is_streaming: bool = False
     ) -> str:
         """Convert OpenAI-format message list back to rendered markdown text."""
+        show_details = getattr(self._ai_settings_store, 'show_tool_details', True) if self._ai_settings_store else True
         return _rebuild_markdown_from_messages(
             messages,
             streaming_reasoning=streaming_reasoning,
             streaming_content=streaming_content,
-            is_streaming=is_streaming
+            is_streaming=is_streaming,
+            show_details=show_details,
         )
 
     def _prune_messages(self):
