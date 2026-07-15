@@ -709,10 +709,7 @@ class AIChatPanel(Gtk.Box):
     def _flush_all_buffers(self):
         """flush 所有累积 buffer（在流结束/模式切换时调用）。"""
         if self._reasoning_buffer:
-            js_code = f"appendStreamReasoning({json.dumps(self._reasoning_buffer)});"
-            if hasattr(self, "_ai_webview") and self._ai_webview:
-                self._ai_webview.run_javascript(js_code, None, None)
-            self._reasoning_buffer = ""
+            self._flush_reasoning_buffer()
         if self._token_buffer:
             self._flush_token_buffer()
 
