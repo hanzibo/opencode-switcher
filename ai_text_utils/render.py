@@ -41,10 +41,12 @@ _TOOL_DISPLAY_FIELD = {
 }
 
 
-def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
+def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict] = None,
+                       show_details: bool = True) -> str:
     func = tool_call.get("function", {})
     name = func.get("name", "unknown")
     arguments_str = func.get("arguments", "{}")
+    tc_id = tool_call.get("id", "")
 
     display_field = _TOOL_DISPLAY_FIELD.get(name)
 
@@ -56,10 +58,9 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
         if display_field:
             filter_keys.add(display_field)
         display_args = {k: v for k, v in args.items() if k not in filter_keys}
-        args_display = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in display_args.items())
     except Exception:
         args = {}
-        args_display = arguments_str
+        display_args = {}
 
     # Generic: extract purpose from any tool's arguments for display
     purpose = args.get("purpose", "")
@@ -120,13 +121,30 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
             status_icon = "⚠️"
         elif content.strip().startswith(tool_registry.ERROR_PREFIXES):
             status_icon = "❌"
+    else:
+        status_icon = '<span class="tool-step-status running">🔄</span>'
 
-        # Max limit for display to avoid slowing down Webview
+    purpose_html = f'<span class="tool-step-purpose">{html.escape(purpose)}</span>\n' if purpose else ""
+    display_html = f'<span class="tool-step-purpose">{html.escape(display_value)}</span>\n' if display_value else ""
+
+    # ── 简化模式：无详情，不可展开 ──
+    if not show_details:
+        return (
+            f'<div class="tool-step-simple" data-tool-call-id="{html.escape(tc_id)}">\n'
+            f'<span class="tool-step-status">{status_icon}</span>\n'
+            f'<strong>调用工具: {icon} {name}</strong>\n'
+            f'{purpose_html}'
+            f'{display_html}'
+            f'</div>\n'
+        )
+
+    # ── 完整模式：可展开的 details ──
+    if tool_result_msg:
+        content = tool_result_msg.get("content", "")
         MAX_DISPLAY = 4000
         display_content = content[:MAX_DISPLAY]
         if len(content) > MAX_DISPLAY:
             display_content += f"\n\n...（结果已截断，共 {len(content)} 字符）"
-
         safe_content = html.escape(display_content)
         result_html = (
             f'<div class="tool-step-result">\n'
@@ -134,14 +152,16 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
             f'</div>\n'
         )
     else:
-        status_icon = '<span class="tool-step-status running">🔄</span>'
         result_html = '<div class="tool-step-result"><em>正在运行中...</em></div>\n'
 
-    purpose_html = f'<span class="tool-step-purpose">{html.escape(purpose)}</span>\n' if purpose else ""
-    display_html = f'<span class="tool-step-purpose">{html.escape(display_value)}</span>\n' if display_value else ""
+    # args_display 只在完整模式中使用，在简化模式下跳过计算
+    if display_args:
+        args_display = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in display_args.items())
+    else:
+        args_display = arguments_str
 
     return (
-        f'<details class="tool-step-details">\n'
+        f'<details class="tool-step-details" data-tool-call-id="{html.escape(tc_id)}">\n'
         f'<summary class="tool-step-summary">\n'
         f'<span class="tool-step-status">{status_icon}</span>\n'
         f'<strong>调用工具: {icon} {name}</strong>\n'
@@ -155,6 +175,25 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict]) -> str:
         f'</details>\n'
         f'<!-- tool-step-marker -->\n'
     )
+
+
+def _render_tool_card_standalone(tool_call: dict, result_text: str, status: str = "running",
+                                  show_details: bool = True) -> str:
+    """渲染单张工具卡片的 HTML（不依赖 turn_messages 上下文）。
+
+    用于增量更新场景：在工具结果到达时，只渲染这一张卡片的新状态。
+
+    Args:
+        tool_call: 工具调用的完整 dict（含 id, function.name, function.arguments）
+        result_text: 工具执行结果文本
+        status: "running" | "success" | "error" | "cancelled"
+
+    Returns:
+        工具卡片的完整 HTML 字符串（含 details 结构）
+    """
+    # _render_tool_step 已根据 tool_result_msg 是否为 None 决定显示"🔄 正在运行中..."还是结果
+    tool_result_msg = {"content": result_text} if result_text else None
+    return _render_tool_step(tool_call, tool_result_msg, show_details=show_details)
 
 
 def _render_reasoning_html(
@@ -173,6 +212,7 @@ def _render_reasoning_html(
     reasoning_text = "\n".join(reasoning_parts).strip()
     if not reasoning_text:
         return ""
+    reasoning_text = _close_unclosed_code_blocks(reasoning_text)
     open_attr = ' open' if is_streaming and streaming_reasoning else ''
     escaped = html.escape(reasoning_text)
     return (
@@ -185,7 +225,8 @@ def _render_reasoning_html(
     )
 
 
-def _render_tool_steps_html(turn_messages: List[Dict], all_messages: Optional[List[Dict]] = None) -> str:
+def _render_tool_steps_html(turn_messages: List[Dict], all_messages: Optional[List[Dict]] = None,
+                             show_details: bool = True) -> str:
     """渲染工具调用步骤区域，输出带 .bubble-region 包裹。"""
     search_messages = all_messages if all_messages is not None else turn_messages
     tool_results_by_id = {}
@@ -218,7 +259,7 @@ def _render_tool_steps_html(turn_messages: List[Dict], all_messages: Optional[Li
             result_msg = tool_results_by_id[cid]
         elif i < len(legacy_tool_results):
             result_msg = legacy_tool_results[i]
-        steps_list.append(_render_tool_step(tc, result_msg))
+        steps_list.append(_render_tool_step(tc, result_msg, show_details=show_details))
 
     return (
         f'<div class="bubble-region tool-region">\n'
@@ -248,6 +289,7 @@ def _render_answer_html(
     final_content = "\n".join(content_parts).strip()
     if not final_content:
         return ""
+    final_content = _close_unclosed_code_blocks(final_content)
     rendered_md = _markdown_to_html_safe(final_content)
     return (
         f'<div class="bubble-region answer-region">\n'
@@ -262,11 +304,12 @@ def _render_active_turn_to_html(
     streaming_reasoning: str = "",
     streaming_content: str = "",
     is_streaming: bool = False,
-    all_messages: Optional[List[Dict]] = None
+    all_messages: Optional[List[Dict]] = None,
+    show_details: bool = True,
 ) -> str:
     """包装器：组装三个子区域 HTML（向后兼容，返回格式不变）。"""
     reasoning_html = _render_reasoning_html(turn_messages, streaming_reasoning, is_streaming)
-    tool_html = _render_tool_steps_html(turn_messages, all_messages)
+    tool_html = _render_tool_steps_html(turn_messages, all_messages, show_details=show_details)
     answer_html = _render_answer_html(turn_messages, streaming_content)
     return f'{reasoning_html}{tool_html}{answer_html}'
 
@@ -275,7 +318,8 @@ def _rebuild_markdown_from_messages(
     messages: List[Dict],
     streaming_reasoning: str = "",
     streaming_content: str = "",
-    is_streaming: bool = False
+    is_streaming: bool = False,
+    show_details: bool = True,
 ) -> str:
     """Convert OpenAI-format message list back to rendered markdown text with ask_user_question split turn support."""
     if not messages:
@@ -345,7 +389,7 @@ def _rebuild_markdown_from_messages(
             s_cont = streaming_content if is_active_streaming_turn else ""
             s_active = is_streaming if is_active_streaming_turn else False
 
-            turn_html = _render_active_turn_to_html(turn_msgs, s_reas, s_cont, s_active, all_messages=messages)
+            turn_html = _render_active_turn_to_html(turn_msgs, s_reas, s_cont, s_active, all_messages=messages, show_details=show_details)
             if turn_html.strip():
                 parts.append(
                     f'<div class="msg-row assistant" markdown="1">\n'
@@ -376,7 +420,7 @@ def _rebuild_markdown_from_messages(
             has_rendered_stream = False
 
         if not has_rendered_stream:
-            turn_html = _render_active_turn_to_html([], streaming_reasoning, streaming_content, is_streaming, all_messages=messages)
+            turn_html = _render_active_turn_to_html([], streaming_reasoning, streaming_content, is_streaming, all_messages=messages, show_details=show_details)
             if turn_html.strip():
                 parts.append(
                     f'<div class="msg-row assistant" markdown="1">\n'

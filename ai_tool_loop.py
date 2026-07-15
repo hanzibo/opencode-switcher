@@ -54,6 +54,7 @@ def run_llm_react_loop(
     set_assistant_text_fn=None,
     on_token_delta_fn=None,
     on_reasoning_delta_fn=None,
+    on_tool_result_fn=None,
     switch_to_html_mode_fn=None,
     conv_id: str = None,
     extra_system_messages: Optional[list] = None,
@@ -99,6 +100,7 @@ def run_llm_react_loop(
                 set_assistant_text_fn=set_assistant_text_fn,
                 on_token_delta_fn=on_token_delta_fn,
                 on_reasoning_delta_fn=on_reasoning_delta_fn,
+                on_tool_result_fn=on_tool_result_fn,
                 switch_to_html_mode_fn=switch_to_html_mode_fn,
                 extra_system_messages=extra_system_messages,
             )
@@ -132,6 +134,7 @@ def _perform_llm_call(
     set_assistant_text_fn=None,
     on_token_delta_fn=None,
     on_reasoning_delta_fn=None,
+    on_tool_result_fn=None,
     switch_to_html_mode_fn=None,
     extra_system_messages: Optional[list] = None,
 ) -> bool:
@@ -203,6 +206,16 @@ def _perform_llm_call(
                     result = tool_registry.execute_tool_call(tool_call_to_dict(tc), cancel_event=cancel_event)
                 if get_current_request_id_fn() != req_id:
                     return False
+
+                # v3: 增量工具结果通知
+                if on_tool_result_fn is not None:
+                    status = "success"
+                    if cancel_event and cancel_event.is_set():
+                        status = "cancelled"
+                    elif result.strip().startswith(tool_registry.ERROR_PREFIXES):
+                        status = "error"
+                    on_tool_result_fn(tc.id, result, status)
+
                 if cancel_event and cancel_event.is_set():
                     # Append result for the cancelled tool itself
                     append_message_fn({
@@ -213,6 +226,8 @@ def _perform_llm_call(
                     })
                     # Then append cancelled results for remaining unexecuted tools
                     for remaining_tc in tool_calls_found[tc_idx + 1:]:
+                        if on_tool_result_fn is not None:
+                            on_tool_result_fn(remaining_tc.id, tool_registry.TOOL_CANCELLED, "cancelled")
                         append_message_fn({
                             "role": "tool",
                             "tool_call_id": remaining_tc.id,

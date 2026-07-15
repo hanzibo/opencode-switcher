@@ -218,6 +218,53 @@ Hard-earned from the optimization branch. Apply these when touching WebView life
 - **After terminate**, call `set_background_color(rgba)` with opaque color — terminated WebView renders transparent, showing desktop behind.
 - For clean suspension: terminate → set background → clear_cache.
 
+## Postmortem: `data-tool-call-id` Broke Tool Card Markdown Protection
+
+### Symptom
+After Phase 3a (incremental tool card rendering) shipped, tool results containing triple backticks in their content (e.g., `read_file` returning a file line like ` ``` `) caused the AI panel to render incorrectly — code fences from different messages paired across the conversation, mangling the display.
+
+Affected scenarios: conversation history switching, `/retry`, and any conversation reload that hit a cached turn with tool results containing backtick-only lines.
+
+### Root Cause Chain
+
+```
+Phase 3a A1: _render_tool_step added data-tool-call-id to <details>
+  <details class="tool-step-details">
+    → <details class="tool-step-details" data-tool-call-id="call_xxx">
+
+_escape_tool_results (ai_text_utils/markdown.py:96) regex became stale:
+  pattern2 = r'(?:^|\n)(<details class="tool-step-details">.*?<!-- tool-step-marker -->)'
+  The regex expects '>' immediately after class="tool-step-details".
+  With the new attribute, the pattern FAILS TO MATCH.
+
+Consequence: tool card HTML (<details class="tool-step-details">...</details>)
+  is no longer replaced by a placeholder before the markdown pass.
+  Raw triple backticks inside the tool card's <pre><code> leak into
+  the markdown renderer, where they pair with other code fences
+  in the same markdown="1" div → rendering corruption.
+
+Why it passed initial testing: the test conversations happened not to
+  contain tool results with bare triple backtick lines. The bug only
+  manifests when a tool result ends with or contains ``` (common in
+  read_file results).
+```
+
+### Fix
+**Primary**: Updated `_escape_tool_results` pattern in `ai_text_utils/markdown.py:96` to allow arbitrary attributes on `<details>`:
+```python
+# Before (exact match — breaks with any attribute):
+pattern2 = r'(?:^|\n)(<details class="tool-step-details">.*?<!-- tool-step-marker -->)'
+# After (.*? before > allows data-tool-call-id and future attributes):
+pattern2 = r'(?:^|\n)(<details class="tool-step-details".*?>.*?<!-- tool-step-marker -->)'
+```
+
+**Secondary** (belt-and-suspenders): Added `_close_unclosed_code_blocks()` calls in `_render_answer_html` and `_render_reasoning_html` to fence off cross-message code fence pairing in case the placeholder protection ever fails again.
+
+### Lesson
+**Any regex that matches generated HTML must be updated when the HTML template changes.** The `_escape_tool_results` regex in `markdown.py` is a fragile coupling point — it knows the exact string emitted by `_render_tool_step` in `render.py`. When modifying HTML output in one module, always audit regex patterns in other modules that consume that HTML.
+
+Searchable marker: `# ponytail: _escape_tool_results pattern coupling`
+
 ## Reference
 
 - `.hzb-agents/experience/` — 128 per-feature postmortems (pitfalls, solutions, reasoning)

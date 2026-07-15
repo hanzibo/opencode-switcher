@@ -35,6 +35,7 @@ from ai_text_utils import (
     _strip_ai_markup,
     _preserve_newlines,
 )
+from ai_text_utils.render import _render_tool_card_standalone
 from render_pipeline import render_turn, TurnRenderInput, build_update_js
 
 # Regex to match placeholders: ${index[:prompt][=default]}
@@ -92,7 +93,6 @@ class AIChatPanel(Gtk.Box):
     _STREAM_MODE_OFF = "off"                # 特性开关：关闭 v2
     _STREAM_MODE_TEXT = "text"              # 特性开关：仅纯文本流式
     _STREAM_MODE_FULL = "full"             # 特性开关：含工具调用兼容
-    _ENABLE_STREAMING_V2 = "text_only"      # 当前模式：off / text_only / full
     _MPS = None
     _STREAM_PERF_LOG = False
 
@@ -625,9 +625,10 @@ class AIChatPanel(Gtk.Box):
         self._last_flushed_len = 0
         self._streaming_container_created = False
 
-        if self._ENABLE_STREAMING_V2 == self._STREAM_MODE_OFF:
+        v2_mode = getattr(self._ai_settings_store, 'streaming_v2_mode', 'full') if self._ai_settings_store else 'full'
+        if v2_mode == self._STREAM_MODE_OFF:
             self._streaming_mode = self._STREAM_MODE_OFF
-        elif self._ENABLE_STREAMING_V2 == "full":
+        elif v2_mode == "full":
             self._streaming_mode = self._STREAM_MODE_FULL
         else:
             self._streaming_mode = self._STREAM_MODE_TEXT
@@ -733,6 +734,7 @@ class AIChatPanel(Gtk.Box):
             streaming_reasoning=self._ai_current_reasoning_text,
             streaming_content=self._ai_current_assistant_text,
             is_streaming=False,
+            show_tool_details=self._show_tool_details,
         ))
 
         # 3. 发送 reasoning + answer 的最终 HTML
@@ -741,6 +743,56 @@ class AIChatPanel(Gtk.Box):
             self._ai_webview.run_javascript(js_code, None, None)
 
         self._streaming_mode = self._STREAM_MODE_FULL
+
+    def _find_tool_call_by_id(self, tool_call_id: str) -> Optional[dict]:
+        """在 _ai_messages 中查找指定 tool_call_id 的工具调用定义。"""
+        for msg in self._ai_messages:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    if tc.get("id") == tool_call_id:
+                        return tc
+        return None
+
+    @property
+    def _show_tool_details(self) -> bool:
+        return getattr(self._ai_settings_store, 'show_tool_details', True) if self._ai_settings_store else True
+
+    def _on_tool_result(self, tool_call_id: str, result_text: str, status: str, req_id: int):
+        if (not self._ai_settings_store
+                or not self._ai_settings_store.enable_incremental_tools):
+            return
+        if self._streaming_mode == self._STREAM_MODE_OFF:
+            return
+
+        # 确保是当前可见对话
+        if req_id != getattr(self, "_ai_request_id", 0):
+            return
+
+        if not hasattr(self, "_ai_webview") or not self._ai_webview:
+            return
+
+        tool_call = self._find_tool_call_by_id(tool_call_id)
+        if not tool_call:
+            return
+
+        card_html = _render_tool_card_standalone(tool_call, result_text, status,
+                                                  show_details=self._show_tool_details)
+        js_code = f"updateToolCard({json.dumps(tool_call_id)}, {json.dumps(card_html)});"
+        self._ai_webview.run_javascript(js_code, None, None)
+
+    @staticmethod
+    def _build_final_js_sync(msg_id: str, start_idx: int) -> str:
+        return (
+            f"window._isStreaming = false;"
+            f"(function(){{"
+            f"var m=document.getElementById('{msg_id}')?.querySelector('copy-marker');"
+            f"if(m&&!m.dataset.msgIndex)m.dataset.msgIndex='{start_idx}';"
+            f"addCopyButtons();"
+            f"}})();"
+            f"_scrollToBottom();"
+            f"_throttledWindowing();"
+            f"_initRoundNav();"
+        )
 
     # ────────────────────────────────────────────────────────────────────
 
@@ -1023,7 +1075,19 @@ class AIChatPanel(Gtk.Box):
                     self._ai_messages.append(msg)
                     if msg.get("role") == "tool" and self._ai_streaming is False:
                         GLib.idle_add(self._re_render_after_tool_cancel)
-                GLib.idle_add(self._render_current_assistant_message, req_id)
+
+                # v3: tool result 由增量管道处理，跳过全量渲染
+                # is_active_stream 确保历史对话重建时不走增量（会漏渲染）
+                # dom_ready 确保初始骨架渲染（_render_current_assistant_message）已执行完毕
+                enable_inc = (self._ai_settings_store
+                              and self._ai_settings_store.enable_incremental_tools)
+                is_active_stream = (req_id == getattr(self, "_ai_request_id", 0))
+                dom_ready = (self._streaming_container_created
+                             and (st.get("response_div_added", False) if st else False))
+                if msg.get("role") == "tool" and self._streaming_mode != self._STREAM_MODE_OFF and enable_inc and is_active_stream and dom_ready:
+                    pass
+                else:
+                    GLib.idle_add(self._render_current_assistant_message, req_id)
 
         def set_reasoning_callback(text):
             st = self._ai_running_convs.get(conv_id)
@@ -1058,6 +1122,11 @@ class AIChatPanel(Gtk.Box):
             if self._ai_conversation_id == conv_id:
                 GLib.idle_add(self._on_reasoning_delta, text)
 
+        def on_tool_result_fn(tool_call_id: str, result_text: str, status: str):
+            """v3: 工具结果回调，后台线程收到工具执行结果时调用。"""
+            if self._ai_conversation_id == conv_id:
+                GLib.idle_add(self._on_tool_result, tool_call_id, result_text, status, req_id)
+
         run_llm_react_loop(
             llm_client=self._llm_client,
             base_url=base_url,
@@ -1081,6 +1150,7 @@ class AIChatPanel(Gtk.Box):
             set_assistant_text_fn=set_assistant_callback,
             on_token_delta_fn=on_token_delta_fn,
             on_reasoning_delta_fn=on_reasoning_delta_fn,
+            on_tool_result_fn=on_tool_result_fn,
             switch_to_html_mode_fn=self._switch_to_html_mode,
             conv_id=conv_id,
             extra_system_messages=extra_system_messages,
@@ -1165,6 +1235,7 @@ class AIChatPanel(Gtk.Box):
                     turn_messages=turn_msgs,
                     all_messages=target_messages,
                     is_streaming=False,
+                    show_tool_details=self._show_tool_details,
                 ))
                 combined_html = output.combined_html
                 is_split = output.is_split
@@ -1176,12 +1247,7 @@ class AIChatPanel(Gtk.Box):
                 start_idx = last_user_idx + 1
                 self._append_assistant_turn_to_cache(turn_msgs, combined_html, start_idx, has_ask=is_split)
 
-                js_sync = (
-                    "window._isStreaming = false;"
-                    "_scrollToBottom();"
-                    "_throttledWindowing();"
-                    "_initRoundNav();"
-                )
+                js_sync = self._build_final_js_sync(msg_id, start_idx)
                 if hasattr(self, "_ai_webview") and self._ai_webview:
                     self._ai_webview.run_javascript(js_sync, None, None)
 
@@ -1253,6 +1319,7 @@ class AIChatPanel(Gtk.Box):
             turn_messages=target_messages,
             all_messages=target_messages,
             is_streaming=False,
+            show_tool_details=self._show_tool_details,
         ))
 
         cached_html = self._ai_html_cache.get(conv_id)
@@ -1352,6 +1419,7 @@ class AIChatPanel(Gtk.Box):
             streaming_reasoning="",
             streaming_content=self._ai_current_assistant_text,
             is_streaming=False,
+            show_tool_details=self._show_tool_details,
         ))
 
         # 3. 使用 build_update_js + updateMessageContainer 做最终渲染
@@ -1371,10 +1439,15 @@ class AIChatPanel(Gtk.Box):
 
         # 5. JS 同步
         js_sync = (
-            "window._isStreaming = false;"
-            "_scrollToBottom();"
-            "_throttledWindowing();"
-            "_initRoundNav();"
+            f"window._isStreaming = false;"
+            f"(function(){{"
+            f"var m=document.getElementById('{msg_id}')?.querySelector('copy-marker');"
+            f"if(m&&!m.dataset.msgIndex)m.dataset.msgIndex='{start_idx}';"
+            f"addCopyButtons();"
+            f"}})();"
+            f"_scrollToBottom();"
+            f"_throttledWindowing();"
+            f"_initRoundNav();"
         )
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(js_sync, None, None)
@@ -1488,6 +1561,7 @@ class AIChatPanel(Gtk.Box):
             streaming_reasoning=st.get("current_reasoning_text", ""),
             streaming_content=st.get("current_assistant_text", ""),
             is_streaming=True,
+            show_tool_details=self._show_tool_details,
         ))
         js_update = build_update_js(msg_id, output)
         self._ai_webview.run_javascript(js_update, None, None)
@@ -1559,6 +1633,7 @@ class AIChatPanel(Gtk.Box):
                 turn_messages=turn_msgs,
                 all_messages=target_messages,
                 is_streaming=False,
+                show_tool_details=self._show_tool_details,
             ))
             combined_html = output.combined_html
             is_split = output.is_split
@@ -1590,12 +1665,7 @@ class AIChatPanel(Gtk.Box):
                 start_idx = last_user_idx + 1
                 self._append_assistant_turn_to_cache(turn_msgs, combined_html, start_idx, has_ask=is_split)
 
-                js_sync = (
-                    "window._isStreaming = false;"
-                    "_scrollToBottom();"
-                    "_throttledWindowing();"
-                    "_initRoundNav();"
-                )
+                js_sync = self._build_final_js_sync(msg_id, start_idx)
                 if hasattr(self, "_ai_webview") and self._ai_webview:
                     self._ai_webview.run_javascript(js_sync, None, None)
 
@@ -2783,19 +2853,21 @@ class AIChatPanel(Gtk.Box):
         else:
             self._ai_cmd_popover.dismiss()
 
-    @staticmethod
     def _rebuild_markdown_from_messages(
+        self,
         messages: List[Dict],
         streaming_reasoning: str = "",
         streaming_content: str = "",
         is_streaming: bool = False
     ) -> str:
         """Convert OpenAI-format message list back to rendered markdown text."""
+        show_details = self._show_tool_details
         return _rebuild_markdown_from_messages(
             messages,
             streaming_reasoning=streaming_reasoning,
             streaming_content=streaming_content,
-            is_streaming=is_streaming
+            is_streaming=is_streaming,
+            show_details=show_details,
         )
 
     def _prune_messages(self):

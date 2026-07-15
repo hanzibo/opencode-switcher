@@ -61,6 +61,7 @@ class TurnRenderInput:
     streaming_reasoning: str = ""
     streaming_content: str = ""
     is_streaming: bool = False
+    show_tool_details: bool = True  # 是否渲染工具调用结果详情
 
     def __post_init__(self):
         """自动兜底：如果没有传入 all_messages，则复用 turn_messages。"""
@@ -152,7 +153,8 @@ def _render_standard_mode(input_data: TurnRenderInput) -> TurnRenderOutput:
         streaming_reasoning=input_data.streaming_reasoning,
         is_streaming=input_data.is_streaming,
     )
-    tool_html = _render_tool_steps_html(turn_msgs, all_msgs)
+    tool_html = _render_tool_steps_html(turn_msgs, all_msgs,
+                                        show_details=input_data.show_tool_details)
     answer_html = _render_answer_html(
         turn_msgs,
         streaming_content=input_data.streaming_content,
@@ -183,6 +185,7 @@ def _render_ask_question_mode(input_data: TurnRenderInput) -> TurnRenderOutput:
         streaming_reasoning=input_data.streaming_reasoning,
         streaming_content=input_data.streaming_content,
         is_streaming=input_data.is_streaming,
+        show_details=input_data.show_tool_details,
     )
     html = _markdown_to_html_safe(rebuilt, fallback_content="")
 

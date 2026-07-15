@@ -46,6 +46,7 @@ class SettingsDialog:
         self._tabs = [
             ("QQ邮箱", self._build_qq_mail_tab),
             ("AI 对话", self._build_ai_settings_tab),
+            ("流式输出", self._build_streaming_tab),
             ("常量配置", self._build_constants_tab),
         ]
 
@@ -322,6 +323,114 @@ class SettingsDialog:
 
         return outer_sw
 
+    # ── Tab: 流式输出 ────────────────────────────────────────────────────
+
+    def _build_streaming_tab(self):
+        """Build the streaming output v2/v3 settings tab page.
+
+        Dropdown for streaming mode (off/text_only/full),
+        checkbox for incremental tool cards (v3).
+        """
+        outer_sw = Gtk.ScrolledWindow.new()
+        outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        outer_sw.set_vexpand(True)
+
+        vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+        vbox.set_margin_start(16)
+        vbox.set_margin_end(16)
+        vbox.set_margin_top(12)
+        vbox.set_margin_bottom(12)
+        outer_sw.add(vbox)
+
+        # ── Streaming mode dropdown ──
+        mode_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        mode_lbl = Gtk.Label.new("流式 v2 模式:")
+        mode_lbl.set_size_request(180, -1)
+        mode_lbl.set_xalign(0)
+
+        self._streaming_mode_combo = Gtk.ComboBoxText.new()
+        self._streaming_mode_combo.append("off", "关闭 (off)")
+        self._streaming_mode_combo.append("text_only", "纯文本 (text_only)")
+        self._streaming_mode_combo.append("full", "完整 (full)")
+        # Set active from store
+        current_mode = self._ai_settings_store.streaming_v2_mode
+        if current_mode == "off":
+            self._streaming_mode_combo.set_active(0)
+        elif current_mode == "text_only":
+            self._streaming_mode_combo.set_active(1)
+        else:
+            self._streaming_mode_combo.set_active(2)  # full (default)
+
+        mode_hbox.pack_start(mode_lbl, False, False, 0)
+        mode_hbox.pack_start(self._streaming_mode_combo, False, False, 0)
+        vbox.pack_start(mode_hbox, False, False, 0)
+
+        mode_hint = Gtk.Label.new()
+        mode_hint.set_markup(
+            "<span size='small' foreground='#888888'>"
+            "• off    — 关闭流式 v2，使用旧版全量渲染\n"
+            "• text_only — v2 仅纯文本流式，工具调用阶段回退全量渲染\n"
+            "• full   — v2 完整模式：流式文本 + 工具调用增量更新\n"
+            "更改需重启应用后生效。"
+            "</span>"
+        )
+        mode_hint.set_xalign(0)
+        mode_hint.set_margin_top(8)
+        vbox.pack_start(mode_hint, False, False, 0)
+
+        # ── Separator ──
+        sep = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        sep.set_margin_top(16)
+        sep.set_margin_bottom(12)
+        vbox.pack_start(sep, False, False, 0)
+
+        # ── Incremental tools checkbox ──
+        inc_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        inc_hbox.set_margin_top(8)
+        self._incremental_tools_check = Gtk.CheckButton.new_with_label("启用增量工具卡片更新 (v3)")
+        self._incremental_tools_check.set_active(self._ai_settings_store.enable_incremental_tools)
+        inc_hbox.pack_start(self._incremental_tools_check, False, False, 0)
+        vbox.pack_start(inc_hbox, False, False, 0)
+
+        inc_hint = Gtk.Label.new()
+        inc_hint.set_markup(
+            "<span size='small' foreground='#888888'>"
+            "每个工具结果返回时只更新对应卡片，不触发全量渲染。\n"
+            "关闭后恢复旧版行为（每次工具结果都重新渲染整个对话轮次）。\n"
+            "需在「流式 v2 模式」为 full 时生效。更改需重启应用。"
+            "</span>"
+        )
+        inc_hint.set_xalign(0)
+        inc_hint.set_margin_top(8)
+        vbox.pack_start(inc_hint, False, False, 0)
+
+        # ── Show tool details checkbox ──
+        details_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        details_hbox.set_margin_top(16)
+        self._show_tool_details_check = Gtk.CheckButton.new_with_label("显示工具调用结果详情")
+        self._show_tool_details_check.set_active(self._ai_settings_store.show_tool_details)
+        details_hbox.pack_start(self._show_tool_details_check, False, False, 0)
+        vbox.pack_start(details_hbox, False, False, 0)
+
+        details_hint = Gtk.Label.new()
+        details_hint.set_markup(
+            "<span size='small' foreground='#888888'>"
+            "勾选时：工具卡片可展开查看完整返回结果。\n"
+            "不勾选时：只显示工具名称和调用目的，不渲染结果内容，节省 CPU 和内存。\n"
+            "更改需重启应用。"
+            "</span>"
+        )
+        details_hint.set_xalign(0)
+        details_hint.set_margin_top(8)
+        vbox.pack_start(details_hint, False, False, 0)
+
+        # ── Spacer ──
+        spacer = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        spacer.set_vexpand(True)
+        vbox.pack_start(spacer, True, True, 0)
+
+        return outer_sw
+
     # ── Tab: 常量配置 ──────────────────────────────────────────────────
 
     def _build_constants_tab(self):
@@ -421,6 +530,12 @@ class SettingsDialog:
         self._ai_settings_store.summary_max_chars = int(self._summary_max_spin.get_value())
         self._ai_settings_store.max_clipboard = int(self._clip_max_spin.get_value())
         self._ai_settings_store.max_tool_iterations = int(self._tool_iter_spin.get_value())
+        # 流式输出设置
+        streaming_id = self._streaming_mode_combo.get_active_id()
+        if streaming_id:
+            self._ai_settings_store.streaming_v2_mode = streaming_id
+        self._ai_settings_store.enable_incremental_tools = self._incremental_tools_check.get_active()
+        self._ai_settings_store.show_tool_details = self._show_tool_details_check.get_active()
         self._ai_settings_store.save()
 
         if self._dialog:
