@@ -763,6 +763,23 @@ class AIChatPanel(Gtk.Box):
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(js_code, None, None)
 
+        # 5. 更新 HTML 缓存，确保工具调用期间 webview suspend 后恢复时内容不丢失
+        #     不修改 _last_rendered_html / _ai_markdown_text，避免干扰 _finalize_streaming_render 的增量追加
+        try:
+            _snap_md = _rebuild_markdown_from_messages(
+                self._ai_messages,
+                streaming_reasoning="",
+                streaming_content="",
+                is_streaming=False,
+                show_details=self._show_tool_details,
+            )
+            if _snap_md.strip():
+                _snap_html = _markdown_to_html_safe(_snap_md, fallback_content="")
+                if self._ai_conversation_id:
+                    self._ai_html_cache[self._ai_conversation_id] = _snap_html
+        except Exception as e:
+            print(f"[switch_to_html] 缓存快照失败: {e}", flush=True)
+
         self._streaming_mode = self._STREAM_MODE_FULL
 
     def _find_tool_call_by_id(self, tool_call_id: str) -> Optional[dict]:
@@ -1905,6 +1922,7 @@ class AIChatPanel(Gtk.Box):
             self.get_html_template(self._theme, current_html if current_html else ""),
             "file:///"
         )
+        self._streaming_container_created = False  # DOM 已重建，流式容器需重新创建
 
         if parent:
             GLib.idle_add(lambda: parent.remove(old_webview) or True)
@@ -3493,6 +3511,7 @@ class AIChatPanel(Gtk.Box):
             cached_html = self._ai_html_cache.get(self._ai_conversation_id)
             html = self.get_html_template(self._theme, cached_html or "")
             self._ai_webview.load_html(html, "file:///")
+            self._streaming_container_created = False  # DOM 已重建，流式容器需重新创建
             print("[AI] WebView restored from suspension.", flush=True)
         self._ai_entry.grab_focus()
 
