@@ -323,97 +323,7 @@ class AIChatPanel(Gtk.Box):
 
         self._ai_webview.load_html(self.get_html_template("dark"), "file:///")
 
-        # Open external links in default browser
-        def on_decide_policy(webview, decision, decision_type):
-            if decision_type == WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
-                nav_action = decision.get_navigation_action()
-                uri = nav_action.get_request().get_uri()
-                if uri and uri.startswith("opencode://copy-response"):
-                    qs = parse_qs(urlparse(uri).query)
-                    index_str = qs.get("index", [None])[0]
-                    if index_str is not None:
-                        try:
-                            index = int(index_str)
-                            msgs = self._ai_messages
-                            if 0 <= index < len(msgs) and msgs[index].get("role") in ("assistant", "tool"):
-                                # Gather all assistant messages in this turn
-                                turn_msgs = []
-                                temp_idx = index
-                                while temp_idx < len(msgs) and msgs[temp_idx].get("role") in ("assistant", "tool"):
-                                    turn_msgs.append(msgs[temp_idx])
-                                    temp_idx += 1
-                                
-                                # Extract final answer content from assistant messages in this turn
-                                content_parts = []
-                                for msg in turn_msgs:
-                                    if msg.get("role") == "assistant" and msg.get("content"):
-                                        content_str = msg["content"]
-                                        content_str = _strip_ai_markup(content_str)
-                                        if content_str.strip():
-                                            content_parts.append(content_str.strip())
-                                            
-                                content = "\n\n".join(content_parts).strip()
-                                if content:
-                                    if self.on_ai_copy_started:
-                                        self.on_ai_copy_started()
-                                    _copy_to_clipboard(content)
-                                    if self.on_ai_copy_finished:
-                                        GLib.idle_add(self.on_ai_copy_finished)
-                        except (ValueError, IndexError):
-                            pass
-                    decision.ignore()
-                    return True
-                if uri and uri.startswith("opencode://copy-input"):
-                    qs = parse_qs(urlparse(uri).query)
-                    index_str = qs.get("index", [None])[0]
-                    if index_str is not None:
-                        try:
-                            index = int(index_str)
-                            msgs = self._ai_messages
-                            if 0 <= index < len(msgs) and msgs[index].get("role") == "user":
-                                content = msgs[index].get("content", "")
-                                if content:
-                                    if isinstance(content, list):
-                                        content = _vision_content_to_text(content)
-                                    if content:
-                                        if self.on_ai_copy_started:
-                                            self.on_ai_copy_started()
-                                        _copy_to_clipboard(content)
-                                        if self.on_ai_copy_finished:
-                                            GLib.idle_add(self.on_ai_copy_finished)
-                        except (ValueError, IndexError):
-                            pass
-                    decision.ignore()
-                    return True
-                if uri and uri.startswith("opencode://retry"):
-                    qs = parse_qs(urlparse(uri).query)
-                    index_str = qs.get("index", [None])[0]
-                    if index_str is not None:
-                        try:
-                            self._retry_response(int(index_str))
-                        except (ValueError, IndexError):
-                            pass
-                    decision.ignore()
-                    return True
-                if uri and uri.startswith("opencode://rollback-round"):
-                    decision.ignore()
-                    qs = parse_qs(urlparse(uri).query)
-                    round_str = qs.get("round", [None])[0]
-                    if round_str is not None:
-                        try:
-                            self._rollback_to_round(int(round_str))
-                        except (ValueError, IndexError):
-                            pass
-                    return True
-                if uri and not (uri.startswith("file://") or uri == "about:blank"):
-                    try:
-                        Gio.AppInfo.launch_default_for_uri(uri, None)
-                    except Exception as e:
-                        print(f"Error launching external link {uri}: {e}", flush=True)
-                    decision.ignore()
-                    return True
-            return False
-        self._ai_webview.connect("decide-policy", on_decide_policy)
+        self._ai_webview.connect("decide-policy", self._on_decide_policy)
         self._ai_webview.connect("context-menu", lambda *_: True)
         self._ai_webview.connect("web-process-terminated", self._on_webview_crashed)
         ai_scrolled.add(self._ai_webview)
@@ -723,6 +633,16 @@ class AIChatPanel(Gtk.Box):
         else:
             self._streaming_mode = self._STREAM_MODE_TEXT
 
+    def _ensure_streaming_container(self) -> bool:
+        """确保流式消息容器已创建，若未创建则发送 appendMessageContainer JS。"""
+        if not self._streaming_container_created and hasattr(self, "_ai_webview") and self._ai_webview:
+            req_id = getattr(self, "_ai_request_id", 0)
+            msg_id = f"msg-{req_id}"
+            self._ai_webview.run_javascript(f"appendMessageContainer('{msg_id}');", None, None)
+            self._streaming_container_created = True
+            return True
+        return self._streaming_container_created
+
     def _on_token_delta(self, text: str):
         """收到 LLM 文本增量，累积到 buffer 并安排 60ms flush（主线程调用）。"""
         if self._STREAM_PERF_LOG:
@@ -749,12 +669,7 @@ class AIChatPanel(Gtk.Box):
         if not self._token_buffer:
             return False
 
-        if not self._streaming_container_created and hasattr(self, "_ai_webview") and self._ai_webview:
-            req_id = getattr(self, "_ai_request_id", 0)
-            msg_id = f"msg-{req_id}"
-            js = f"appendMessageContainer('{msg_id}');"
-            self._ai_webview.run_javascript(js, None, None)
-            self._streaming_container_created = True
+        self._ensure_streaming_container()
 
         js_code = f"appendStreamToken({json.dumps(self._token_buffer)});"
         if hasattr(self, "_ai_webview") and self._ai_webview:
@@ -782,12 +697,9 @@ class AIChatPanel(Gtk.Box):
             return False
         if not self._reasoning_buffer:
             return False
-        if not self._streaming_container_created and hasattr(self, "_ai_webview") and self._ai_webview:
-            req_id = getattr(self, "_ai_request_id", 0)
-            msg_id = f"msg-{req_id}"
-            js = f"appendMessageContainer('{msg_id}');"
-            self._ai_webview.run_javascript(js, None, None)
-            self._streaming_container_created = True
+
+        self._ensure_streaming_container()
+
         js_code = f"appendStreamReasoning({json.dumps(self._reasoning_buffer)});"
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(js_code, None, None)
@@ -1780,6 +1692,93 @@ class AIChatPanel(Gtk.Box):
         except Exception:
             pass
 
+    def _on_decide_policy(self, webview, decision, decision_type):
+        """处理 WebView 导航策略：opencode:// URI 和外部链接。"""
+        if decision_type == WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
+            nav_action = decision.get_navigation_action()
+            uri = nav_action.get_request().get_uri()
+            if uri and uri.startswith("opencode://copy-response"):
+                qs = parse_qs(urlparse(uri).query)
+                index_str = qs.get("index", [None])[0]
+                if index_str is not None:
+                    try:
+                        index = int(index_str)
+                        msgs = self._ai_messages
+                        if 0 <= index < len(msgs) and msgs[index].get("role") in ("assistant", "tool"):
+                            turn_msgs = []
+                            temp_idx = index
+                            while temp_idx < len(msgs) and msgs[temp_idx].get("role") in ("assistant", "tool"):
+                                turn_msgs.append(msgs[temp_idx])
+                                temp_idx += 1
+                            content_parts = []
+                            for msg in turn_msgs:
+                                if msg.get("role") == "assistant" and msg.get("content"):
+                                    content_str = msg["content"]
+                                    content_str = _strip_ai_markup(content_str)
+                                    if content_str.strip():
+                                        content_parts.append(content_str.strip())
+                            content = "\n\n".join(content_parts).strip()
+                            if content:
+                                if self.on_ai_copy_started:
+                                    self.on_ai_copy_started()
+                                _copy_to_clipboard(content)
+                                if self.on_ai_copy_finished:
+                                    GLib.idle_add(self.on_ai_copy_finished)
+                    except (ValueError, IndexError):
+                        pass
+                decision.ignore()
+                return True
+            if uri and uri.startswith("opencode://copy-input"):
+                qs = parse_qs(urlparse(uri).query)
+                index_str = qs.get("index", [None])[0]
+                if index_str is not None:
+                    try:
+                        index = int(index_str)
+                        msgs = self._ai_messages
+                        if 0 <= index < len(msgs) and msgs[index].get("role") == "user":
+                            content = msgs[index].get("content", "")
+                            if content:
+                                if isinstance(content, list):
+                                    content = _vision_content_to_text(content)
+                                if content:
+                                    if self.on_ai_copy_started:
+                                        self.on_ai_copy_started()
+                                    _copy_to_clipboard(content)
+                                    if self.on_ai_copy_finished:
+                                        GLib.idle_add(self.on_ai_copy_finished)
+                    except (ValueError, IndexError):
+                        pass
+                decision.ignore()
+                return True
+            if uri and uri.startswith("opencode://retry"):
+                qs = parse_qs(urlparse(uri).query)
+                index_str = qs.get("index", [None])[0]
+                if index_str is not None:
+                    try:
+                        self._retry_response(int(index_str))
+                    except (ValueError, IndexError):
+                        pass
+                decision.ignore()
+                return True
+            if uri and uri.startswith("opencode://rollback-round"):
+                decision.ignore()
+                qs = parse_qs(urlparse(uri).query)
+                round_str = qs.get("round", [None])[0]
+                if round_str is not None:
+                    try:
+                        self._rollback_to_round(int(round_str))
+                    except (ValueError, IndexError):
+                        pass
+                return True
+            if uri and not (uri.startswith("file://") or uri == "about:blank"):
+                try:
+                    Gio.AppInfo.launch_default_for_uri(uri, None)
+                except Exception as e:
+                    print(f"Error launching external link {uri}: {e}", flush=True)
+                decision.ignore()
+                return True
+        return False
+
     def _on_webview_crashed(self, webview, event):
         """WebView 进程崩溃时自动重建。"""
         if getattr(self, "_webview_suspended", False):
@@ -1791,12 +1790,13 @@ class AIChatPanel(Gtk.Box):
         old_webview = self._ai_webview
         parent = old_webview.get_parent()
 
-        self._ai_web_context = WebKit2.WebContext(memory_pressure_settings=AIChatPanel._MPS)
-        self._ai_web_context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
+        # 复用已有的 web context，避免重复创建
         self._ai_webview = WebKit2.WebView.new_with_context(self._ai_web_context)
 
-        for setting_name in ["enable_webgl", "enable_html5_database", "enable_html5_local_storage"]:
-            getattr(self._ai_webview.get_settings(), f"set_property")(setting_name, False)
+        settings = self._ai_webview.get_settings()
+        settings.enable_webgl = False
+        settings.enable_html5_database = False
+        settings.enable_html5_local_storage = False
 
         self._ai_webview.load_html(
             self.get_html_template(self._theme, current_html if current_html else ""),
@@ -1804,14 +1804,14 @@ class AIChatPanel(Gtk.Box):
         )
 
         if parent:
-            parent.remove(old_webview)
-            parent.add(self._ai_webview)
-            self._ai_webview.show()
+            GLib.idle_add(lambda: parent.remove(old_webview) or True)
+            GLib.idle_add(lambda: parent.add(self._ai_webview) or self._ai_webview.show() or True)
 
         if current_html:
             self._ai_webview.run_javascript(f"updateContent({json.dumps(current_html)});", None, None)
 
         self._ai_webview.connect("web-process-terminated", self._on_webview_crashed)
+        self._ai_webview.connect("decide-policy", self._on_decide_policy)
         self._ai_webview.connect("context-menu", lambda *_: True)
 
     def _on_subagent_status_changed(self, sid: str, info: Optional[dict]):
@@ -2395,7 +2395,11 @@ class AIChatPanel(Gtk.Box):
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript("_autoScroll = true;", None, None)
         self._render_markdown(self._ai_markdown_text)
-        self._save_current_conversation()
+        try:
+            model_snapshot = self._build_model_snapshot()
+            self._save_current_conversation(model_snapshot)
+        except Exception as e:
+            print(f"Error saving conversation after rollback: {e}", flush=True)
 
     def _build_round_cards_html(self, rounds):
         """Build HTML displaying conversation rounds as clickable cards."""
