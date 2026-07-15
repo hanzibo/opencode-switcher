@@ -3744,9 +3744,9 @@ class AIChatPanel(Gtk.Box):
         self._ai_entry.grab_focus()
 
     def insert_text_to_input(self, text: str):
-        """从外部向 AI 输入框插入文本并聚焦。"""
+        """从外部向 AI 输入框光标处插入文本并聚焦。"""
         buffer = self._ai_entry.get_buffer()
-        buffer.insert(buffer.get_end_iter(), text)
+        buffer.insert_at_cursor(text)
         self._ai_entry.grab_focus()
 
     def _select_and_set_bash_cwd(self):
