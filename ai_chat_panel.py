@@ -97,6 +97,9 @@ class AIChatPanel(Gtk.Box):
     _STREAM_MODE_FULL = "full"             # 特性开关：含工具调用兼容
     _MPS = None
     _STREAM_PERF_LOG = False
+    # ── Token 计数常量 ──
+    _TOKEN_CALIBRATION_FACTOR = 0.89  # cl100k_base 对中文模型约高估 12%
+    _ESTIMATED_OVERHEAD_PER_MSG = 20  # role/tool_call_id 等结构字段的字符开销估算
 
     def __init__(self, conversation_store, llm_settings_store, ai_settings_store=None, theme="dark", ai_commands=None, pygments_css_cache=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -849,6 +852,7 @@ class AIChatPanel(Gtk.Box):
             content = text
 
         self._ai_messages.append({"role": "user", "content": content})
+        self._update_token_display()
         self._ai_request_id += 1
         current_req_id = self._ai_request_id
         self._ai_streaming = True
@@ -3024,14 +3028,14 @@ class AIChatPanel(Gtk.Box):
                     if key == "name":
                         n -= 1
             # 校准系数：cl100k_base 对中文优化模型约高估 12%
-            return int(n * 0.89)
+            return int(n * self._TOKEN_CALIBRATION_FACTOR)
         except ImportError:
             # 方案 B：字符级启发式回退
             total_chars = 0
             for msg in messages:
                 for key, value in msg.items():
                     total_chars += len(str(value))
-                total_chars += 20
+                total_chars += self._ESTIMATED_OVERHEAD_PER_MSG
             return int(total_chars / 2.5)
 
     def _update_token_display(self):
