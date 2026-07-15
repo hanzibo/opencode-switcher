@@ -437,58 +437,6 @@ def execute_edit_file(path: str, old_string: str = "", new_string: str = "",
     return f"✅ 已编辑文件「{path}」\n   变更: {actual_changes} 处替换{diff_block}{ext_warn}"
 
 
-def execute_delete_file(path: str, recursive: bool = False) -> str:
-    """Delete a file or empty directory."""
-    resolved = _resolve_safe_path(path)
-    if resolved is None:
-        return f"错误：文件或目录不存在「{path}」"
-
-    try:
-        if os.path.isdir(resolved):
-            if recursive:
-                item_count = sum(1 for _ in os.scandir(resolved))
-                shutil.rmtree(resolved)
-                return f"✅ 已递归删除目录: {path}（含 {item_count} 个子项）"
-            else:
-                os.rmdir(resolved)
-                return f"✅ 已删除空目录: {path}"
-        else:
-            size_str = _format_file_size(os.path.getsize(resolved))
-            os.remove(resolved)
-            _READ_FILE_STATE.pop(os.path.realpath(resolved), None)
-            return f"✅ 已删除文件: {path}（{size_str}）"
-    except PermissionError:
-        return f"错误：无权删除「{path}」"
-    except OSError as e:
-        return f"错误：删除「{path}」时出错: {e}"
-
-
-def execute_rename_file(source: str, destination: str, force: bool = False) -> str:
-    """Rename or move a file/directory."""
-    resolved_src = _resolve_safe_path(source)
-    if resolved_src is None:
-        return f"错误：源文件或目录不存在「{source}」"
-
-    is_file = os.path.isfile(resolved_src)
-    src_size = _format_file_size(os.path.getsize(resolved_src)) if is_file else None
-
-    resolved_dst = _resolve_write_path(destination, force=force)
-    if resolved_dst is None:
-        if os.path.exists(os.path.realpath(destination)) and not force:
-            return f"错误：目标路径已存在。如需覆盖请设置 force=True。"
-        return f"错误：目标路径无效「{destination}」"
-
-    try:
-        shutil.move(resolved_src, resolved_dst)
-        _READ_FILE_STATE.pop(os.path.realpath(resolved_src), None)
-        parts = [f"✅ 已重命名: {source} → {destination}"]
-        if src_size:
-            parts.append(f"  大小: {src_size}")
-        return "\n".join(parts)
-    except OSError as e:
-        return f"错误：重命名「{source}」→「{destination}」时出错: {e}"
-
-
 def execute_file_info(path: str) -> str:
     """Get file/directory metadata: size, mtime, atime, permissions, type, owner."""
     raw_path = os.path.expanduser(path)
@@ -728,37 +676,6 @@ TOOL_SCHEMAS = [
                 }
             }
         },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_file",
-            "description": "删除文件或空目录。对非空目录需要设置 recursive=True 递归删除。仅接受绝对路径。不适用于移动、重命名或编辑文件。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "文件或目录的绝对路径"},
-                    "recursive": {"type": "boolean", "description": "是否递归删除非空目录", "default": False}
-                },
-                "required": ["path"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "rename_file",
-            "description": "重命名或移动文件/目录。目标路径已存在时需要设置 force=True 覆盖。仅接受绝对路径。不适用于复制、删除或编辑文件内容。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "source": {"type": "string", "description": "源文件/目录的绝对路径"},
-                    "destination": {"type": "string", "description": "目标路径的绝对路径"},
-                    "force": {"type": "boolean", "description": "是否覆盖已存在的目标", "default": False}
-                },
-                "required": ["source", "destination"]
-            }
-        }
-    },
     {
         "type": "function",
         "function": {

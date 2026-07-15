@@ -108,18 +108,6 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
                 f'<div class="tool-call-info">✏️ <b>编辑文件（{plural}匹配）：</b>{safe_epath}</div>'
                 + _make_collapsible_preview(eold, old_label, max_chars=200)
             )
-        elif name == "delete_file":
-            dpath = args.get("path", "")
-            rec = args.get("recursive", False)
-            safe_dpath = html.escape(dpath)
-            rec_tag = "（递归）" if rec else ""
-            parts.append(f'<div class="tool-call-info">🗑️ <b>删除{rec_tag}：</b>{safe_dpath}</div>')
-        elif name == "rename_file":
-            rsrc = args.get("source", "")
-            rdst = args.get("destination", "")
-            safe_rsrc = html.escape(rsrc)
-            safe_rdst = html.escape(rdst)
-            parts.append(f'<div class="tool-call-info">📦 <b>重命名：</b>{safe_rsrc} → {safe_rdst}</div>')
         elif name == "todo_create":
             ttitle = args.get("title", "")
             tpriority = args.get("priority", "medium")

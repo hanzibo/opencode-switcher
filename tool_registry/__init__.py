@@ -56,8 +56,6 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "read_file": filesystem.execute_read_file,
     "write_file": filesystem.execute_write_file,
     "edit_file": filesystem.execute_edit_file,
-    "delete_file": filesystem.execute_delete_file,
-    "rename_file": filesystem.execute_rename_file,
     "file_info": filesystem.execute_file_info,
     # search
     "grep_search": search.execute_grep_search,
