@@ -87,6 +87,7 @@ class AIChatPanel(Gtk.Box):
         ("/title", "设置/生成标题"),
         ("/model", "切换模型"),
         ("/cd", "切换 bash 工作路径"),
+        ("/summary", "压缩上下文（/summary keep=N，保留最近N条，默认50）"),
     ]
     _SUSPEND_DELAY_SECONDS = 5
     # ── Streaming v2: Token batching ──
@@ -2231,6 +2232,10 @@ class AIChatPanel(Gtk.Box):
                 f'<div class="chat-status-notice">{html.escape(result)}</div>'
             )
             return
+        if text == "/summary" or text.startswith("/summary "):
+            buf.set_text("")
+            self._handle_summary_command(text)
+            return
         # Handle selected sub-agent blocks: build notification text and send
         if self._ai_selected_subagents:
             from tool_registry import get_subagent_status_map, check_background_subagents
@@ -2487,6 +2492,72 @@ class AIChatPanel(Gtk.Box):
                 self.append_html_to_webview(
                     '<div class="chat-simple-error">LLM 配置不完整，无法生成标题。</div>'
                 )
+
+    def _handle_summary_command(self, text: str):
+        """Handle /summary command: summarize old messages and trim to keep N.
+
+        Called from _on_send_clicked (GTK signal callback, main thread).
+        Format: /summary keep=N  (default keep=50, minimum 5)
+        """
+        # 1. Parse keep parameter
+        keep = 50
+        if text.startswith("/summary "):
+            arg = text[len("/summary "):].strip()
+            if arg.startswith("keep="):
+                try:
+                    keep = int(arg[len("keep="):])
+                except ValueError:
+                    pass
+            else:
+                try:
+                    keep = int(arg)
+                except ValueError:
+                    pass
+
+        # 2. Validate conversation state
+        if not self._ai_messages:
+            self.append_html_to_webview(
+                '<div class="chat-simple-error">对话为空，无法压缩。</div>'
+            )
+            return
+
+        total = len(self._ai_messages)
+        if keep >= total:
+            self.append_html_to_webview(
+                f'<div class="chat-simple-error">消息数不足（共 {total} 条，需保留 {keep} 条），无法压缩。</div>'
+            )
+            return
+
+        keep = max(5, min(keep, total - 1))
+        self.append_html_to_webview(
+            f'<div class="chat-simple-info">⏳ 开始压缩上下文，保留最近 {keep} 条，旧消息正在压缩为摘要...</div>'
+        )
+
+        # 3. Check not already generating
+        if self._ai_summary_generating:
+            self.append_html_to_webview(
+                '<div class="chat-simple-error">已在生成摘要中，请等待完成后再试。</div>'
+            )
+            return
+
+        # 4. Check summary is enabled
+        if self._ai_settings_store and not self._ai_settings_store.enable_summary:
+            self.append_html_to_webview(
+                '<div class="chat-simple-error">摘要功能未启用（设置中 enable_summary=False），请在设置中开启。</div>'
+            )
+            return
+
+        # 5. Calculate pruned messages and start async
+        pruned = self._ai_messages[:-keep]  # old messages to summarize
+        trim_target = keep + 1               # _apply_prune: keep trim_target-1 + first = trim_target
+        self._ai_summary_generating = True
+        self._show_summary_status()
+
+        threading.Thread(
+            target=self._generate_summary_async,
+            args=(list(pruned), trim_target),
+            daemon=True
+        ).start()
 
     def _rollback_to_round(self, round_index: int):
         msgs = self._ai_messages
