@@ -58,10 +58,9 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict] = None,
         if display_field:
             filter_keys.add(display_field)
         display_args = {k: v for k, v in args.items() if k not in filter_keys}
-        args_display = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in display_args.items())
     except Exception:
         args = {}
-        args_display = arguments_str
+        display_args = {}
 
     # Generic: extract purpose from any tool's arguments for display
     purpose = args.get("purpose", "")
@@ -154,6 +153,12 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict] = None,
         )
     else:
         result_html = '<div class="tool-step-result"><em>正在运行中...</em></div>\n'
+
+    # args_display 只在完整模式中使用，在简化模式下跳过计算
+    if display_args:
+        args_display = ", ".join(f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in display_args.items())
+    else:
+        args_display = arguments_str
 
     return (
         f'<details class="tool-step-details" data-tool-call-id="{html.escape(tc_id)}">\n'
