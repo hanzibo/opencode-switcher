@@ -124,14 +124,11 @@ install_python_deps() {
     info "安装 Python 依赖..."
     mkdir -p "$INSTALL_DIR"
     python3 -m venv --system-site-packages "$INSTALL_DIR/venv"
+    # 从 requirements.txt 安装（单一事实来源）
     "$INSTALL_DIR/venv/bin/pip" install --quiet \
-        "markdown" \
-        "pygments" \
-        "requests>=2.31" \
-        "trafilatura>=2.0.0" \
-        "pymdown-extensions>=10.0" \
-        "rank-bm25" \
-        "jieba"
+        -r "$SCRIPT_DIR/requirements.txt"
+    # tiktoken 可选安装（token 计数更精准，安装失败不影响核心功能）
+    "$INSTALL_DIR/venv/bin/pip" install --quiet "tiktoken>=0.7" 2>/dev/null || true
     info "Python 依赖安装完成"
 }
 
