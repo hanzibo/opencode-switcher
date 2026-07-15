@@ -87,7 +87,7 @@ class AIChatPanel(Gtk.Box):
         ("/model", "切换模型"),
         ("/cd", "切换 bash 工作路径"),
     ]
-    _SUSPEND_DELAY_SECONDS = 15
+    _SUSPEND_DELAY_SECONDS = 5
     # ── Streaming v2: Token batching ──
     _BATCH_FLUSH_MS = 60                    # 批处理窗口（ms），与 _POLL_INTERVAL_MS 保持一致
     _STREAM_MODE_OFF = "off"                # 特性开关：关闭 v2
@@ -1782,6 +1782,9 @@ class AIChatPanel(Gtk.Box):
 
     def _on_webview_crashed(self, webview, event):
         """WebView 进程崩溃时自动重建。"""
+        if getattr(self, "_webview_suspended", False):
+            # 非崩溃，是 suspend 主动终止，不需要重建
+            return
         print(f"[opencode-switcher] WebView process crashed, rebuilding...", flush=True)
 
         current_html = self._last_rendered_html or ""
@@ -3355,10 +3358,12 @@ class AIChatPanel(Gtk.Box):
         self._suspend_timeout_id = GLib.timeout_add_seconds(
             self._SUSPEND_DELAY_SECONDS, self._suspend_webview_cb
         )
+        print(f"[AI] suspend timer started: {self._SUSPEND_DELAY_SECONDS}s, running_convs={len(self._ai_running_convs)}", flush=True)
 
     def _suspend_webview_cb(self) -> bool:
         any_running = any(st.get("streaming", False) for st in self._ai_running_convs.values())
         if any_running:
+            print(f"[AI] suspend deferred: {sum(1 for st in self._ai_running_convs.values() if st.get('streaming'))} convs still streaming", flush=True)
             return True
 
         self._suspend_timeout_id = 0
@@ -3367,8 +3372,8 @@ class AIChatPanel(Gtk.Box):
             if self._ai_conversation_id:
                 self._ai_html_cache[self._ai_conversation_id] = getattr(self, "_last_rendered_html", "")
             
+            self._webview_suspended = True  # 先标记，防止崩溃恢复干扰
             self._ai_webview.terminate_web_process()
-            self._webview_suspended = True
             print("[AI] WebView suspended, web process terminated.", flush=True)
             
         return False
