@@ -196,6 +196,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
         <button id="round-bottom" class="nav-btn" onclick="_scrollToBottomForce()" title="跳至最底部">⤵</button>
     </div>
     <script>
+        _throttledWindowing();
         _scrollToBottom();
         _initRoundNav();
     </script>

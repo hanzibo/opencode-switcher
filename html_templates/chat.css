@@ -1,3 +1,6 @@
+                html {
+                    background-color: {bg_color};
+                }
                 body {
                     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
                     color: {text_color};
@@ -655,8 +658,6 @@
                     padding: 6px 4px;
                     z-index: 100;
                     opacity: 0;
-                    transition: opacity 0.25s;
-                    backdrop-filter: blur(8px);
                     user-select: none;
                 }
                 #round-nav:hover {
