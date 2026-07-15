@@ -277,6 +277,24 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
     resolved = _resolve_safe_path(path)
     if resolved is None:
         return f"错误：目录不存在或路径无效「{path}」"
+
+    # ★ 后端容错：path 是文件时自动取父目录 + 追加文件名到 include
+    auto_fix_note = ""
+    if os.path.isfile(resolved):
+        parent = os.path.dirname(resolved)
+        fname = os.path.basename(resolved)
+        if include:
+            _existing = include
+            if fname not in _existing.split(","):
+                include = f"{include},{fname}"
+        else:
+            include = fname
+        resolved = parent
+        auto_fix_note = (
+            f"\n\n⚠️ 提示：path 参数「{path}」是一个文件，"
+            f"已自动使用其所在目录「{resolved}」并添加文件过滤「{fname}」"
+        )
+
     if not os.path.isdir(resolved):
         return f"错误：路径不是目录「{resolved}」"
 
@@ -288,16 +306,18 @@ def execute_grep_search(pattern: str, path: str, include: str = "",
 
     import shutil as _shutil
     if _shutil.which("rg"):
-        return _grep_with_ripgrep(
+        result = _grep_with_ripgrep(
             pattern, resolved, max_results,
             include=include, ignore_case=ignore_case,
             literal=literal, context=context,
             max_chars=max_chars, format=format)
-    return _grep_with_python(
+        return result + auto_fix_note
+    result = _grep_with_python(
         pattern, resolved, max_results,
         include=include, ignore_case=ignore_case,
         literal=literal, context=context,
         max_chars=max_chars, format=format)
+    return result + auto_fix_note
 
 
 def execute_glob_find(pattern: str, path: str, max_results: int = 100,
@@ -307,6 +327,18 @@ def execute_glob_find(pattern: str, path: str, max_results: int = 100,
     resolved = _resolve_safe_path(path)
     if resolved is None:
         return f"错误：目录不存在或路径无效「{path}」"
+
+    # ★ 后端容错：path 是文件时自动取父目录（glob_find 的 pattern 本身就是文件名模式）
+    auto_fix_note = ""
+    if os.path.isfile(resolved):
+        parent = os.path.dirname(resolved)
+        fname = os.path.basename(resolved)
+        resolved = parent
+        auto_fix_note = (
+            f"\n\n⚠️ 提示：path 参数「{path}」是一个文件，"
+            f"已自动使用其所在目录「{resolved}」作为搜索目录"
+        )
+
     if not os.path.isdir(resolved):
         return f"错误：路径不是目录「{resolved}」"
 
@@ -383,7 +415,7 @@ def execute_glob_find(pattern: str, path: str, max_results: int = 100,
     if total > max_results:
         result += f"\n\n...（已截断，仅显示前 {len(entries)} 个，共 {total} 个）"
 
-    return result
+    return result + auto_fix_note
 
 
 TOOL_SCHEMAS = [
@@ -397,7 +429,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "pattern": {"type": "string", "description": "搜索关键词或正则表达式"},
                     "purpose": {"type": "string", "description": "简短描述搜索的目的（10-40字），用于向用户解释执行此搜索的原因。例如：查找错误日志、定位函数实现"},
-                    "path": {"type": "string", "description": "搜索根目录的绝对路径"},
+                    "path": {"type": "string", "description": "搜索根目录的绝对路径（若传入文件路径会自动取父目录并添加文件名过滤）"},
                     "include": {"type": "string", "description": "文件类型过滤 glob，例如 *.py、*.{ts,js}"},
                     "max_results": {"type": "integer", "description": "最大返回行数（1-500，默认 50）", "default": 50},
                     "ignore_case": {"type": "boolean", "description": "是否忽略大小写", "default": False},
@@ -420,7 +452,7 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "pattern": {"type": "string", "description": "glob 搜索模式，例如 **/*.py、config*.json、src/**/*.ts"},
                     "purpose": {"type": "string", "description": "简短描述搜索的目的（10-40字），用于向用户解释执行此搜索的原因。例如：查找配置文件、列出源代码文件"},
-                    "path": {"type": "string", "description": "搜索根目录的绝对路径"},
+                    "path": {"type": "string", "description": "搜索根目录的绝对路径（若传入文件路径会自动取父目录作为搜索目录）"},
                     "max_results": {"type": "integer", "description": "最大返回文件数（1-500，默认 100）", "default": 100},
                     "exclude": {"type": "string", "description": "排除的 glob 模式，例如 *__pycache__*"}
                 },
