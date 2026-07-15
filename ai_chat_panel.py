@@ -49,7 +49,6 @@ _MPS_MEMORY_LIMIT = 300
 _MPS_POLL_INTERVAL = 5
 _MPS_CONSERVATIVE = 0.2
 _MPS_STRICT = 0.4
-_POLL_INTERVAL_MS = 60
 
 
 from ai_html_template import get_html_template, _get_pygments_css
@@ -89,7 +88,7 @@ class AIChatPanel(Gtk.Box):
     ]
     _SUSPEND_DELAY_SECONDS = 5
     # ── Streaming v2: Token batching ──
-    _BATCH_FLUSH_MS = 60                    # 批处理窗口（ms），与 _POLL_INTERVAL_MS 保持一致
+    _BATCH_FLUSH_MS = 60                    # 批处理窗口（ms）
     _STREAM_MODE_OFF = "off"                # 特性开关：关闭 v2
     _STREAM_MODE_TEXT = "text"              # 特性开关：仅纯文本流式
     _STREAM_MODE_FULL = "full"             # 特性开关：含工具调用兼容
@@ -682,6 +681,8 @@ class AIChatPanel(Gtk.Box):
 
     def _on_reasoning_delta(self, text: str):
         """收到 LLM 推理增量，累积到 buffer 并安排 60ms flush。"""
+        if self._STREAM_PERF_LOG:
+            print(f"[perf] reasoning_delta: +{len(text)}ch, buffer={len(self._reasoning_buffer)}ch", flush=True)
         if self._streaming_mode == self._STREAM_MODE_OFF:
             return
         self._reasoning_buffer += text
@@ -740,10 +741,6 @@ class AIChatPanel(Gtk.Box):
             self._ai_webview.run_javascript(js_code, None, None)
 
         self._streaming_mode = self._STREAM_MODE_FULL
-        self._token_buffer = ""
-        self._flush_scheduled = False
-        self._reasoning_buffer = ""
-        self._reasoning_flush_scheduled = False
 
     # ────────────────────────────────────────────────────────────────────
 
@@ -1433,10 +1430,6 @@ class AIChatPanel(Gtk.Box):
             self._ai_history_popover.refresh_dropdown()
         except Exception as e:
             print(f"Dropdown refresh error: {e}", flush=True)
-
-    def _poll_stream_queue(self, req_id: int, conv_id: str) -> bool:
-        """不再使用。轮询已由 _on_llm_api_finished / _finalize_after_tool_loop 替代。"""
-        return False
 
     def _get_turn_messages(self) -> List[Dict]:
         """Get messages for the current active turn (from last user msg onward)."""

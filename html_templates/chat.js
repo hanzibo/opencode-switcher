@@ -641,7 +641,7 @@ function _renderMath(element) {
                     }
 
                     if (_streamingReasoningNode) {
-                        _streamingReasoningNode.textContent += text;
+                        _streamingReasoningNode.appendData(text);
                     }
 
                     _scrollToBottom();
