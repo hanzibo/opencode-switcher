@@ -495,10 +495,9 @@ def execute_bash(command: str, restart: bool = False,
             parts.append(output)
         return "\n".join(parts)
 
-    status_icon = "✅"
     exit_str = f"（退出码：{exit_code}）"
     if exit_code == 0:
-        parts = [f"{status_icon} 命令执行成功{exit_str}"]
+        parts = [f"✅ 命令执行成功{exit_str}"]
     elif exit_code == -1:
         status_icon = "⚠️"
         hint = _exit_code_hint(exit_code)
