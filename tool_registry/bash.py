@@ -495,10 +495,25 @@ def execute_bash(command: str, restart: bool = False,
             parts.append(output)
         return "\n".join(parts)
 
-    status_icon = "✅" if exit_code == 0 else "⚠️" if exit_code == -1 else "❌"
-    hint = _exit_code_hint(exit_code)
-    exit_str = f"（退出码：{exit_code}）" if not hint else f"（退出码：{exit_code} — {hint}）"
-    parts = [f"{status_icon} 命令执行完成{exit_str}"]
+    status_icon = "✅"
+    exit_str = f"（退出码：{exit_code}）"
+    if exit_code == 0:
+        parts = [f"{status_icon} 命令执行成功{exit_str}"]
+    elif exit_code == -1:
+        status_icon = "⚠️"
+        hint = _exit_code_hint(exit_code)
+        exit_str = f"（退出码：{exit_code} — {hint}）"
+        parts = [f"{status_icon} 命令异常终止{exit_str}"]
+    elif not output.strip():
+        # Non-zero exit with no output: typically grep no-match, find no-result, etc.
+        status_icon = "ℹ️"
+        parts = [f"{status_icon} 命令执行完毕（退出码：{exit_code}），未产生输出"]
+    else:
+        status_icon = "❌"
+        hint = _exit_code_hint(exit_code)
+        exit_str = f"（退出码：{exit_code} — {hint}）"
+        parts = [f"{status_icon} 命令执行错误{exit_str}"]
+
     if output:
         parts.append("")
         parts.append(output)
