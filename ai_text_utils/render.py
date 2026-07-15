@@ -201,7 +201,12 @@ def _render_reasoning_html(
     streaming_reasoning: str = "",
     is_streaming: bool = False
 ) -> str:
-    """渲染思考过程区域，输出带 .bubble-region 包裹。"""
+    """渲染思考过程区域，输出带 .bubble-region 包裹。
+
+    流式期间 (is_streaming=True) 返回空字符串，由 JS 端管理 thinking badge。
+    流结束 (is_streaming=False) 输出 thought badge + 懒加载容器。
+    用户展开时 JS 从缓存懒渲染具体内容。
+    """
     reasoning_parts = []
     for msg in turn_messages:
         if msg.get("role") == "assistant" and msg.get("reasoning_content"):
@@ -212,15 +217,20 @@ def _render_reasoning_html(
     reasoning_text = "\n".join(reasoning_parts).strip()
     if not reasoning_text:
         return ""
-    reasoning_text = _close_unclosed_code_blocks(reasoning_text)
-    open_attr = ' open' if is_streaming and streaming_reasoning else ''
-    escaped = html.escape(reasoning_text)
+
+    # 流式期间：JS 端全权管理 thinking badge，Python 不生成 HTML
+    if is_streaming:
+        return ""
+
+    # 非流式：生成 "Thought" 可展开 badge（无计时器）
     return (
         f'<div class="bubble-region reasoning-region">\n'
-        f'<details class="thinking-details"{open_attr}>\n'
-        f'<summary class="thinking-summary">💭 Thinking Process</summary>\n'
-        f'<div class="thinking-content">{escaped}</div>\n'
-        f'</details>\n'
+        f'<div class="reasoning-badge complete" onclick="toggleReasoning(this)">\n'
+        f'<span class="reasoning-icon">💭</span>\n'
+        f'<span class="reasoning-label">Thought</span>\n'
+        f'<span class="reasoning-expand-icon">▶</span>\n'
+        f'</div>\n'
+        f'<div class="reasoning-content" style="display:none;"></div>\n'
         f'</div>\n\n'
     )
 

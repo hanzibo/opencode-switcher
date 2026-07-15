@@ -32,8 +32,12 @@ const KATEX_DELIMITERS = [
                 // ── Streaming v2: 增量纯文本追加 ──
                 let _streamingTextNode = null;
                 let _streamingContainerId = null;
-                let _streamingReasoningNode = null;
-                let _streamingReasoningDetails = null;
+
+                // ── Reasoning 状态机（无计时器版） ──
+                // 状态: 'idle' | 'thinking' | 'complete'
+                let _reasoningState = 'idle';
+                let _reasoningCache = '';           // 缓存的推理文本（展开时懒渲染）
+                let _reasoningPendingText = '';      // 尚未 flush 的推理增量
 
                 // ── Phase 2: Performance helpers ──
                 let _mathDebounceTimer = null;
@@ -335,6 +339,7 @@ function _renderMath(element) {
                 function updateContent(html) {
                     window._isStreaming = false;
                     _showAllMessages = false;
+                    resetReasoning();
                     const content = document.getElementById('content');
                     content.innerHTML = html;
                     addCopyButtons();
@@ -395,7 +400,12 @@ function _renderMath(element) {
                             var reasoning = temp.querySelector('.reasoning-region');
                             var tools = temp.querySelector('.tool-region');
                             var answer = temp.querySelector('.answer-region');
-                            if (reasoning && regions[0]) regions[0].innerHTML = reasoning.innerHTML;
+                            if (reasoning && regions[0]) {
+                                // 如果 Python 发送了空 reasoning HTML，不覆盖 JS 管理的 thinking badge
+                                if (reasoning.innerHTML.trim()) {
+                                    regions[0].innerHTML = reasoning.innerHTML;
+                                }
+                            }
                             if (tools && regions[1]) regions[1].innerHTML = tools.innerHTML;
                             if (answer && regions[2]) {
                                 // 移除 typing-indicator（如果存在）
@@ -618,33 +628,143 @@ function _renderMath(element) {
                 }
 
                 /**
-                 * appendStreamReasoning - 增量追加推理文本到 reasoning 区域。
-                 * 首次调用时创建 <details> 结构，后续追加文本。
+                 * appendStreamReasoning - 缓存推理文本，管理 thinking badge。
+                 *
+                 * 不再实时追加到 DOM，仅缓存文本。首次调用时启动 thinking badge。
+                 * 思考完成后调用 finishReasoning() 切换为 thought badge（可展开）。
+                 * 用户点击展开时从缓存懒渲染具体内容。
                  */
                 function appendStreamReasoning(text) {
                     if (!text) return;
 
+                    // 累积文本到 pending（后续由 _flushReasoningCache 刷入 cache）
+                    _reasoningPendingText += text;
+
+                    // 仅在首次（idle → thinking）启动 thinking badge
+                    // 工具调用后（complete 状态）的 reasoning 只缓存，不再切换 badge
+                    if (_reasoningState === 'idle') {
+                        _startReasoning();
+                    }
+                }
+
+                function _flushReasoningCache() {
+                    if (!_reasoningPendingText) return;
+                    _reasoningCache += _reasoningPendingText;
+                    _reasoningPendingText = '';
+                }
+
+                /**
+                 * _appendReasoningCacheOnly - 仅追加到缓存，不操作 DOM。
+                 * 由 _finalize_streaming_render 在流结束时调用，避免触发 _startReasoning。
+                 */
+                function _appendReasoningCacheOnly(text) {
+                    if (!text) return;
+                    // 先 flush pending（来自 appendStreamReasoning 但尚未入 cache 的文本）
+                    _flushReasoningCache();
+                    _reasoningCache += text;
+                }
+
+                function _startReasoning() {
+                    if (_reasoningState === 'thinking') {
+                        // 已在 thinking 状态，只缓存文本
+                        _flushReasoningCache();
+                        return;
+                    }
+                    _reasoningState = 'thinking';
+                    _flushReasoningCache();
+
                     const container = document.getElementById(_streamingContainerId);
                     if (!container) return;
-
                     const reasoningRegion = container.querySelector('.bubble-region.reasoning-region');
                     if (!reasoningRegion) return;
 
-                    if (!_streamingReasoningDetails) {
-                        reasoningRegion.innerHTML = ''
-                            + '<details class="thinking-details" open>'
-                            + '<summary class="thinking-summary">💭 Thinking Process</summary>'
-                            + '<div class="thinking-content"></div>'
-                            + '</details>';
-                        _streamingReasoningDetails = reasoningRegion.querySelector('.thinking-details');
-                        _streamingReasoningNode = reasoningRegion.querySelector('.thinking-content');
-                    }
+                    // 显示 thinking badge（不可展开，无计时器）
+                    reasoningRegion.innerHTML = ''
+                        + '<div class="reasoning-badge thinking" data-state="thinking">'
+                        +   '<span class="reasoning-icon">💭</span>'
+                        +   '<span class="reasoning-label">Thinking</span>'
+                        + '</div>';
 
-                    if (_streamingReasoningNode) {
-                        _streamingReasoningNode.appendData(text);
+                    _scrollToBottom();
+                }
+
+                /**
+                 * finishReasoning - 切换为 thought badge（可点击展开）。
+                 *
+                 * 可被多次调用（工具调用时、流结束时），幂等。
+                 * 无计时器，仅显示 "Thought" 标签。
+                 */
+                function finishReasoning() {
+                    if (_reasoningState === 'idle') return; // 从头到尾没有 reasoning
+
+                    _reasoningState = 'complete';
+
+                    // 刷新缓存
+                    _flushReasoningCache();
+
+                    // 在当前流式容器内查找 reasoning badge
+                    const container = document.getElementById(_streamingContainerId);
+                    if (!container) return;
+                    const badge = container.querySelector('.reasoning-badge');
+                    if (badge) {
+                        if (badge.classList.contains('thinking')) {
+                            // thinking badge → 切换为 thought badge
+                            const region = badge.closest('.bubble-region.reasoning-region');
+                            if (region) {
+                                region.innerHTML = ''
+                                    + '<div class="reasoning-badge complete" onclick="toggleReasoning(this)">'
+                                    +   '<span class="reasoning-icon">💭</span>'
+                                    +   '<span class="reasoning-label">Thought</span>'
+                                    +   '<span class="reasoning-expand-icon">▶</span>'
+                                    + '</div>'
+                                    + '<div class="reasoning-content" style="display:none;"></div>';
+                            }
+                        }
+                        // 已经是 thought badge，无需改动
                     }
 
                     _scrollToBottom();
+                }
+
+                /**
+                 * toggleReasoning - 展开/收起思考内容（懒渲染）。
+                 *
+                 * 用户点击 thought badge 时触发。
+                 * 首次展开时从缓存渲染内容，后续切换 display。
+                 */
+                function toggleReasoning(badgeEl) {
+                    const region = badgeEl.closest('.bubble-region.reasoning-region');
+                    if (!region) return;
+
+                    const expandIcon = badgeEl.querySelector('.reasoning-expand-icon');
+                    const contentDiv = region.querySelector('.reasoning-content');
+                    if (!contentDiv) return;
+
+                    if (contentDiv.style.display === 'none') {
+                        // 展开——懒渲染
+                        if (!contentDiv.dataset.rendered) {
+                            _flushReasoningCache();
+                            contentDiv.textContent = _reasoningCache || '(empty)';
+                            contentDiv.dataset.rendered = 'true';
+                        }
+                        contentDiv.style.display = 'block';
+                        if (expandIcon) expandIcon.textContent = '▼';
+                    } else {
+                        // 收起
+                        contentDiv.style.display = 'none';
+                        if (expandIcon) expandIcon.textContent = '▶';
+                    }
+
+                    _scrollToBottom();
+                }
+
+                /**
+                 * resetReasoning - 重置 reasoning 状态（新对话时调用）。
+                 */
+                function resetReasoning() {
+                    _reasoningState = 'idle';
+                    _reasoningCache = '';
+                    _reasoningPendingText = '';
                 }
 
                 /**
@@ -675,8 +795,6 @@ function _renderMath(element) {
                     _scrollToBottom();
 
                     _streamingTextNode = null;
-                    _streamingReasoningDetails = null;
-                    _streamingReasoningNode = null;
                 }
 
                 /**

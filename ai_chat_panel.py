@@ -620,8 +620,10 @@ class AIChatPanel(Gtk.Box):
         """在每轮对话开始时初始化流式状态。"""
         self._token_buffer = ""
         self._flush_scheduled = False
+        self._flush_source_id = 0
         self._reasoning_buffer = ""
         self._reasoning_flush_scheduled = False
+        self._reasoning_flush_source_id = 0
         self._last_flushed_len = 0
         self._streaming_container_created = False
 
@@ -654,13 +656,14 @@ class AIChatPanel(Gtk.Box):
 
         if not self._flush_scheduled:
             self._flush_scheduled = True
-            GLib.timeout_add(self._BATCH_FLUSH_MS, self._flush_token_buffer)
+            self._flush_source_id = GLib.timeout_add(self._BATCH_FLUSH_MS, self._flush_token_buffer)
 
     def _flush_token_buffer(self) -> bool:
         """60ms 定时器回调：将累积的 token 文本批量 flush 到 WebView。"""
         if self._STREAM_PERF_LOG:
             print(f"[perf] flush_token: {len(self._token_buffer)}ch → JS", flush=True)
         self._flush_scheduled = False
+        self._flush_source_id = 0
 
         if self._streaming_mode == self._STREAM_MODE_OFF:
             self._token_buffer = ""
@@ -689,11 +692,12 @@ class AIChatPanel(Gtk.Box):
         self._reasoning_buffer += text
         if not self._reasoning_flush_scheduled:
             self._reasoning_flush_scheduled = True
-            GLib.timeout_add(self._BATCH_FLUSH_MS, self._flush_reasoning_buffer)
+            self._reasoning_flush_source_id = GLib.timeout_add(self._BATCH_FLUSH_MS, self._flush_reasoning_buffer)
 
     def _flush_reasoning_buffer(self) -> bool:
         """60ms 定时器回调：将累积的推理文本批量 flush 到 WebView。"""
         self._reasoning_flush_scheduled = False
+        self._reasoning_flush_source_id = 0
         if self._streaming_mode == self._STREAM_MODE_OFF:
             self._reasoning_buffer = ""
             return False
@@ -716,16 +720,30 @@ class AIChatPanel(Gtk.Box):
             self._flush_token_buffer()
 
     def _switch_to_html_mode(self, req_id: int):
-        """工具调用阶段：结束纯文本追加，切换到 HTML 全量渲染模式。"""
+        """工具调用阶段：停止推理状态，切换渲染模式。"""
         if self._STREAM_PERF_LOG:
             print(f"[perf] switch_to_html_mode: req={req_id}", flush=True)
+
+        # 0. 无论 TEXT/FULL 模式，工具调用时都应结束 thinking 状态
+        # 取消排期定时器 + 发送 finishReasoning 到 JS
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            if self._reasoning_flush_source_id:
+                GLib.source_remove(self._reasoning_flush_source_id)
+                self._reasoning_flush_source_id = 0
+                self._reasoning_flush_scheduled = False
+            if self._flush_source_id:
+                GLib.source_remove(self._flush_source_id)
+                self._flush_source_id = 0
+                self._flush_scheduled = False
+            self._ai_webview.run_javascript("finishReasoning();", None, None)
+
         if self._streaming_mode != self._STREAM_MODE_TEXT:
             return
 
-        # 1. 先 flush 所有累积 buffer
+        # 1. flush 所有累积 buffer（TEXT 模式才需要，FULL 模式由独立 flush 处理）
         self._flush_all_buffers()
 
-        # 2. 构建完整渲染
+        # 2. 构建完整渲染（TEXT→FULL 转换）
         msg_id = f"msg-{req_id}"
         turn_msgs = self._get_turn_messages()
         output = render_turn(TurnRenderInput(
@@ -733,11 +751,13 @@ class AIChatPanel(Gtk.Box):
             all_messages=self._ai_messages,
             streaming_reasoning=self._ai_current_reasoning_text,
             streaming_content=self._ai_current_assistant_text,
-            is_streaming=False,
+            is_streaming=True,
             show_tool_details=self._show_tool_details,
         ))
 
-        # 3. 发送 reasoning + answer 的最终 HTML
+        # 4. 发送 answer 的最终 HTML，替换之前 TextNode 追加的纯文本
+        # reasoningHtml 为空的场合 (is_streaming=True 时 _render_reasoning_html 返回空)，
+        # finalizeStreamingContent 不会覆盖 JS 端已完成的 thought badge
         js_code = f"finalizeStreamingContent({json.dumps(output.answer_html)}, {json.dumps(output.reasoning_html)});"
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(js_code, None, None)
@@ -1406,8 +1426,27 @@ class AIChatPanel(Gtk.Box):
         if self._streaming_mode == self._STREAM_MODE_OFF:
             return
 
-        # 1. flush 所有累积 buffer
-        self._flush_all_buffers()
+        # 0. 取消所有排期的 60ms 定时器，防止 _flush_reasoning_buffer 在 finalize 之前
+        #    向 JS 队列插入 appendStreamReasoning 导致不必要的状态切换
+        if self._reasoning_flush_source_id:
+            GLib.source_remove(self._reasoning_flush_source_id)
+            self._reasoning_flush_source_id = 0
+            self._reasoning_flush_scheduled = False
+        if self._flush_source_id:
+            GLib.source_remove(self._flush_source_id)
+            self._flush_source_id = 0
+            self._flush_scheduled = False
+
+        # 1. flush 剩余 buffer
+        # reasoning buffer：用 _appendReasoningCacheOnly 只追加缓存，不触发 _startReasoning
+        if self._reasoning_buffer:
+            js_code = f"_appendReasoningCacheOnly({json.dumps(self._reasoning_buffer)});"
+            if hasattr(self, "_ai_webview") and self._ai_webview:
+                self._ai_webview.run_javascript(js_code, None, None)
+            self._reasoning_buffer = ""
+        # token buffer：正常 flush
+        if self._token_buffer:
+            self._flush_token_buffer()
 
         # 2. 构建最终 HTML
         req_id = getattr(self, "_ai_request_id", 0)
@@ -1437,8 +1476,9 @@ class AIChatPanel(Gtk.Box):
         start_idx = last_user_idx + 1
         self._append_assistant_turn_to_cache(turn_msgs, output.combined_html, start_idx, has_ask=output.is_split)
 
-        # 5. JS 同步
+        # 5. JS 同步：结束 reasoning + 停止流式标记 + 复制按钮 + 窗口控制
         js_sync = (
+            f"finishReasoning();"
             f"window._isStreaming = false;"
             f"(function(){{"
             f"var m=document.getElementById('{msg_id}')?.querySelector('copy-marker');"
@@ -1455,8 +1495,10 @@ class AIChatPanel(Gtk.Box):
         # 6. 清理
         self._token_buffer = ""
         self._flush_scheduled = False
+        self._flush_source_id = 0
         self._reasoning_buffer = ""
         self._reasoning_flush_scheduled = False
+        self._reasoning_flush_source_id = 0
         self._streaming_container_created = False
 
     def _handle_stream_end(self, req_id: int):
