@@ -58,6 +58,7 @@ from sort_dialog import show_sort_dialog
 from recycle_bin_dialog import show_recycle_bin_dialog
 from sort_cats_dialog import show_sort_cats_dialog
 from llm_client import _LLMHttpClient, _LLMHttpError
+from event_types import StreamEventType
 from prompt_dialog import show_prompt_dialog
 from prompts_config_dialog import show_prompts_config_dialog
 from ai_popovers import AICommandPopover, HistoryPopover
@@ -2986,8 +2987,9 @@ class AIChatPanel(Gtk.Box):
         self._clear_summary_status()
 
     def _generate_summary_async(self, pruned_messages: list, trim_target: int):
-        """在后台线程中调用 LLM，将即将丢弃的消息压缩为摘要。"""
+        """在后台线程中调用 LLM（流式），将即将丢弃的消息压缩为摘要并实时显示。"""
         save_summary = False
+        cancel_event = threading.Event()
         try:
             max_chars = (self._ai_settings_store.summary_max_chars
                          if self._ai_settings_store else 500)
@@ -3021,19 +3023,29 @@ class AIChatPanel(Gtk.Box):
                 print(f"[summary] 模型配置不完整，跳过摘要生成", flush=True)
                 return
 
-            print(f"[summary] 开始生成摘要 (已丢弃 {len(pruned_messages)} 条消息, max_chars={max_chars}, model={model_name}, prompt_len={len(prompt)}字)", flush=True)
-            result = self._call_llm_sync(
-                [{"role": "user", "content": prompt}],
+            print(f"[summary] 开始流式生成摘要 (已丢弃 {len(pruned_messages)} 条消息, max_chars={max_chars}, model={model_name}, prompt_len={len(prompt)}字)", flush=True)
+
+            result_parts = []
+            for event in self._llm_client.stream_chat_completion(
                 base_url, api_key, model_name,
+                [{"role": "user", "content": prompt}],
                 timeout=30,
                 temperature=0.3,
-                # max_tokens 需预留推理模型的 reasoning token 空间
                 max_tokens=max(4096, max_chars * 4),
                 top_p=top_p,
-            )
+                cancel_event=cancel_event,
+            ):
+                if cancel_event.is_set():
+                    break
+                if event.type == StreamEventType.TEXT_DELTA and event.text_delta:
+                    result_parts.append(event.text_delta)
+                    GLib.idle_add(self._update_summary_display, event.text_delta)
+                elif event.type == StreamEventType.STREAM_END:
+                    break
+
+            result = "".join(result_parts).strip()
 
             if result:
-                result = result.strip()
                 if self._ai_summary:
                     self._ai_summary = (
                         f"{self._ai_summary}\n"
@@ -3048,6 +3060,8 @@ class AIChatPanel(Gtk.Box):
             else:
                 print(f"[summary] LLM 返回空结果，摘要未生成 (model={model_name})", flush=True)
 
+        except _LLMHttpError as e:
+            print(f"[summary] 摘要生成失败: {e}", flush=True)
         except Exception as e:
             print(f"[summary] 摘要生成失败: {e}", flush=True)
             import traceback
@@ -3073,8 +3087,26 @@ class AIChatPanel(Gtk.Box):
         self._ai_send_btn.set_sensitive(False)
         self._ai_entry.placeholder_text = "摘要压缩中..."
         self.append_html_to_webview(
-            '<div id="summary-status" class="summary-status">'
-            '⏳ 正在压缩历史对话为摘要...</div>'
+            '<div id="summary-display" class="summary-display">'
+            '<div class="summary-header">📝 摘要压缩中</div>'
+            '<div class="summary-content"></div>'
+            '</div>'
+        )
+
+    def _update_summary_display(self, text: str):
+        """后台线程调用，通过 GLib.idle_add 推送摘要流式文本到 WebView（主线程执行）。"""
+        if not text or not hasattr(self, "_ai_webview") or not self._ai_webview:
+            return
+        escaped = json.dumps(text)
+        self._ai_webview.run_javascript(
+            f"(function(){{"
+            f"var e=document.getElementById('summary-display');"
+            f"if(e){{"
+            f"var c=e.querySelector('.summary-content');"
+            f"if(c)c.textContent+={escaped};"
+            f"_scrollToBottom();"
+            f"}}}})();",
+            None, None
         )
 
     def _clear_summary_status(self):
@@ -3083,7 +3115,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_entry.placeholder_text = "输入后续问题..."
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(
-                "var e=document.getElementById('summary-status');if(e)e.remove();",
+                "var e=document.getElementById('summary-display');if(e)e.remove();"
+                "_scrollToBottom();",
                 None, None
             )
 
