@@ -3719,6 +3719,9 @@ class AIChatPanel(Gtk.Box):
         return self.get_visible()
 
     def on_panel_shown(self):
+        # AI 面板显示时预先初始化 MCP，让第一轮对话就能用上工具
+        self._init_mcp()
+
         if getattr(self, "_suspend_timeout_id", 0) != 0:
             GLib.source_remove(self._suspend_timeout_id)
             self._suspend_timeout_id = 0
