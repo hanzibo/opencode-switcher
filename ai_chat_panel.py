@@ -34,6 +34,7 @@ from ai_text_utils import (
     _model_supports_vision, USER_AVATAR_HTML, ASSISTANT_AVATAR_HTML,
     _strip_ai_markup,
     _preserve_newlines,
+    set_code_highlight,
 )
 from ai_text_utils.render import _render_tool_card_standalone
 from render_pipeline import render_turn, TurnRenderInput, build_update_js
@@ -106,6 +107,8 @@ class AIChatPanel(Gtk.Box):
         self._conversation_store = conversation_store
         self._llm_settings_store = llm_settings_store
         self._ai_settings_store = ai_settings_store
+        if self._ai_settings_store is not None:
+            set_code_highlight(self._ai_settings_store.enable_code_highlight)
         self._theme = theme
         self._ai_commands = ai_commands
         self._pygments_css_cache = pygments_css_cache or {}

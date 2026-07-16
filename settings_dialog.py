@@ -13,9 +13,11 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk
+
 from typing import Optional, Callable
 
 from clipboard_store import QQMailCredentialsStore, AISettingsStore
+from ai_text_utils import set_code_highlight
 
 
 def show_settings_dialog(parent_window: Gtk.Window,
@@ -346,6 +348,37 @@ class SettingsDialog:
         summary_hint.set_margin_top(8)
         vbox.pack_start(summary_hint, False, False, 0)
 
+        # ── Separator before code highlight ──
+        hl_sep = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        hl_sep.set_margin_top(16)
+        hl_sep.set_margin_bottom(12)
+        vbox.pack_start(hl_sep, False, False, 0)
+
+        # ── Code highlight section title ──
+        hl_title = Gtk.Label.new()
+        hl_title.set_markup("<b>🎨 代码渲染</b>")
+        hl_title.set_xalign(0)
+        vbox.pack_start(hl_title, False, False, 0)
+
+        # ── Enable code highlight ──
+        hl_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        hl_hbox.set_margin_top(8)
+        self._code_highlight_check = Gtk.CheckButton.new_with_label("启用代码语法高亮（Pygments）")
+        self._code_highlight_check.set_active(self._ai_settings_store.enable_code_highlight)
+        hl_hbox.pack_start(self._code_highlight_check, False, False, 0)
+        vbox.pack_start(hl_hbox, False, False, 0)
+
+        hl_hint = Gtk.Label.new()
+        hl_hint.set_markup(
+            "<span size='small' foreground='#888888'>"
+            "关闭后可降低渲染开销，对设备性能较弱的场景有明显改善。"
+            "需要 Python 包 Pygments 支持。"
+            "</span>"
+        )
+        hl_hint.set_xalign(0)
+        hl_hint.set_margin_top(4)
+        vbox.pack_start(hl_hint, False, False, 0)
+
         # ── Spacer ──
         spacer = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         spacer.set_vexpand(True)
@@ -570,6 +603,8 @@ class SettingsDialog:
             self._ai_settings_store.streaming_v2_mode = streaming_id
         self._ai_settings_store.enable_incremental_tools = self._incremental_tools_check.get_active()
         self._ai_settings_store.show_tool_details = self._show_tool_details_check.get_active()
+        self._ai_settings_store.enable_code_highlight = self._code_highlight_check.get_active()
+        set_code_highlight(self._ai_settings_store.enable_code_highlight)
         self._ai_settings_store.save()
 
         if self._dialog:

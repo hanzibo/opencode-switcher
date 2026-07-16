@@ -19,13 +19,27 @@ from typing import Optional, List, Tuple
 
 from .math import _escape_math, _unescape_math, _fix_latex
 
-# Python markdown extensions used for AI panel rendering
-_MARKDOWN_EXTENSIONS = [
-    "fenced_code", "codehilite", "tables", "md_in_html", "def_list",
-    "pymdownx.tilde",   # ~~删除线~~ 和 ~下标~
-    "pymdownx.caret",   # ^上标^
-    "pymdownx.mark",    # ==高亮==
-]
+# 代码高亮全局开关（由 set_code_highlight 控制）
+_code_highlight_enabled = True
+
+
+def set_code_highlight(enabled: bool):
+    """设置是否启用 Pygments 代码语法高亮。"""
+    global _code_highlight_enabled
+    _code_highlight_enabled = enabled
+
+
+def _get_markdown_extensions() -> List[str]:
+    """根据当前设置构建 markdown 扩展列表。"""
+    exts = [
+        "fenced_code", "tables", "md_in_html", "def_list",
+        "pymdownx.tilde",
+        "pymdownx.caret",
+        "pymdownx.mark",
+    ]
+    if _code_highlight_enabled:
+        exts.insert(1, "codehilite")
+    return exts
 
 _markdown_lib = None
 _markdown_initialized = False
@@ -68,7 +82,7 @@ def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) ->
 
     md_lib = _get_markdown_lib()
     if md_lib is not None:
-        html_text = md_lib.markdown(escaped_text, extensions=_MARKDOWN_EXTENSIONS)
+        html_text = md_lib.markdown(escaped_text, extensions=_get_markdown_extensions())
     else:
         if fallback_content is not None:
             html_text = fallback_content

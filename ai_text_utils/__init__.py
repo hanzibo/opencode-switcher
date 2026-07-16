@@ -57,6 +57,7 @@ from .markdown import (
     _fix_details_blocks,
     _escape_tool_results,
     _unescape_tool_results,
+    set_code_highlight,
 )
 
 # ── render ──
