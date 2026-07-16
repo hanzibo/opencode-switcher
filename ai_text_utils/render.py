@@ -221,6 +221,9 @@ def _render_reasoning_html(
         return ""
 
     # 非流式：生成 "Thought" 可展开 badge（无计时器）
+    # 将思考内容预渲染到 .reasoning-content div 中，JS 端展开时优先使用缓存，
+    # 缓存为空时直接显示此预置内容，避免 "(empty)" 误报
+    escaped_content = html.escape(reasoning_text)
     return (
         f'<div class="bubble-region reasoning-region">\n'
         f'<div class="reasoning-badge complete" onclick="toggleReasoning(this)">\n'
@@ -228,7 +231,7 @@ def _render_reasoning_html(
         f'<span class="reasoning-label">Thought</span>\n'
         f'<span class="reasoning-expand-icon">▶</span>\n'
         f'</div>\n'
-        f'<div class="reasoning-content" style="display:none;"></div>\n'
+        f'<div class="reasoning-content" style="display:none;">{escaped_content}</div>\n'
         f'</div>\n\n'
     )
 
