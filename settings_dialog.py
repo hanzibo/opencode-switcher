@@ -604,7 +604,7 @@ class SettingsDialog:
         hint.set_markup(
             "<span size='small' foreground='#888888'>"
             "MCP Server 通过 stdio 子进程提供额外工具。\n"
-            "添加后重启应用或重新打开 AI 面板生效。"
+            "保存后即时生效，已连接的 Server 会自动重连。"
             "</span>"
         )
         hint.set_xalign(0)

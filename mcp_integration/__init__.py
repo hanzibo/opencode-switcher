@@ -12,8 +12,6 @@ from mcp_integration.client_manager import MCPClientManager
 from mcp_integration.tool_adapter import (
     mcp_tool_to_openai_schema,
     parse_mcp_tool_name,
-    tool_result_to_text,
-    merge_mcp_tools_into_definitions,
 )
 
 __all__ = [
@@ -22,6 +20,4 @@ __all__ = [
     "MCPClientManager",
     "mcp_tool_to_openai_schema",
     "parse_mcp_tool_name",
-    "tool_result_to_text",
-    "merge_mcp_tools_into_definitions",
 ]

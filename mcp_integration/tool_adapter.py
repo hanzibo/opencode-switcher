@@ -6,7 +6,6 @@ MCP Server 返回的 Tool 对象需要转换为 LLM API
 
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, List, Optional, Tuple
 
 from mcp import Tool

@@ -701,7 +701,6 @@ class AIChatPanel(Gtk.Box):
         elif has_disconnect and not has_connect:
             self._cached_mcp_tools = None
             print("[MCP] 所有 Server 已禁用，清空工具缓存", flush=True)
-            print("[MCP] 所有 Server 已禁用，清空工具缓存", flush=True)
 
     def _start_new_conversation(self, prompt_text: str):
         self._ai_messages = [{"role": "user", "content": prompt_text}]

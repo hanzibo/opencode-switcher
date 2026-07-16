@@ -15,7 +15,6 @@ from mcp_integration.gtk_asyncio_bridge import GtkAsyncioBridge
 from mcp_integration.server_config import MCPServerConfig
 from mcp_integration.tool_adapter import (
     mcp_tool_to_openai_schema,
-    tool_result_to_text,
 )
 
 logger = logging.getLogger(__name__)
