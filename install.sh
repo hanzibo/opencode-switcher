@@ -293,6 +293,25 @@ cmd_uninstall() {
     fi
     systemctl --user daemon-reload
 
+    # Kill any manually started processes (not managed by systemd)
+    local running_pids=()
+    while IFS='' read -r pid; do
+        running_pids+=("$pid")
+    done < <(pgrep -f "$INSTALL_DIR/main.py" 2>/dev/null || true)
+    if [ ${#running_pids[@]} -gt 0 ]; then
+        info "检测到手动启动的进程 (PID: ${running_pids[*]})，正在终止..."
+        kill "${running_pids[@]}" 2>/dev/null || true
+        sleep 1
+        # 强制终止仍未退出的进程
+        for pid in "${running_pids[@]}"; do
+            if kill -0 "$pid" 2>/dev/null; then
+                warn "进程 $pid 未响应 SIGTERM，执行 SIGKILL..."
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        done
+        info "手动进程已终止"
+    fi
+
     # Remove files
     rm -f "$APP_DIR/opencode-switcher.desktop"
     rm -f "$SYSD_DIR/opencode-switcher.service"
@@ -382,6 +401,47 @@ cmd_status() {
         echo -e "  触发脚本: ${GREEN}已安装${NC}"
     else
         echo -e "  触发脚本: ${RED}未安装${NC}"
+    fi
+
+    # Check Python dependencies
+    echo ""
+    echo "  ── Python 依赖 ──"
+    PYTHON_BIN="$INSTALL_DIR/venv/bin/python3"
+    if [ -f "$PYTHON_BIN" ]; then
+        local all_ok=true
+        # 从 requirements.txt 读取包名（取每行 = 或 >= 前的部分）
+        while IFS= read -r line || [ -n "$line" ]; do
+            # 去掉注释和空白
+            pkg_line="${line%%#*}"
+            pkg_line="${pkg_line%% #*}"
+            pkg_line="$(echo "$pkg_line" | xargs)"
+            [ -z "$pkg_line" ] && continue
+            # 提取包名: "PyGObject>=3.42" → "PyGObject"
+            pkg_name="${pkg_line%%>=*}"
+            pkg_name="${pkg_name%%==*}"
+            pkg_name="$(echo "$pkg_name" | xargs)"
+            # 处理特殊情况: python-magic → import 名不同
+            import_name="$pkg_name"
+            case "$pkg_name" in
+                "PyGObject") import_name="gi" ;;
+                "Pygments") import_name="pygments" ;;
+                "rank-bm25") import_name="rank_bm25" ;;
+                "pymdown-extensions") import_name="pymdownx" ;;
+            esac
+            if "$PYTHON_BIN" -c "import $import_name" 2>/dev/null; then
+                echo -e "    ${GREEN}✔${NC} $pkg_name"
+            else
+                echo -e "    ${RED}✘${NC} $pkg_name (缺失)"
+                all_ok=false
+            fi
+        done < "$SCRIPT_DIR/requirements.txt"
+        if [ "$all_ok" = true ]; then
+            echo -e "    ${GREEN}全部依赖已安装${NC}"
+        else
+            echo -e "    ${YELLOW}部分依赖缺失，请运行 install 或手动安装${NC}"
+        fi
+    else
+        echo -e "  Python 虚拟环境: ${RED}未找到 ($PYTHON_BIN)${NC}"
     fi
 }
 
