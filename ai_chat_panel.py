@@ -670,18 +670,22 @@ class AIChatPanel(Gtk.Box):
                 new_configs[config.name] = config
 
         # 2. 断开已禁用或不再存在的 Server
+        has_disconnect = False
         for name in list(self._mcp_client_mgr.get_all_server_names()):
             if name not in new_configs:
+                has_disconnect = True
                 self._mcp_bridge.call_async(
                     self._mcp_client_mgr.disconnect(name),
                     callback=lambda result, err, n=name: (
-                        print(f"[MCP] 已断开禁用的 Server: {n}", flush=True)
+                        print(f"[MCP] 已断开 Server: {n}", flush=True)
                     ),
                 )
 
         # 3. 连接新增或已启用的 Server
+        has_connect = False
         for name, config in new_configs.items():
             if not self._mcp_client_mgr.is_connected(name):
+                has_connect = True
                 self._mcp_bridge.call_async(
                     self._mcp_client_mgr.connect_stdio(config),
                     callback=lambda result, err, n=name: (
@@ -690,9 +694,13 @@ class AIChatPanel(Gtk.Box):
                     ),
                 )
 
-        # 4. 如果没有已连接的 Server，清空工具缓存
-        if not new_configs:
+        # 4. 如果断开或改名，立即清空缓存避免使用旧工具名
+        if has_disconnect and has_connect:
             self._cached_mcp_tools = None
+            print("[MCP] Server 变更，清空工具缓存等待刷新", flush=True)
+        elif has_disconnect and not has_connect:
+            self._cached_mcp_tools = None
+            print("[MCP] 所有 Server 已禁用，清空工具缓存", flush=True)
             print("[MCP] 所有 Server 已禁用，清空工具缓存", flush=True)
 
     def _start_new_conversation(self, prompt_text: str):
