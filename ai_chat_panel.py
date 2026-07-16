@@ -102,6 +102,10 @@ class AIChatPanel(Gtk.Box):
     _TOKEN_CALIBRATION_FACTOR = 0.89  # cl100k_base 对中文模型约高估 12%
     _ESTIMATED_OVERHEAD_PER_MSG = 20  # role/tool_call_id 等结构字段的字符开销估算
 
+    # 背景色常量（dark / light），用于 _build_ui 和 set_theme
+    _BG_DARK = Gdk.RGBA(0.039, 0.043, 0.063, 1.0)   # #0a0b10
+    _BG_LIGHT = Gdk.RGBA(1.0, 1.0, 1.0, 1.0)       # #ffffff
+
     def __init__(self, conversation_store, llm_settings_store, ai_settings_store=None, theme="dark", ai_commands=None, pygments_css_cache=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self._conversation_store = conversation_store
@@ -339,9 +343,9 @@ class AIChatPanel(Gtk.Box):
 
         # Synchronize background colors to prevent Wayland resize flickering/leaks
         if self._theme == "dark":
-            bg_rgba = Gdk.RGBA(0.039, 0.043, 0.063, 1.0)  # #0a0b10
+            bg_rgba = self._BG_DARK
         else:
-            bg_rgba = Gdk.RGBA(1.0, 1.0, 1.0, 1.0)  # #ffffff
+            bg_rgba = self._BG_LIGHT
 
         self.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
         ai_scrolled.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
@@ -3779,21 +3783,16 @@ class AIChatPanel(Gtk.Box):
 
         # Update GTK widget background colors to match the new theme
         if name == "dark":
-            bg_rgba = Gdk.RGBA(0.039, 0.043, 0.063, 1.0)  # #0a0b10
+            bg_rgba = self._BG_DARK
         else:
-            bg_rgba = Gdk.RGBA(1.0, 1.0, 1.0, 1.0)  # #ffffff
+            bg_rgba = self._BG_LIGHT
 
-        def _apply_bg(widget):
-            if widget is None:
-                return
-            try:
-                widget.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
-            except Exception:
-                pass
-        _apply_bg(self)
-        _apply_bg(self._ai_scrolled)
-        _apply_bg(self._ai_hdr)
-        _apply_bg(self._ai_input_area)
+        for w in (self, self._ai_scrolled, self._ai_hdr, self._ai_input_area):
+            if w is not None:
+                try:
+                    w.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
+                except Exception:
+                    pass
         if self._ai_webview:
             self._ai_webview.set_background_color(bg_rgba)
 

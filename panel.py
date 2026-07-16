@@ -544,23 +544,20 @@ class SearchPanel:
 
     def _on_window_realize(self, widget):
         """Set the entire window as opaque to prevent compositor from showing through."""
-        gdk_win = widget.get_window()
-        if gdk_win is None:
-            return
-        # 获取窗口 allocation，标记整个区域为不透明
         self._update_opaque_region(widget)
 
     def _on_window_size_allocate(self, widget, alloc):
         """Update opaque region after window resize."""
-        self._update_opaque_region(widget)
+        self._update_opaque_region(widget, alloc)
 
-    def _update_opaque_region(self, widget):
+    def _update_opaque_region(self, widget, alloc=None):
         """Update the opaque region to cover the entire window allocation."""
         gdk_win = widget.get_window()
         if gdk_win is None:
             return
+        if alloc is None:
+            alloc = widget.get_allocation()
         import cairo as _cairo
-        alloc = widget.get_allocation()
         w = max(alloc.width, 1)
         h = max(alloc.height, 1)
         surface = _cairo.ImageSurface(_cairo.FORMAT_A1, w, h)
