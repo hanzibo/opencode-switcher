@@ -741,16 +741,26 @@ function _renderMath(element) {
                     if (!contentDiv) return;
 
                     if (contentDiv.style.display === 'none') {
-                        // 展开——懒渲染
+                        // 展开
                         if (!contentDiv.dataset.rendered) {
                             _flushReasoningCache();
-                            contentDiv.textContent = _reasoningCache || '(empty)';
+                            // 优先级：流式缓存 > 收起时保存的副本 > 服务端预置内容（已在 DOM 中）
+                            var text = _reasoningCache || badgeEl.dataset.content;
+                            if (text) {
+                                contentDiv.textContent = text;
+                            }
                             contentDiv.dataset.rendered = 'true';
                         }
                         contentDiv.style.display = 'block';
                         if (expandIcon) expandIcon.textContent = '▼';
                     } else {
-                        // 收起
+                        // 收起——从 DOM 中彻底移除内容，下次展开重新渲染
+                        var currentText = contentDiv.textContent;
+                        if (currentText) {
+                            badgeEl.dataset.content = currentText;  // 保存副本用于恢复
+                        }
+                        contentDiv.textContent = '';
+                        delete contentDiv.dataset.rendered;
                         contentDiv.style.display = 'none';
                         if (expandIcon) expandIcon.textContent = '▶';
                     }
