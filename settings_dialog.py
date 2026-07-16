@@ -49,6 +49,7 @@ class SettingsDialog:
             ("QQ邮箱", self._build_qq_mail_tab),
             ("AI 对话", self._build_ai_settings_tab),
             ("流式输出", self._build_streaming_tab),
+            ("MCP 服务器", self._build_mcp_tab),
             ("常量配置", self._build_constants_tab),
         ]
 
@@ -576,6 +577,144 @@ class SettingsDialog:
 
         return outer_sw
 
+    # ── Tab: MCP 服务器 ─────────────────────────────────────────────────
+
+    def _build_mcp_tab(self):
+        """Build the MCP Server configuration tab page.
+
+        用户可添加/编辑/删除 MCP Server 配置（name, command, args, enabled, auto_connect）。
+        数据存储在 AISettingsStore.mcp_servers (list[dict]) 中。
+        """
+        outer_sw = Gtk.ScrolledWindow.new()
+        outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        outer_sw.set_vexpand(True)
+
+        vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+        vbox.set_margin_start(16)
+        vbox.set_margin_end(16)
+        vbox.set_margin_top(12)
+        vbox.set_margin_bottom(12)
+        outer_sw.add(vbox)
+
+        # ── 说明文字 ──
+        hint = Gtk.Label.new()
+        hint.set_markup(
+            "<span size='small' foreground='#888888'>"
+            "MCP Server 通过 stdio 子进程提供额外工具。\n"
+            "添加后重启应用或重新打开 AI 面板生效。"
+            "</span>"
+        )
+        hint.set_xalign(0)
+        vbox.pack_start(hint, False, False, 0)
+
+        # ── 服务器列表容器 ──
+        self._mcp_servers_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 6)
+        vbox.pack_start(self._mcp_servers_box, False, False, 0)
+
+        # ── 从配置加载已有服务器 ──
+        self._mcp_server_widgets = []  # 每个元素: {"name", "command", "args", "enabled", "auto_connect", "box"}
+        for sd in getattr(self._ai_settings_store, "mcp_servers", []):
+            self._add_mcp_server_card(sd)
+
+        # ── 添加按钮 ──
+        add_btn = Gtk.Button.new_with_label("＋ 添加 MCP Server")
+        add_btn.set_margin_top(8)
+        add_btn.connect("clicked", lambda _: self._add_mcp_server_card())
+        vbox.pack_start(add_btn, False, False, 0)
+
+        # ── 示意示例 ──
+        example = Gtk.Label.new()
+        example.set_markup(
+            "<span size='small' foreground='#aaaaaa'>"
+            "示例：command=<b>npx</b>, args=<b>-y @modelcontextprotocol/server-filesystem /tmp</b>"
+            "</span>"
+        )
+        example.set_xalign(0)
+        example.set_margin_top(4)
+        vbox.pack_start(example, False, False, 0)
+
+        # ── Spacer ──
+        spacer = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        spacer.set_vexpand(True)
+        vbox.pack_start(spacer, True, True, 0)
+
+        return outer_sw
+
+    def _add_mcp_server_card(self, data: Optional[dict] = None):
+        """添加一个 MCP 服务器配置卡片。"""
+        data = data or {}
+
+        frame = Gtk.Frame.new()
+        frame.set_shadow_type(Gtk.ShadowType.ETCHED_IN)
+        frame.set_margin_top(4)
+
+        card_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 6)
+        card_vbox.set_margin_start(10)
+        card_vbox.set_margin_end(10)
+        card_vbox.set_margin_top(8)
+        card_vbox.set_margin_bottom(8)
+        frame.add(card_vbox)
+
+        # ── Row 1: Name + Enabled + Auto-connect + Delete ──
+        row1 = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+
+        name_entry = Gtk.Entry.new()
+        name_entry.set_placeholder_text("Server 名称（如 filesystem）")
+        name_entry.set_hexpand(True)
+        name_entry.set_text(data.get("name", ""))
+        row1.pack_start(name_entry, True, True, 0)
+
+        enabled_check = Gtk.CheckButton.new_with_label("启用")
+        enabled_check.set_active(data.get("enabled", True))
+        row1.pack_start(enabled_check, False, False, 0)
+
+        auto_check = Gtk.CheckButton.new_with_label("自动连接")
+        auto_check.set_active(data.get("auto_connect", True))
+        row1.pack_start(auto_check, False, False, 0)
+
+        del_btn = Gtk.Button.new_with_label("✕")
+        del_btn.set_tooltip_text("删除此 Server")
+        del_btn.connect("clicked", lambda _: self._remove_mcp_server_card(frame))
+        row1.pack_start(del_btn, False, False, 0)
+
+        card_vbox.pack_start(row1, False, False, 0)
+
+        # ── Row 2: Command + Args ──
+        row2 = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+
+        cmd_entry = Gtk.Entry.new()
+        cmd_entry.set_placeholder_text("命令（如 npx）")
+        cmd_entry.set_text(data.get("command", ""))
+        cmd_entry.set_size_request(180, -1)
+        row2.pack_start(cmd_entry, False, False, 0)
+
+        args_entry = Gtk.Entry.new()
+        args_entry.set_placeholder_text("参数（空格分隔，如 -y @modelcontextprotocol/... /tmp）")
+        args_entry.set_hexpand(True)
+        args_entry.set_text(" ".join(data.get("args", [])))
+        row2.pack_start(args_entry, True, True, 0)
+
+        card_vbox.pack_start(row2, False, False, 0)
+
+        # ── 存引用 ──
+        self._mcp_server_widgets.append({
+            "name": name_entry,
+            "command": cmd_entry,
+            "args": args_entry,
+            "enabled": enabled_check,
+            "auto_connect": auto_check,
+            "box": frame,
+        })
+        self._mcp_servers_box.pack_start(frame, False, False, 0)
+        self._mcp_servers_box.show_all()
+
+    def _remove_mcp_server_card(self, frame):
+        """移除一个 MCP 服务器配置卡片。"""
+        self._mcp_server_widgets = [
+            w for w in self._mcp_server_widgets if w["box"] is not frame
+        ]
+        self._mcp_servers_box.remove(frame)
+
     # ── Save logic ──────────────────────────────────────────────────────
 
     def _on_save(self):
@@ -605,6 +744,27 @@ class SettingsDialog:
         self._ai_settings_store.show_tool_details = self._show_tool_details_check.get_active()
         self._ai_settings_store.enable_code_highlight = self._code_highlight_check.get_active()
         set_code_highlight(self._ai_settings_store.enable_code_highlight)
+
+        # MCP 服务器配置
+        mcp_servers = []
+        for w in self._mcp_server_widgets:
+            name = w["name"].get_text().strip()
+            if not name:
+                continue
+            args_text = w["args"].get_text().strip()
+            args_list = args_text.split() if args_text else []
+            mcp_servers.append({
+                "name": name,
+                "transport": "stdio",
+                "command": w["command"].get_text().strip(),
+                "args": args_list,
+                "cwd": None,
+                "url": "",
+                "api_key": "",
+                "enabled": w["enabled"].get_active(),
+                "auto_connect": w["auto_connect"].get_active(),
+            })
+        self._ai_settings_store.mcp_servers = mcp_servers
         self._ai_settings_store.save()
 
         if self._dialog:
