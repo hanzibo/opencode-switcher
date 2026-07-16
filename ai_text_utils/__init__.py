@@ -48,7 +48,6 @@ from .cleanup import (
 
 # ── markdown ──
 from .markdown import (
-    _MARKDOWN_EXTENSIONS,
     _get_markdown_lib,
     _markdown_to_html_safe,
     _ensure_list_blankline,
