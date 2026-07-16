@@ -38,7 +38,7 @@ def _get_markdown_extensions() -> List[str]:
         "pymdownx.mark",
     ]
     if _code_highlight_enabled:
-        exts.insert(1, "codehilite")
+        exts.append("codehilite")
     return exts
 
 _markdown_lib = None
