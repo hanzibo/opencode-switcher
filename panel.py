@@ -94,8 +94,6 @@ class SearchPanel:
         self._window.set_type_hint(Gdk.WindowTypeHint.UTILITY)
         self._window.set_position(Gtk.WindowPosition.NONE)
         self._window.set_accept_focus(True)
-        self._window.set_app_paintable(True)
-        self._window.connect("draw", self._on_window_draw)
 
         screen = self._window.get_screen()
         self._css_provider = Gtk.CssProvider()

@@ -344,6 +344,7 @@ class AIChatPanel(Gtk.Box):
         self.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
         ai_scrolled.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
         self._ai_webview.set_background_color(bg_rgba)
+        ai_hdr.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
 
         self.pack_start(ai_scrolled, True, True, 0)
 
@@ -351,6 +352,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_input_area = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
         self._ai_input_area.set_no_show_all(True)
         self._ai_input_area.set_margin_top(4)
+        self._ai_input_area.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
 
         # Sub-agent status bar (shown when background sub-agents exist)
         self._ai_subagent_bar = Gtk.FlowBox.new()
