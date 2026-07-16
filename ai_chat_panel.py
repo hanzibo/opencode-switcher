@@ -1211,34 +1211,11 @@ class AIChatPanel(Gtk.Box):
         if has_ask is None:
             has_ask = self._contains_ask_user_question(turn_msgs)
 
-        if has_ask:
-            self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
-            self._last_rendered_html = _markdown_to_html_safe(self._ai_markdown_text, fallback_content="")
-            if self._ai_conversation_id:
-                self._ai_html_cache[self._ai_conversation_id] = self._last_rendered_html
-            return
-
-        assistant_md = (
-            f'<div class="msg-row assistant" markdown="1">\n'
-            f'{ASSISTANT_AVATAR_HTML}\n'
-            f'<div class="msg-bubble assistant" markdown="1">\n'
-            f'{combined_html}\n'
-            f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
-            f'</div>\n'
-            f'</div>\n\n'
-        )
-        self._ai_markdown_text += assistant_md
-
-        assistant_html = (
-            f'<div class="msg-row assistant">\n'
-            f'{ASSISTANT_AVATAR_HTML}\n'
-            f'<div class="msg-bubble assistant">\n'
-            f'{combined_html}\n'
-            f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
-            f'</div>\n'
-            f'</div>\n\n'
-        )
-        self._last_rendered_html += assistant_html
+        # ★ 全量从 _ai_messages 重建，不再追加已渲染 HTML 到 _ai_markdown_text。
+        #   避免 assistant 的已渲染 HTML 被二次 markdown 处理时与用户消息中
+        #   的代码 fence 交互，导致 HTML 实体重复转义。
+        self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+        self._last_rendered_html = _markdown_to_html_safe(self._ai_markdown_text, fallback_content="")
         if self._ai_conversation_id:
             self._ai_html_cache[self._ai_conversation_id] = self._last_rendered_html
 
