@@ -94,6 +94,10 @@ class SearchPanel:
         self._window.set_type_hint(Gdk.WindowTypeHint.UTILITY)
         self._window.set_position(Gtk.WindowPosition.NONE)
         self._window.set_accept_focus(True)
+        self._window.set_app_paintable(True)
+        self._window.connect("draw", self._on_window_draw)
+        self._window.connect("realize", self._on_window_realize)
+        self._window.connect("size-allocate", self._on_window_size_allocate)
 
         screen = self._window.get_screen()
         self._css_provider = Gtk.CssProvider()
@@ -537,6 +541,36 @@ class SearchPanel:
         )
         cr.paint()
         return False
+
+    def _on_window_realize(self, widget):
+        """Set the entire window as opaque to prevent compositor from showing through."""
+        gdk_win = widget.get_window()
+        if gdk_win is None:
+            return
+        # 获取窗口 allocation，标记整个区域为不透明
+        self._update_opaque_region(widget)
+
+    def _on_window_size_allocate(self, widget, alloc):
+        """Update opaque region after window resize."""
+        self._update_opaque_region(widget)
+
+    def _update_opaque_region(self, widget):
+        """Update the opaque region to cover the entire window allocation."""
+        gdk_win = widget.get_window()
+        if gdk_win is None:
+            return
+        import cairo as _cairo
+        alloc = widget.get_allocation()
+        w = max(alloc.width, 1)
+        h = max(alloc.height, 1)
+        surface = _cairo.ImageSurface(_cairo.FORMAT_A1, w, h)
+        cr = _cairo.Context(surface)
+        cr.set_source_rgba(1, 1, 1, 1)
+        cr.paint()
+        del cr
+        region = Gdk.cairo_region_create_from_surface(surface)
+        surface.finish()
+        gdk_win.set_opaque_region(region)
 
     def _on_separator_draw(self, widget, cr):
         alloc = widget.get_allocation()

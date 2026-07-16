@@ -206,6 +206,7 @@ class AIChatPanel(Gtk.Box):
 
         # Title / Header
         ai_hdr = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+        self._ai_hdr = ai_hdr
         self._ai_lbl = Gtk.Label.new()
         self._ai_lbl.set_markup("<b>AI 助手看盘</b>")
         self._ai_lbl.set_xalign(0)
@@ -277,6 +278,7 @@ class AIChatPanel(Gtk.Box):
 
         # Scrolled Text view
         ai_scrolled = Gtk.ScrolledWindow.new()
+        self._ai_scrolled = ai_scrolled
         ai_scrolled.set_name("aiScrolled")
         ai_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         ai_scrolled.set_vexpand(True)
@@ -3774,6 +3776,28 @@ class AIChatPanel(Gtk.Box):
     def set_theme(self, name):
         self._theme = name
         self._ai_html_cache.clear()
+
+        # Update GTK widget background colors to match the new theme
+        if name == "dark":
+            bg_rgba = Gdk.RGBA(0.039, 0.043, 0.063, 1.0)  # #0a0b10
+        else:
+            bg_rgba = Gdk.RGBA(1.0, 1.0, 1.0, 1.0)  # #ffffff
+
+        def _apply_bg(widget):
+            if widget is None:
+                return
+            try:
+                widget.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
+            except Exception:
+                pass
+        _apply_bg(self)
+        _apply_bg(self._ai_scrolled)
+        _apply_bg(self._ai_hdr)
+        _apply_bg(self._ai_input_area)
+        if self._ai_webview:
+            self._ai_webview.set_background_color(bg_rgba)
+
+        # Rebuild HTML and reload webview
         pygments_css = self._get_pygments_css(name)
         html_content = ""
         if self._ai_markdown_text:
