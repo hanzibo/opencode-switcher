@@ -235,7 +235,7 @@ class SettingsDialog:
         soft_lbl = Gtk.Label.new("触发截断的消息数:")
         soft_lbl.set_size_request(150, -1)
         soft_lbl.set_xalign(0)
-        self._soft_spin = Gtk.SpinButton.new_with_range(50, 500, 10)
+        self._soft_spin = Gtk.SpinButton.new_with_range(50, 9999, 10)
         self._soft_spin.set_value(self._ai_settings_store.soft_limit)
         soft_hbox.pack_start(soft_lbl, False, False, 0)
         soft_hbox.pack_start(self._soft_spin, False, False, 0)
