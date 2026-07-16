@@ -190,17 +190,8 @@ def _preserve_newlines(text: str) -> str:
         # and the previous line itself is NOT a code fence (avoid breaking ```<br>)
         if out and out[-1].strip() and line.strip():
             prev_stripped = out[-1].strip()
-            # Skip adding <br> if previous line is a closing fence
-            # (starts with ``` after the fence was just closed by the current iteration
-            # No need to check — the previous line is a closing fence only if
-            # in_code_block was toggled in that same iteration. Since we toggled
-            # in 'if line.strip().startswith('```')' branch (which continues),
-            # we never reach here with a fence line as out[-1].
-            # However, the fence's content (just "```") is non-empty, so
-            # subsequent non-empty lines would get <br> appended to the fence line.
-            # Fix: detect if out[-1] looks like a code fence (purely backticks/tildes).
+            # 上一行是纯代码 fence（仅 ``` 或 ~~~ 组成）时，不加 <br>
             if re.match(r'^(`{3,}|~{3,})\s*$', prev_stripped):
-                # Previous line is a code fence — don't append <br>
                 pass
             else:
                 out[-1] += '<br>'

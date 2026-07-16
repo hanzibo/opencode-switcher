@@ -767,7 +767,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_webview.run_javascript(js_code, None, None)
 
         # 5. 更新 HTML 缓存，确保工具调用期间 webview suspend 后恢复时内容不丢失
-        #     不修改 _last_rendered_html / _ai_markdown_text，避免干扰 _finalize_streaming_render 的增量追加
+        #     不修改 _last_rendered_html / _ai_markdown_text，避免干扰 _finalize_streaming_render 的缓存重建
         try:
             _snap_md = _rebuild_markdown_from_messages(
                 self._ai_messages,
@@ -1206,14 +1206,12 @@ class AIChatPanel(Gtk.Box):
             for msg in turn_msgs
         )
 
-    def _append_assistant_turn_to_cache(self, turn_msgs: List[Dict], combined_html: str, start_idx: int, has_ask: Optional[bool] = None):
-        """增量更新当前会话的 Markdown 和 HTML 缓存。"""
-        if has_ask is None:
-            has_ask = self._contains_ask_user_question(turn_msgs)
+    def _append_assistant_turn_to_cache(self):
+        """更新当前会话的 Markdown 和 HTML 缓存。
 
-        # ★ 全量从 _ai_messages 重建，不再追加已渲染 HTML 到 _ai_markdown_text。
-        #   避免 assistant 的已渲染 HTML 被二次 markdown 处理时与用户消息中
-        #   的代码 fence 交互，导致 HTML 实体重复转义。
+        全量从 _ai_messages 重建，避免 assistant 已渲染 HTML 被二次
+        markdown 处理时与用户消息中的代码 fence 交互导致实体重复转义。
+        """
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         self._last_rendered_html = _markdown_to_html_safe(self._ai_markdown_text, fallback_content="")
         if self._ai_conversation_id:
@@ -1264,7 +1262,7 @@ class AIChatPanel(Gtk.Box):
                     self._ai_webview.run_javascript(js_final, None, None)
 
                 start_idx = last_user_idx + 1
-                self._append_assistant_turn_to_cache(turn_msgs, combined_html, start_idx, has_ask=is_split)
+                self._append_assistant_turn_to_cache()
 
                 js_sync = self._build_final_js_sync(msg_id, start_idx)
                 if hasattr(self, "_ai_webview") and self._ai_webview:
@@ -1441,7 +1439,7 @@ class AIChatPanel(Gtk.Box):
                 last_user_idx = idx
                 break
         start_idx = last_user_idx + 1
-        self._append_assistant_turn_to_cache(turn_msgs, output.combined_html, start_idx, has_ask=output.is_split)
+        self._append_assistant_turn_to_cache()
 
         # 5. JS 同步：结束 reasoning + 停止流式标记 + 复制按钮 + 窗口控制
         js_sync = (
@@ -1673,7 +1671,7 @@ class AIChatPanel(Gtk.Box):
                     self._ai_render_timeout_id = 0
 
                 start_idx = last_user_idx + 1
-                self._append_assistant_turn_to_cache(turn_msgs, combined_html, start_idx, has_ask=is_split)
+                self._append_assistant_turn_to_cache()
 
                 js_sync = self._build_final_js_sync(msg_id, start_idx)
                 if hasattr(self, "_ai_webview") and self._ai_webview:
