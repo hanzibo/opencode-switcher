@@ -207,7 +207,7 @@ class AIChatPanel(Gtk.Box):
     def _build_ui(self):
         # Local import to avoid circular dependency (clipboard_panel imports AIChatPanel)
         from clipboard_panel import _textview_draw_placeholder, _copy_to_clipboard
-        self._copy_to_clipboard = _copy_to_clipboard
+        self._copy_to_clipboard = _copy_to_clipboard  # 保存为实例变量供 _on_decide_policy 使用，避免模块级循环导入
 
         # Title / Header
         ai_hdr = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
@@ -1774,8 +1774,12 @@ class AIChatPanel(Gtk.Box):
         if decision_type == WebKit2.PolicyDecisionType.NAVIGATION_ACTION:
             nav_action = decision.get_navigation_action()
             uri = nav_action.get_request().get_uri()
-            if uri and uri.startswith("opencode://copy-response"):
+            # 统一取消导航：所有 opencode:// 自定义协议和外部链接都不应实际加载
+            if uri and (uri.startswith("opencode://") or not (uri.startswith("file://") or uri == "about:blank")):
                 decision.ignore()
+            else:
+                return False
+            if uri.startswith("opencode://copy-response"):
                 qs = parse_qs(urlparse(uri).query)
                 index_str = qs.get("index", [None])[0]
                 if index_str is not None:
@@ -1805,8 +1809,7 @@ class AIChatPanel(Gtk.Box):
                     except (ValueError, IndexError):
                         pass
                 return True
-            if uri and uri.startswith("opencode://copy-input"):
-                decision.ignore()
+            if uri.startswith("opencode://copy-input"):
                 qs = parse_qs(urlparse(uri).query)
                 index_str = qs.get("index", [None])[0]
                 if index_str is not None:
@@ -1827,8 +1830,7 @@ class AIChatPanel(Gtk.Box):
                     except (ValueError, IndexError):
                         pass
                 return True
-            if uri and uri.startswith("opencode://retry"):
-                decision.ignore()
+            if uri.startswith("opencode://retry"):
                 qs = parse_qs(urlparse(uri).query)
                 index_str = qs.get("index", [None])[0]
                 if index_str is not None:
@@ -1837,8 +1839,7 @@ class AIChatPanel(Gtk.Box):
                     except (ValueError, IndexError):
                         pass
                 return True
-            if uri and uri.startswith("opencode://rollback-round"):
-                decision.ignore()
+            if uri.startswith("opencode://rollback-round"):
                 qs = parse_qs(urlparse(uri).query)
                 round_str = qs.get("round", [None])[0]
                 if round_str is not None:
@@ -1847,13 +1848,12 @@ class AIChatPanel(Gtk.Box):
                     except (ValueError, IndexError):
                         pass
                 return True
-            if uri and not (uri.startswith("file://") or uri == "about:blank"):
-                try:
-                    Gio.AppInfo.launch_default_for_uri(uri, None)
-                except Exception as e:
-                    print(f"Error launching external link {uri}: {e}", flush=True)
-                decision.ignore()
-                return True
+            # 外部链接：在默认浏览器中打开
+            try:
+                Gio.AppInfo.launch_default_for_uri(uri, None)
+            except Exception as e:
+                print(f"Error launching external link {uri}: {e}", flush=True)
+            return True
         return False
 
     def _on_webview_crashed(self, webview, event):
