@@ -1326,7 +1326,8 @@ class ClipboardPanel(Gtk.Box):
             parent_window=self.get_toplevel(),
             ai_settings_store=self._ai_settings_store,
             on_dialog_shown=self.on_dialog_shown,
-            on_dialog_hidden=self.on_dialog_hidden
+            on_dialog_hidden=self.on_dialog_hidden,
+            on_settings_saved=self._ai_chat_panel._reconfigure_mcp,
         )
 
     def _on_content_key(self, _widget, event):

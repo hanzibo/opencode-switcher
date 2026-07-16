@@ -23,9 +23,10 @@ from ai_text_utils import set_code_highlight
 def show_settings_dialog(parent_window: Gtk.Window,
                          ai_settings_store: Optional[AISettingsStore] = None,
                          on_dialog_shown: Optional[Callable[[], None]] = None,
-                         on_dialog_hidden: Optional[Callable[[], None]] = None):
+                         on_dialog_hidden: Optional[Callable[[], None]] = None,
+                         on_settings_saved: Optional[Callable[[], None]] = None):
     """Factory: create and show the Settings dialog."""
-    SettingsDialog(parent_window, ai_settings_store, on_dialog_shown, on_dialog_hidden)
+    SettingsDialog(parent_window, ai_settings_store, on_dialog_shown, on_dialog_hidden, on_settings_saved)
 
 
 class SettingsDialog:
@@ -39,10 +40,12 @@ class SettingsDialog:
     def __init__(self, parent_window: Gtk.Window,
                  ai_settings_store: Optional[AISettingsStore] = None,
                  on_dialog_shown: Optional[Callable[[], None]] = None,
-                 on_dialog_hidden: Optional[Callable[[], None]] = None):
+                 on_dialog_hidden: Optional[Callable[[], None]] = None,
+                 on_settings_saved: Optional[Callable[[], None]] = None):
         self.parent_window = parent_window
         self.on_dialog_shown = on_dialog_shown
         self.on_dialog_hidden = on_dialog_hidden
+        self.on_settings_saved = on_settings_saved
 
         # ── Tab registry: extend here for future tabs ──
         self._tabs = [
@@ -766,6 +769,9 @@ class SettingsDialog:
             })
         self._ai_settings_store.mcp_servers = mcp_servers
         self._ai_settings_store.save()
+
+        if self.on_settings_saved:
+            self.on_settings_saved()
 
         if self._dialog:
             self._dialog.destroy()

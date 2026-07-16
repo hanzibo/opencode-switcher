@@ -651,6 +651,50 @@ class AIChatPanel(Gtk.Box):
                 flush=True,
             )
 
+    def _reconfigure_mcp(self) -> None:
+        """根据配置变更重新连接/断开 MCP Server。
+
+        在 Settings 保存后调用，使 MCP 配置即时生效而不需重启。
+        """
+        if not self._mcp_initialized or self._mcp_client_mgr is None:
+            return
+
+        from mcp_integration import MCPServerConfig
+
+        # 1. 读取新配置
+        server_dicts = getattr(self._ai_settings_store, "mcp_servers", None) or []
+        new_configs = {}
+        for sd in server_dicts:
+            config = MCPServerConfig.from_dict(sd)
+            if config.enabled and config.auto_connect and config.command:
+                new_configs[config.name] = config
+
+        # 2. 断开已禁用或不再存在的 Server
+        for name in list(self._mcp_client_mgr.get_all_server_names()):
+            if name not in new_configs:
+                self._mcp_bridge.call_async(
+                    self._mcp_client_mgr.disconnect(name),
+                    callback=lambda result, err, n=name: (
+                        print(f"[MCP] 已断开禁用的 Server: {n}", flush=True)
+                    ),
+                )
+
+        # 3. 连接新增或已启用的 Server
+        for name, config in new_configs.items():
+            if not self._mcp_client_mgr.is_connected(name):
+                self._mcp_bridge.call_async(
+                    self._mcp_client_mgr.connect_stdio(config),
+                    callback=lambda result, err, n=name: (
+                        print(f"[MCP] {n}: {result[1] if result and not err else err}", flush=True)
+                        or (self._refresh_mcp_tools() if result and result[0] else None)
+                    ),
+                )
+
+        # 4. 如果没有已连接的 Server，清空工具缓存
+        if not new_configs:
+            self._cached_mcp_tools = None
+            print("[MCP] 所有 Server 已禁用，清空工具缓存", flush=True)
+
     def _start_new_conversation(self, prompt_text: str):
         self._ai_messages = [{"role": "user", "content": prompt_text}]
         self._ai_conversation_id = uuid4().hex[:12]
