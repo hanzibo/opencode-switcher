@@ -207,6 +207,7 @@ class AIChatPanel(Gtk.Box):
     def _build_ui(self):
         # Local import to avoid circular dependency (clipboard_panel imports AIChatPanel)
         from clipboard_panel import _textview_draw_placeholder, _copy_to_clipboard
+        self._copy_to_clipboard = _copy_to_clipboard
 
         # Title / Header
         ai_hdr = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
@@ -1774,6 +1775,7 @@ class AIChatPanel(Gtk.Box):
             nav_action = decision.get_navigation_action()
             uri = nav_action.get_request().get_uri()
             if uri and uri.startswith("opencode://copy-response"):
+                decision.ignore()
                 qs = parse_qs(urlparse(uri).query)
                 index_str = qs.get("index", [None])[0]
                 if index_str is not None:
@@ -1797,14 +1799,14 @@ class AIChatPanel(Gtk.Box):
                             if content:
                                 if self.on_ai_copy_started:
                                     self.on_ai_copy_started()
-                                _copy_to_clipboard(content)
+                                self._copy_to_clipboard(content)
                                 if self.on_ai_copy_finished:
                                     GLib.idle_add(self.on_ai_copy_finished)
                     except (ValueError, IndexError):
                         pass
-                decision.ignore()
                 return True
             if uri and uri.startswith("opencode://copy-input"):
+                decision.ignore()
                 qs = parse_qs(urlparse(uri).query)
                 index_str = qs.get("index", [None])[0]
                 if index_str is not None:
@@ -1819,14 +1821,14 @@ class AIChatPanel(Gtk.Box):
                                 if content:
                                     if self.on_ai_copy_started:
                                         self.on_ai_copy_started()
-                                    _copy_to_clipboard(content)
+                                    self._copy_to_clipboard(content)
                                     if self.on_ai_copy_finished:
                                         GLib.idle_add(self.on_ai_copy_finished)
                     except (ValueError, IndexError):
                         pass
-                decision.ignore()
                 return True
             if uri and uri.startswith("opencode://retry"):
+                decision.ignore()
                 qs = parse_qs(urlparse(uri).query)
                 index_str = qs.get("index", [None])[0]
                 if index_str is not None:
@@ -1834,7 +1836,6 @@ class AIChatPanel(Gtk.Box):
                         self._retry_response(int(index_str))
                     except (ValueError, IndexError):
                         pass
-                decision.ignore()
                 return True
             if uri and uri.startswith("opencode://rollback-round"):
                 decision.ignore()
