@@ -128,6 +128,12 @@ class AIChatPanel(Gtk.Box):
         self._ai_history_popover = None
         self._ai_history_btn = None
         self._ai_history_btn_label = None
+
+        # ── MCP（Model Context Protocol）集成 ──
+        self._mcp_bridge = None
+        self._mcp_client_mgr = None
+        self._cached_mcp_tools: Optional[list] = None
+        self._mcp_initialized = False
         self._ai_history_listbox = None
         self._ai_history_switching = False
         self._ai_history_edit_mode = False
@@ -578,6 +584,73 @@ class AIChatPanel(Gtk.Box):
         return (model.base_url.strip(), model.api_key.strip(), model.model_name.strip(),
                 model.temperature, model.max_tokens, model.top_p)
 
+    # ── MCP 集成 ────────────────────────────────────────────────
+
+    def _init_mcp(self) -> None:
+        """初始化 MCP 桥接器和客户端管理器。
+
+        应在 AI 面板首次显示或首次用户输入前调用。
+        可重复调用（幂等）。
+        """
+        if self._mcp_initialized:
+            return
+
+        from mcp_integration import GtkAsyncioBridge, MCPClientManager, MCPServerConfig
+
+        self._mcp_bridge = GtkAsyncioBridge.get()
+        self._mcp_bridge.start()
+        self._mcp_client_mgr = MCPClientManager(self._mcp_bridge)
+
+        # 从设置加载配置并 auto_connect
+        if self._ai_settings_store is not None:
+            self._load_and_connect_mcp_servers()
+
+        self._mcp_initialized = True
+        print(f"[MCP] 初始化完成，已连接 {self._mcp_client_mgr.get_server_count()} 个 Server", flush=True)
+
+    def _load_and_connect_mcp_servers(self) -> None:
+        """从 AISettingsStore 加载 MCP Server 配置并自动连接。"""
+        if self._ai_settings_store is None or self._mcp_client_mgr is None:
+            return
+
+        from mcp_integration import MCPServerConfig
+        from mcp_integration.gtk_asyncio_bridge import GtkAsyncioBridge
+
+        server_dicts = getattr(self._ai_settings_store, "mcp_servers", None) or []
+        for sd in server_dicts:
+            config = MCPServerConfig.from_dict(sd)
+            if config.enabled and config.auto_connect:
+                if config.transport == "stdio" and config.command:
+                    self._mcp_bridge.call_async(
+                        self._mcp_client_mgr.connect_stdio(config),
+                        callback=lambda result, err, n=config.name: (
+                            print(f"[MCP] {n}: {result[1] if result and not err else err}", flush=True)
+                            or (self._refresh_mcp_tools() if result and result[0] else None)
+                        ),
+                    )
+
+    def _refresh_mcp_tools(self) -> None:
+        """异步预取 MCP 工具列表并缓存。"""
+        if self._mcp_client_mgr is None:
+            return
+        self._mcp_bridge.call_async(
+            self._mcp_client_mgr.list_all_tools(),
+            callback=self._on_mcp_tools_ready,
+        )
+
+    def _on_mcp_tools_ready(self, tools: list, err: Optional[Exception]) -> None:
+        """MCP 工具列表就绪后的回调。"""
+        if err:
+            print(f"[MCP] 获取工具列表失败: {err}", flush=True)
+            return
+        if tools:
+            self._cached_mcp_tools = tools
+            server_count = self._mcp_client_mgr.get_server_count()
+            print(
+                f"[MCP] 已缓存 {len(tools)} 个工具，来自 {server_count} 个 Server",
+                flush=True,
+            )
+
     def _start_new_conversation(self, prompt_text: str):
         self._ai_messages = [{"role": "user", "content": prompt_text}]
         self._ai_conversation_id = uuid4().hex[:12]
@@ -848,6 +921,8 @@ class AIChatPanel(Gtk.Box):
 
     def _send_user_message(self, text: str):
         self._init_streaming_state()
+        # 初始化 MCP（幂等，仅首次有效）
+        self._init_mcp()
         # Build message content with or without pending image
         if self._ai_pending_image_hash:
             content = [
@@ -1001,6 +1076,9 @@ class AIChatPanel(Gtk.Box):
         ).start()
 
     def ask_llm_api(self, prompt_text: str, prompt_obj: Optional[CustomPrompt] = None):
+        # 初始化 MCP（幂等，仅首次有效）
+        self._init_mcp()
+
         # Show the AI panel
         self.separator.set_no_show_all(False)
         self.separator.show()
@@ -1079,6 +1157,7 @@ class AIChatPanel(Gtk.Box):
                               top_p: float = DEFAULT_TOP_P, markdown_text: str = "", conv_id: str = "",
                               extra_system_messages: Optional[list] = None):
         """Start the ReAct loop by delegating execution to the run_llm_react_loop orchestrator."""
+        # 等待 MCP 工具缓存就绪（异步预取可能还未完成，但后续迭代会拿到）
         cancel_event = threading.Event()
         
         # Initialize conversation background state
@@ -1205,6 +1284,8 @@ class AIChatPanel(Gtk.Box):
             switch_to_html_mode_fn=self._switch_to_html_mode,
             conv_id=conv_id,
             extra_system_messages=extra_system_messages,
+            mcp_tool_definitions=getattr(self, "_cached_mcp_tools", None),
+            mcp_client_manager=getattr(self, "_mcp_client_mgr", None),
         )
 
     def _contains_ask_user_question(self, turn_msgs: List[Dict]) -> bool:
@@ -1762,12 +1843,23 @@ class AIChatPanel(Gtk.Box):
     # ── Sub-agent status bar (polling + UI) ──────────────────────────────────
 
     def _on_destroy(self, widget):
-        """Clean up by unregistering the subagent status listener on destroy."""
+        """Clean up resources on destroy."""
         try:
             from tool_registry import unregister_subagent_status_listener
             unregister_subagent_status_listener(self._on_subagent_status_changed)
         except Exception:
             pass
+        # 关闭 MCP 连接
+        if self._mcp_client_mgr is not None and self._mcp_bridge is not None:
+            try:
+                self._mcp_bridge.call_async(self._mcp_client_mgr.disconnect_all())
+            except Exception:
+                pass
+        if self._mcp_bridge is not None:
+            try:
+                self._mcp_bridge.stop()
+            except Exception:
+                pass
 
     def _on_decide_policy(self, webview, decision, decision_type):
         """处理 WebView 导航策略：opencode:// URI 和外部链接。"""

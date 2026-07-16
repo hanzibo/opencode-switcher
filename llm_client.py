@@ -160,6 +160,9 @@ class _LLMHttpClient:
             elif role == "tool":
                 msg["content"] = content or ""
                 msg["tool_call_id"] = m.get("tool_call_id") or ""
+                name_val = m.get("name")
+                if name_val:
+                    msg["name"] = name_val
             else:
                 msg["content"] = content or ""
             cleaned_messages.append(msg)

@@ -58,6 +58,9 @@ def run_llm_react_loop(
     switch_to_html_mode_fn=None,
     conv_id: str = None,
     extra_system_messages: Optional[list] = None,
+    # ── MCP 支持 ──
+    mcp_tool_definitions: Optional[list] = None,
+    mcp_client_manager: Optional = None,
 ):
     set_tool_iteration_fn(0)
     tool_registry.set_current_conversation_id(conv_id)
@@ -103,6 +106,8 @@ def run_llm_react_loop(
                 on_tool_result_fn=on_tool_result_fn,
                 switch_to_html_mode_fn=switch_to_html_mode_fn,
                 extra_system_messages=extra_system_messages,
+                mcp_tool_definitions=mcp_tool_definitions,
+                mcp_client_manager=mcp_client_manager,
             )
             if not should_continue:
                 break
@@ -137,6 +142,9 @@ def _perform_llm_call(
     on_tool_result_fn=None,
     switch_to_html_mode_fn=None,
     extra_system_messages: Optional[list] = None,
+    # ── MCP 支持 ──
+    mcp_tool_definitions: Optional[list] = None,
+    mcp_client_manager: Optional = None,
 ) -> bool:
     assistant_text = ""
     reasoning_text = ""
@@ -146,11 +154,15 @@ def _perform_llm_call(
 
     try:
         cleaned_msgs = _clean_messages_for_llm(messages)
+        # 合并 MCP 工具定义到 LLM 请求
+        all_tools = list(tool_registry.TOOL_DEFINITIONS)
+        if mcp_tool_definitions:
+            all_tools.extend(mcp_tool_definitions)
         for event in llm_client.stream_chat_completion(
             base_url, api_key, model_name, cleaned_msgs,
             timeout=30, cancel_event=cancel_event,
             temperature=temperature, max_tokens=max_tokens, top_p=top_p,
-            tools=tool_registry.TOOL_DEFINITIONS,
+            tools=all_tools,
             tool_choice=tool_registry.TOOL_CHOICE_AUTO,
             extra_system_messages=extra_system_messages,
         ):
@@ -203,7 +215,35 @@ def _perform_llm_call(
                 if tc_name == "ask_user_question":
                     result = handle_ask_user_question_fn(tool_call_to_dict(tc))
                 else:
-                    result = tool_registry.execute_tool_call(tool_call_to_dict(tc), cancel_event=cancel_event)
+                    from mcp_integration import parse_mcp_tool_name
+                    mcp_server, mcp_tool = parse_mcp_tool_name(tc_name)
+
+                    if mcp_server != "builtin" and mcp_client_manager is not None:
+                        # MCP 工具调用（带命名空间前缀 server__tool）
+                        try:
+                            args = json.loads(tc.arguments)
+                            result = mcp_client_manager.bridge.run_coroutine(
+                                mcp_client_manager.call_tool(mcp_server, mcp_tool, args)
+                            )
+                        except Exception as e:
+                            result = f"❌ MCP 工具 '{tc_name}' 执行异常: {e}"
+                    elif mcp_client_manager is not None and mcp_tool_definitions is not None:
+                        # 无命名空间前缀：检查是否匹配 MCP 工具
+                        mcp_names = [s["function"]["name"].split("__", 1)[-1] for s in mcp_tool_definitions if "__" in s.get("function", {}).get("name", "")]
+                        mcp_servers = {s["function"]["name"].split("__", 1)[-1]: s["function"]["name"].split("__", 1)[0]
+                                       for s in mcp_tool_definitions if "__" in s.get("function", {}).get("name", "")}
+                        if tc_name in mcp_names:
+                            try:
+                                args_val = json.loads(tc.arguments)
+                                result = mcp_client_manager.bridge.run_coroutine(
+                                    mcp_client_manager.call_tool(mcp_servers[tc_name], tc_name, args_val)
+                                )
+                            except Exception as e:
+                                result = f"❌ MCP 工具 '{tc_name}' 执行异常: {e}"
+                        else:
+                            result = tool_registry.execute_tool_call(tool_call_to_dict(tc), cancel_event=cancel_event)
+                    else:
+                        result = tool_registry.execute_tool_call(tool_call_to_dict(tc), cancel_event=cancel_event)
                 if get_current_request_id_fn() != req_id:
                     return False
 
@@ -259,9 +299,13 @@ def _perform_llm_call(
             GLib.idle_add(on_llm_api_finished_fn, req_id)
             return False
 
-    except _LLMHttpError:
+    except _LLMHttpError as e:
+        print(f"[ToolLoop] LLM HTTP error: {e}", flush=True)
         GLib.idle_add(on_llm_api_finished_fn, req_id)
         return False
-    except Exception:
+    except Exception as e:
+        print(f"[ToolLoop] Unhandled exception: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         GLib.idle_add(on_llm_api_finished_fn, req_id)
         return False
