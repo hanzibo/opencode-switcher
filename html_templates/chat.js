@@ -709,10 +709,16 @@ function _renderMath(element) {
                     if (badge) {
                         if (badge.classList.contains('thinking')) {
                             // thinking badge → 切换为 thought badge
+                            var escapedContent = (_reasoningCache || '')
+                                .replace(/&/g, '&amp;')
+                                .replace(/"/g, '&quot;')
+                                .replace(/</g, '&lt;')
+                                .replace(/>/g, '&gt;');
                             const region = badge.closest('.bubble-region.reasoning-region');
                             if (region) {
                                 region.innerHTML = ''
-                                    + '<div class="reasoning-badge complete" onclick="toggleReasoning(this)">'
+                                    + '<div class="reasoning-badge complete" onclick="toggleReasoning(this)"'
+                                    + ' data-content="' + escapedContent + '">'
                                     +   '<span class="reasoning-icon">💭</span>'
                                     +   '<span class="reasoning-label">Thought</span>'
                                     +   '<span class="reasoning-expand-icon">▶</span>'
