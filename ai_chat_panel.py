@@ -2369,7 +2369,7 @@ class AIChatPanel(Gtk.Box):
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript("_autoScroll = true;", None, None)
         self._render_markdown(self._ai_markdown_text)
-        self._save_current_conversation()
+        self._save_current_conversation(self._build_model_snapshot())
 
     def _handle_rollback_command(self):
         self._cancel_streaming_if_active()
