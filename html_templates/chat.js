@@ -744,11 +744,9 @@ function _renderMath(element) {
                         // 展开
                         if (!contentDiv.dataset.rendered) {
                             _flushReasoningCache();
-                            // 优先级：流式缓存 > 收起时保存的副本 > 服务端预置内容（已在 DOM 中）
-                            var text = _reasoningCache || badgeEl.dataset.content;
-                            if (text) {
-                                contentDiv.textContent = text;
-                            }
+                            // 优先级：流式缓存 > 收起时保存的副本 > DOM 已有内容（服务端预渲染或旧缓存）
+                            var text = _reasoningCache || badgeEl.dataset.content || contentDiv.textContent;
+                            contentDiv.textContent = text;
                             contentDiv.dataset.rendered = 'true';
                         }
                         contentDiv.style.display = 'block';
