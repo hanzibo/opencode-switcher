@@ -38,6 +38,7 @@ from ai_text_utils import (
 )
 from ai_text_utils.render import _render_tool_card_standalone
 from render_pipeline import render_turn, TurnRenderInput, build_update_js
+from theme_config import get_ai_gtk_colors
 
 # Regex to match placeholders: ${index[:prompt][=default]}
 # - Group 1: index (\d+)
@@ -103,10 +104,8 @@ class AIChatPanel(Gtk.Box):
     _ESTIMATED_OVERHEAD_PER_MSG = 20  # role/tool_call_id 等结构字段的字符开销估算
 
     # 主题颜色——通过 theme_config 统一管理
-    @staticmethod
-    def _get_gtk_colors(theme_name: str) -> dict:
+    def _get_gtk_colors(self, theme_name: str) -> dict:
         """Return dict with 'bg', 'header_bg', 'input_bg' as Gdk.RGBA."""
-        from theme_config import get_ai_gtk_colors
         raw = get_ai_gtk_colors(theme_name)
         return {k: Gdk.RGBA(*v) for k, v in raw.items()}
 

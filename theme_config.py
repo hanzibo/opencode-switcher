@@ -18,7 +18,6 @@ from typing import Dict, Any
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
 CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
-THEME_OVERRIDE_PATH = os.path.join(CONFIG_DIR, "theme_overrides.json")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Color palette – all values live here, and only here.
@@ -198,33 +197,36 @@ def get_ai_gtk_colors(name: str) -> dict:
     }
 
 
-# ── Persistence (user overrides) ──────────────────────────────────────────────
+# ── Persistence (theme choice) ────────────────────────────────────────────────
 
-_user_overrides: dict = {}
+def load_theme_config() -> str:
+    """Return the persisted theme name (``"dark"`` or ``"light"``).
 
-
-def load_overrides():
-    """Load user colour overrides from disk (if any)."""
-    global _user_overrides
+    Falls back to ``"dark"`` when the config file is missing or corrupt.
+    """
+    cfg_path = os.path.join(CONFIG_DIR, "config.json")
     try:
-        if os.path.isfile(THEME_OVERRIDE_PATH):
-            with open(THEME_OVERRIDE_PATH) as f:
-                _user_overrides = json.load(f)
+        with open(cfg_path) as f:
+            return json.load(f).get("theme", "dark")
     except Exception:
-        _user_overrides = {}
+        return "dark"
 
 
-def save_overrides(overrides: dict):
-    """Persist user colour overrides to disk."""
-    global _user_overrides
-    _user_overrides = overrides
+def save_theme_config(theme_name: str):
+    """Persist the chosen theme to ``config.json``.
+
+    Called by both the tray menu (main.py) and the Settings dialog.
+    """
+    cfg_path = os.path.join(CONFIG_DIR, "config.json")
     os.makedirs(CONFIG_DIR, exist_ok=True)
     try:
-        with open(THEME_OVERRIDE_PATH, "w") as f:
-            json.dump(overrides, f, indent=2)
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+    except Exception:
+        cfg = {}
+    cfg["theme"] = theme_name
+    try:
+        with open(cfg_path, "w") as f:
+            json.dump(cfg, f)
     except Exception as e:
-        print(f"Error saving theme overrides: {e}", flush=True)
-
-
-# Load overrides at import time
-load_overrides()
+        print(f"Error saving theme: {e}", flush=True)

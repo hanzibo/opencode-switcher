@@ -527,8 +527,6 @@ class SettingsDialog:
         Allows switching between Dark and Light themes.
         The change is applied on Save via the ``on_theme_changed`` callback.
         """
-        from theme_config import get_theme
-
         outer_sw = Gtk.ScrolledWindow.new()
         outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         outer_sw.set_vexpand(True)
@@ -855,23 +853,11 @@ class SettingsDialog:
 
         # 主题设置
         new_theme = "light" if self._theme_light_radio.get_active() else "dark"
-        if new_theme != self._current_theme and self._on_theme_changed:
-            # Save theme to config.json
-            import json, os
-            cfg_path = os.path.expanduser("~/.config/opencode-switcher/config.json")
-            try:
-                os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
-                with open(cfg_path) as f:
-                    cfg = json.load(f)
-            except Exception:
-                cfg = {}
-            cfg["theme"] = new_theme
-            try:
-                with open(cfg_path, "w") as f:
-                    json.dump(cfg, f)
-            except Exception as e:
-                print(f"Error saving theme: {e}", flush=True)
-            self._on_theme_changed(new_theme)
+        if new_theme != self._current_theme:
+            from theme_config import save_theme_config
+            save_theme_config(new_theme)
+            if self._on_theme_changed:
+                self._on_theme_changed(new_theme)
 
         if self.on_settings_saved:
             self.on_settings_saved()

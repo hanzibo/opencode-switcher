@@ -575,6 +575,7 @@ class ClipboardPanel(Gtk.Box):
             " background: rgba(46,204,113,0.1); border: 1px solid rgba(46,204,113,0.25);"
             " border-radius: 4px; padding: 2px 6px; margin-left: 4px; }"
             ".code-lang-tag { color: %(sel_border)s; font-size: 10px; font-weight: bold; margin-bottom: 2px; }"
+            "/* GTK3 >= 3.20 CSS node selectors for GtkNotebook tab bar styling */"
             ".custom-dialog notebook, .custom-dialog notebook > stack { border: none; background-color: transparent; }"
             ".custom-dialog notebook > header { border: none; background-color: transparent; }"
             ".custom-dialog notebook tabs { border: none; background-color: transparent; }"

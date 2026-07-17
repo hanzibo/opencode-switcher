@@ -13,6 +13,7 @@ import difflib
 import os
 import time
 from utils import relative_time, request_window_focus, PANEL_WIDTH
+from theme_config import get_theme, get_panel_css_vals
 
 
 def _get_active_monitor_geometry():
@@ -209,7 +210,6 @@ class SearchPanel:
 
     def _set_theme(self, name: str):
         self._theme = name
-        from theme_config import get_theme, get_panel_css_vals
         t = get_theme(name)
         bg = Gdk.RGBA
 

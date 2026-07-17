@@ -1,5 +1,4 @@
 #!/usr/bin/python3
-import json
 import os
 import fcntl
 import subprocess
@@ -21,28 +20,12 @@ from clipboard_store import ClipboardStore, CategoryStore
 from clipboard_panel import ClipboardPanel
 from memory_manager_dialog import show_memory_manager_dialog
 
-CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
-CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
-
-
-def _load_config() -> dict:
-    try:
-        with open(CONFIG_PATH) as f:
-            return json.load(f)
-    except Exception:
-        return {"theme": "dark"}
-
-
-def _save_config(config: dict):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(config, f)
+from theme_config import load_theme_config
 
 
 class App:
     def __init__(self):
-        config = _load_config()
-        self._theme = config.get("theme", "dark")
+        self._theme = load_theme_config()
         try:
             from migrate_history import run_migration
             run_migration()
@@ -119,9 +102,8 @@ class App:
     def _on_theme_changed(self, theme: str):
         self._theme = theme
         self._panel.set_theme(theme)
-        config = _load_config()
-        config["theme"] = theme
-        _save_config(config)
+        from theme_config import save_theme_config
+        save_theme_config(theme)
 
     def _confirm_quit(self):
         dialog = Gtk.MessageDialog(
