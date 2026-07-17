@@ -576,9 +576,13 @@ class ClipboardPanel(Gtk.Box):
             " border-radius: 4px; padding: 2px 6px; margin-left: 4px; }"
             ".code-lang-tag { color: %(sel_border)s; font-size: 10px; font-weight: bold; margin-bottom: 2px; }"
             ".custom-dialog notebook, .custom-dialog notebook > stack { border: none; background-color: transparent; }"
-            ".custom-dialog frame, .custom-dialog GtkFrame { background-color: %(dialog_bg)s; border: 1px solid %(input_border)s; border-radius: 8px; padding: 4px; }"
+            ".custom-dialog notebook > header { border: none; background-color: transparent; }"
+            ".custom-dialog notebook tabs { border: none; background-color: transparent; }"
+            ".custom-dialog notebook tab { border: none; background-color: transparent; padding: 6px 12px; }"
+            ".custom-dialog notebook tab:checked { border-bottom: 2px solid %(sel_border)s; }"
+            ".custom-dialog frame, .custom-dialog GtkFrame { background-color: transparent; border: none; padding: 0; }"
             ".custom-dialog frame > label { color: %(text_fg)s; font-weight: bold; padding-left: 8px; }"
-            ".custom-dialog frame > border { border-color: %(input_border)s; }"
+            ".custom-dialog frame > border { border: none; }"
 
             # ── AI Chat Panel / Popover / WebView Styles ──
             ".history-dropdown-btn { font-size: 13px; padding: 2px 8px; min-height: 28px; border-radius: 6px; color: %(text_fg)s; background: %(btn_bg)s; background-image: none; }"
