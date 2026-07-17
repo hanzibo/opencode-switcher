@@ -377,13 +377,14 @@
                 }
 
                 .light .msg-bubble.user {
-                    background: rgba(99, 102, 241, 0.07);
-                    border-color: rgba(99, 102, 241, 0.15);
-                    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.03);
+                    background: rgba(99, 102, 241, 0.12);
+                    border-color: rgba(99, 102, 241, 0.25);
+                    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.08);
                 }
                 .light .msg-bubble.assistant {
-                    background: rgba(0, 0, 0, 0.015);
-                    border-color: rgba(0, 0, 0, 0.04);
+                    background: rgba(0, 0, 0, 0.03);
+                    border-color: rgba(0, 0, 0, 0.08);
+                    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
                 }
 
                 .user-content {
@@ -495,20 +496,20 @@
                     overflow-y: auto;
                 }
                 .light .reasoning-badge.thinking {
+                    background: rgba(2, 132, 199, 0.10);
+                    border-color: rgba(2, 132, 199, 0.22);
+                }
+                .light .reasoning-badge.complete {
                     background: rgba(2, 132, 199, 0.06);
                     border-color: rgba(2, 132, 199, 0.15);
                 }
-                .light .reasoning-badge.complete {
-                    background: rgba(2, 132, 199, 0.04);
-                    border-color: rgba(2, 132, 199, 0.10);
-                }
                 .light .reasoning-badge.complete:hover {
-                    background: rgba(2, 132, 199, 0.08);
+                    background: rgba(2, 132, 199, 0.12);
                 }
                 .light .reasoning-content {
                     color: rgba(15, 23, 42, 0.75);
-                    background: rgba(0, 0, 0, 0.015);
-                    border-color: rgba(0, 0, 0, 0.06);
+                    background: rgba(0, 0, 0, 0.04);
+                    border-color: rgba(0, 0, 0, 0.10);
                 }
 
                 /* ── Summary Display（摘要压缩实时显示） ── */
@@ -539,13 +540,13 @@
                     opacity: 0.4;
                 }
                 .light .summary-display {
-                    background: rgba(99, 102, 241, 0.04);
-                    border-color: rgba(99, 102, 241, 0.12);
+                    background: rgba(99, 102, 241, 0.08);
+                    border-color: rgba(99, 102, 241, 0.20);
                 }
 
                 .light details.thinking-details {
-                    background: rgba(0, 0, 0, 0.02);
-                    border: 1px solid rgba(0, 0, 0, 0.06);
+                    background: rgba(0, 0, 0, 0.04);
+                    border: 1px solid rgba(0, 0, 0, 0.10);
                 }
 
                 .light .thinking-content {
@@ -634,19 +635,19 @@
                     overflow: auto;
                 }
                 .light details.tool-step-details {
-                    background: rgba(0, 0, 0, 0.02);
-                    border-color: rgba(0, 0, 0, 0.06);
+                    background: rgba(0, 0, 0, 0.04);
+                    border-color: rgba(0, 0, 0, 0.10);
                 }
                 .light .tool-step-content {
-                    background: rgba(0, 0, 0, 0.03);
+                    background: rgba(0, 0, 0, 0.05);
                 }
                 .light .tool-step-result pre {
-                    background: rgba(255, 255, 255, 0.8) !important;
-                    border-color: rgba(0, 0, 0, 0.08) !important;
+                    background: rgba(255, 255, 255, 0.9) !important;
+                    border-color: rgba(0, 0, 0, 0.12) !important;
                     color: inherit !important;
                 }
                 .light .tool-step-args {
-                    color: rgba(15, 23, 42, 0.6);
+                    color: rgba(15, 23, 42, 0.7);
                 }
 
                 /* Action Button Row Hover-Reveal & Pill Styling */
@@ -884,6 +885,10 @@
                     margin: 8px 0;
                     background: rgba(0,0,0,0.01);
                 }
+                .light .rollback-panel {
+                    background: rgba(0,0,0,0.03);
+                    border-color: rgba(0,0,0,0.10);
+                }
                 .dark .rollback-panel {
                     border: 1px solid rgba(255,255,255,0.12);
                     background: rgba(255,255,255,0.01);
@@ -908,6 +913,10 @@
                     padding: 8px 10px;
                     margin: 6px 0;
                     background: rgba(0,0,0,0.02);
+                }
+                .light .rollback-card {
+                    background: rgba(0,0,0,0.04);
+                    border-color: rgba(0,0,0,0.10);
                 }
                 .dark .rollback-card {
                     border: 1px solid rgba(255,255,255,0.12);
@@ -1012,6 +1021,10 @@
                     animation: ask-user-pulse 3s infinite ease-in-out;
                     transition: transform 0.2s ease, box-shadow 0.2s ease;
                 }
+                .light .tool-ask-user {
+                    background: rgba(99, 102, 241, 0.05);
+                    border-color: rgba(99, 102, 241, 0.30);
+                }
                 .dark .tool-ask-user {
                     border: 1px solid rgba(129, 140, 248, 0.25);
                     border-left: 4px solid #818cf8;
@@ -1032,6 +1045,10 @@
                     display: flex;
                     align-items: center;
                     gap: 6px;
+                }
+                .light .tool-ask-user-header {
+                    background: linear-gradient(90deg, rgba(99, 102, 241, 0.14) 0%, rgba(99, 102, 241, 0.03) 100%);
+                    border-bottom: 1px solid rgba(99, 102, 241, 0.18);
                 }
                 .dark .tool-ask-user-header {
                     background: linear-gradient(90deg, rgba(129, 140, 248, 0.12) 0%, rgba(129, 140, 248, 0.02) 100%);
@@ -1059,6 +1076,10 @@
                     color: #4f46e5;
                     font-style: italic;
                     opacity: 0.95;
+                }
+                .light .tool-ask-user-footer {
+                    background: rgba(99, 102, 241, 0.04);
+                    border-top: 1px solid rgba(99, 102, 241, 0.12);
                 }
                 .dark .tool-ask-user-footer {
                     background: rgba(129, 140, 248, 0.01);

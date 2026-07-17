@@ -126,16 +126,16 @@ def get_html_template(theme_name: str, initial_html: str = "",
     else:
         bg_color = "#ffffff"
         text_color = "rgba(15,23,42,0.92)"
-        pre_bg = "rgba(0,0,0,0.02)"
-        code_bg = "rgba(0,0,0,0.04)"
+        pre_bg = "rgba(0,0,0,0.04)"
+        code_bg = "rgba(0,0,0,0.06)"
         code_fg = "#e11d48"
-        pre_border = "rgba(0,0,0,0.08)"
+        pre_border = "rgba(0,0,0,0.12)"
         thinking_color = "#0284c7"
         answer_color = "#d97706"
         user_color = "#6366f1"
         assistant_color = "#0d9488"
-        table_header_bg = "rgba(0,0,0,0.04)"
-        table_alt_bg = "rgba(0,0,0,0.02)"
+        table_header_bg = "rgba(0,0,0,0.06)"
+        table_alt_bg = "rgba(0,0,0,0.03)"
         toggle_color = "#0284c7"
 
     # 替换 CSS 中的 {variable} 占位符

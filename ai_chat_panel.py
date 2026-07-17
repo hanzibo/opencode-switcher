@@ -105,6 +105,8 @@ class AIChatPanel(Gtk.Box):
     # 背景色常量（dark / light），用于 _build_ui 和 set_theme
     _BG_DARK = Gdk.RGBA(0.039, 0.043, 0.063, 1.0)   # #0a0b10
     _BG_LIGHT = Gdk.RGBA(1.0, 1.0, 1.0, 1.0)       # #ffffff
+    _HEADER_BG_LIGHT = Gdk.RGBA(0.965, 0.973, 0.980, 1.0)  # #f6f8fa
+    _INPUT_BG_LIGHT = Gdk.RGBA(0.976, 0.980, 0.984, 1.0)   # #f9fafb
 
     def __init__(self, conversation_store, llm_settings_store, ai_settings_store=None, theme="dark", ai_commands=None, pygments_css_cache=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -351,13 +353,17 @@ class AIChatPanel(Gtk.Box):
         # Synchronize background colors to prevent Wayland resize flickering/leaks
         if self._theme == "dark":
             bg_rgba = self._BG_DARK
+            hdr_rgba = self._BG_DARK
+            input_rgba = self._BG_DARK
         else:
             bg_rgba = self._BG_LIGHT
+            hdr_rgba = self._HEADER_BG_LIGHT
+            input_rgba = self._INPUT_BG_LIGHT
 
         self.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
         ai_scrolled.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
         self._ai_webview.set_background_color(bg_rgba)
-        ai_hdr.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
+        ai_hdr.override_background_color(Gtk.StateFlags.NORMAL, hdr_rgba)
 
         self.pack_start(ai_scrolled, True, True, 0)
 
@@ -365,7 +371,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_input_area = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
         self._ai_input_area.set_no_show_all(True)
         self._ai_input_area.set_margin_top(4)
-        self._ai_input_area.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
+        self._ai_input_area.override_background_color(Gtk.StateFlags.NORMAL, input_rgba)
 
         # Sub-agent status bar (shown when background sub-agents exist)
         self._ai_subagent_bar = Gtk.FlowBox.new()
@@ -3931,15 +3937,27 @@ class AIChatPanel(Gtk.Box):
         # Update GTK widget background colors to match the new theme
         if name == "dark":
             bg_rgba = self._BG_DARK
+            hdr_rgba = self._BG_DARK
         else:
             bg_rgba = self._BG_LIGHT
+            hdr_rgba = self._HEADER_BG_LIGHT
 
-        for w in (self, self._ai_scrolled, self._ai_hdr, self._ai_input_area):
+        for w in (self, self._ai_scrolled):
             if w is not None:
                 try:
                     w.override_background_color(Gtk.StateFlags.NORMAL, bg_rgba)
                 except Exception:
                     pass
+        if self._ai_input_area is not None:
+            try:
+                self._ai_input_area.override_background_color(Gtk.StateFlags.NORMAL, hdr_rgba if name == "dark" else self._INPUT_BG_LIGHT)
+            except Exception:
+                pass
+        if self._ai_hdr is not None:
+            try:
+                self._ai_hdr.override_background_color(Gtk.StateFlags.NORMAL, hdr_rgba)
+            except Exception:
+                pass
         if self._ai_webview:
             self._ai_webview.set_background_color(bg_rgba)
 
