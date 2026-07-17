@@ -96,6 +96,15 @@
                     max-height: 200px;
                     overflow-y: auto;
                 }
+                .light .tool-result-box {
+                    border-color: rgba(13, 148, 136, 0.20);
+                    border-left-color: rgba(13, 148, 136, 0.50);
+                    background: rgba(13, 148, 136, 0.04);
+                }
+                .light .tool-result-header {
+                    background: rgba(13, 148, 136, 0.08);
+                    border-bottom-color: rgba(13, 148, 136, 0.12);
+                }
                 .copy-btn {
                     position: absolute;
                     top: 4px;
@@ -608,6 +617,9 @@
                     overflow: hidden;
                     text-overflow: ellipsis;
                     white-space: nowrap;
+                }
+                .light .tool-step-purpose {
+                    color: #0d9488;
                 }
                 @keyframes spin {
                     100% { transform: rotate(360deg); }
