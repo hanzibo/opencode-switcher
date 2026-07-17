@@ -351,6 +351,14 @@
                     border: 1px solid rgba(6, 182, 212, 0.35);
                     box-shadow: 0 4px 10px rgba(6, 182, 212, 0.22);
                 }
+                .light .msg-avatar.user {
+                    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15);
+                    border-color: rgba(99, 102, 241, 0.25);
+                }
+                .light .msg-avatar.assistant {
+                    box-shadow: 0 2px 8px rgba(6, 182, 212, 0.12);
+                    border-color: rgba(6, 182, 212, 0.20);
+                }
                 .msg-bubble {
                     position: relative;
                     max-width: 82%;
