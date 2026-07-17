@@ -26,6 +26,9 @@ class _MCPClient:
     直接实现 JSON-RPC 2.0 协议，通过 asyncio 子进程 stdin/stdout 通信。
     """
 
+    _STREAM_LIMIT = 10 * 1024 * 1024  # 流缓冲区 10MB（大 JSON 截图/base64）
+    _REQUEST_TIMEOUT = 120  # 单次请求超时秒数（浏览器操作耗时较长）
+
     def __init__(self) -> None:
         self._process: Optional[asyncio.subprocess.Process] = None
         self._request_id = 0
@@ -54,7 +57,7 @@ class _MCPClient:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            limit=10 * 1024 * 1024,
+            limit=self._STREAM_LIMIT,
         )
 
         # 启动后台读取任务
@@ -164,7 +167,7 @@ class _MCPClient:
         await self._send_line(msg)
 
         try:
-            response = await asyncio.wait_for(fut, timeout=120)
+            response = await asyncio.wait_for(fut, timeout=self._REQUEST_TIMEOUT)
             return response
         except asyncio.TimeoutError:
             self._pending.pop(req_id, None)
@@ -249,7 +252,6 @@ class MCPClientManager:
                 return False, f"Server '{config.name}' 已连接"
             # 有旧连接但已断开（如 reader 崩溃），先清理
             await existing.disconnect()
-            del self._clients[config.name]
 
         client = _MCPClient()
         try:
