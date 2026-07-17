@@ -225,6 +225,7 @@ class SearchPanel:
         vals = get_panel_css_vals(name)
         css = (
             "window { border: 1px solid %(window_border)s; }"
+            ".custom-dialog { border: none; }"
             "#searchEntry { font-size: 24px; padding: 12px 16px; background: %(search_bg)s;"
             " color: %(search_fg)s; border: 1px solid %(input_border)s; border-radius: 8px;"
             " caret-color: %(caret)s; margin: 16px 20px 10px 20px; }"
