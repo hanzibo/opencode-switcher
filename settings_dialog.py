@@ -24,9 +24,21 @@ def show_settings_dialog(parent_window: Gtk.Window,
                          ai_settings_store: Optional[AISettingsStore] = None,
                          on_dialog_shown: Optional[Callable[[], None]] = None,
                          on_dialog_hidden: Optional[Callable[[], None]] = None,
-                         on_settings_saved: Optional[Callable[[], None]] = None):
-    """Factory: create and show the Settings dialog."""
-    SettingsDialog(parent_window, ai_settings_store, on_dialog_shown, on_dialog_hidden, on_settings_saved)
+                         on_settings_saved: Optional[Callable[[], None]] = None,
+                         current_theme: str = "dark",
+                         on_theme_changed: Optional[Callable[[str], None]] = None):
+    """Factory: create and show the Settings dialog.
+
+    Parameters
+    ----------
+    current_theme : str
+        Current theme name (``"dark"`` or ``"light"``) for the Theme tab.
+    on_theme_changed : callable, optional
+        Called with the new theme name when the user changes and saves theme.
+    """
+    SettingsDialog(parent_window, ai_settings_store, on_dialog_shown,
+                   on_dialog_hidden, on_settings_saved,
+                   current_theme, on_theme_changed)
 
 
 class SettingsDialog:
@@ -41,11 +53,15 @@ class SettingsDialog:
                  ai_settings_store: Optional[AISettingsStore] = None,
                  on_dialog_shown: Optional[Callable[[], None]] = None,
                  on_dialog_hidden: Optional[Callable[[], None]] = None,
-                 on_settings_saved: Optional[Callable[[], None]] = None):
+                 on_settings_saved: Optional[Callable[[], None]] = None,
+                 current_theme: str = "dark",
+                 on_theme_changed: Optional[Callable[[str], None]] = None):
         self.parent_window = parent_window
         self.on_dialog_shown = on_dialog_shown
         self.on_dialog_hidden = on_dialog_hidden
         self.on_settings_saved = on_settings_saved
+        self._current_theme = current_theme
+        self._on_theme_changed = on_theme_changed
 
         # ── Tab registry: extend here for future tabs ──
         self._tabs = [
@@ -54,6 +70,7 @@ class SettingsDialog:
             ("流式输出", self._build_streaming_tab),
             ("MCP 服务器", self._build_mcp_tab),
             ("常量配置", self._build_constants_tab),
+            ("主题", self._build_theme_tab),
         ]
 
         self._qq_store = QQMailCredentialsStore()
@@ -498,6 +515,65 @@ class SettingsDialog:
 
         return outer_sw
 
+    # ── Tab: 主题 ──────────────────────────────────────────────────────
+
+    def _build_theme_tab(self):
+        """Build the Theme configuration tab page.
+
+        Allows switching between Dark and Light themes.
+        The change is applied on Save via the ``on_theme_changed`` callback.
+        """
+        from theme_config import get_theme
+
+        outer_sw = Gtk.ScrolledWindow.new()
+        outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        outer_sw.set_vexpand(True)
+
+        vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+        vbox.set_margin_start(16)
+        vbox.set_margin_end(16)
+        vbox.set_margin_top(12)
+        vbox.set_margin_bottom(12)
+        outer_sw.add(vbox)
+
+        # ── Dark / Light radio buttons ──
+        theme_lbl = Gtk.Label.new()
+        theme_lbl.set_markup("<b>界面主题</b>")
+        theme_lbl.set_xalign(0)
+        vbox.pack_start(theme_lbl, False, False, 0)
+
+        self._theme_dark_radio = Gtk.RadioButton.new_with_label(None, "深色 (Dark)")
+        self._theme_light_radio = Gtk.RadioButton.new_with_label_from_widget(
+            self._theme_dark_radio, "浅色 (Light)"
+        )
+        if self._current_theme == "light":
+            self._theme_light_radio.set_active(True)
+        else:
+            self._theme_dark_radio.set_active(True)
+
+        vbox.pack_start(self._theme_dark_radio, False, False, 0)
+        vbox.pack_start(self._theme_light_radio, False, False, 0)
+
+        # ── Preview hint ──
+        hint = Gtk.Label.new()
+        theme_name = "Light" if self._current_theme == "light" else "Dark"
+        hint.set_markup(
+            f"<span size='small' foreground='#888888'>"
+            f"当前主题：{theme_name}。\n"
+            f"更改保存后立即生效。"
+            f"</span>"
+        )
+        hint.set_xalign(0)
+        hint.set_margin_top(12)
+        vbox.pack_start(hint, False, False, 0)
+
+        # ── Spacer ──
+        spacer = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        spacer.set_vexpand(True)
+        vbox.pack_start(spacer, True, True, 0)
+
+        return outer_sw
+
     # ── Tab: 常量配置 ──────────────────────────────────────────────────
 
     def _build_constants_tab(self):
@@ -769,6 +845,26 @@ class SettingsDialog:
             })
         self._ai_settings_store.mcp_servers = mcp_servers
         self._ai_settings_store.save()
+
+        # 主题设置
+        new_theme = "light" if self._theme_light_radio.get_active() else "dark"
+        if new_theme != self._current_theme and self._on_theme_changed:
+            # Save theme to config.json
+            import json, os
+            cfg_path = os.path.expanduser("~/.config/opencode-switcher/config.json")
+            try:
+                os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
+                with open(cfg_path) as f:
+                    cfg = json.load(f)
+            except Exception:
+                cfg = {}
+            cfg["theme"] = new_theme
+            try:
+                with open(cfg_path, "w") as f:
+                    json.dump(cfg, f)
+            except Exception as e:
+                print(f"Error saving theme: {e}", flush=True)
+            self._on_theme_changed(new_theme)
 
         if self.on_settings_saved:
             self.on_settings_saved()

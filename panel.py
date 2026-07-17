@@ -209,48 +209,20 @@ class SearchPanel:
 
     def _set_theme(self, name: str):
         self._theme = name
-        bg, fg1, fg2, fg3 = Gdk.RGBA, Gdk.RGBA, Gdk.RGBA, Gdk.RGBA
-        sep = self._separator_rgba if hasattr(self, "_separator_rgba") else (1, 1, 1, 1.0)
-        if name == "dark":
-            self._bg_color = bg(0.039, 0.043, 0.063, 1.0)
-            self._title_color = bg(0.95, 0.96, 0.98, 1.0)
-            self._dir_color = bg(0.39, 0.45, 0.55, 1.0)
-            self._snippet_color = bg(0.28, 0.33, 0.41, 1.0)
-            self._separator_rgba = (1, 1, 1, 0.05)
-            self._default_separator_rgba = (1, 1, 1, 0.05)
-            self._dot_live = (0.063, 0.725, 0.506, 0.9)
-            self._dot_recent = (0.960, 0.620, 0.043, 0.8)
-            self._dot_closed = (0.392, 0.455, 0.545, 0.5)
-            vals = dict(
-                window_border="rgba(255,255,255,0.04)", hover_bg="rgba(255,255,255,0.03)",
-                sel_bg="rgba(129,140,248,0.10)", sel_border="#818cf8", search_bg="#12131a",
-                search_fg="#f1f5f9", caret="#818cf8", input_border="rgba(255,255,255,0.06)",
-                tab_fg="rgba(255,255,255,0.45)", tab_active_fg="#ffffff",
-                dialog_bg="#0a0b10", text_fg="#f1f5f9",
-                input_bg="#12131a", input_fg="#f1f5f9",
-                btn_bg="rgba(255,255,255,0.04)", btn_border="rgba(255,255,255,0.06)",
-                btn_hover="rgba(129,140,248,0.12)", btn_active="rgba(129,140,248,0.18)",
-            )
-        else:
-            self._bg_color = bg(0.965, 0.973, 0.980, 1.0)
-            self._title_color = bg(0.09, 0.09, 0.11, 1.0)
-            self._dir_color = bg(0.39, 0.45, 0.55, 1.0)
-            self._snippet_color = bg(0.39, 0.45, 0.55, 0.70)
-            self._separator_rgba = (0, 0, 0, 0.08)
-            self._default_separator_rgba = (0, 0, 0, 0.08)
-            self._dot_live = (0.020, 0.588, 0.412, 0.85)
-            self._dot_recent = (0.850, 0.467, 0.024, 0.75)
-            self._dot_closed = (0.580, 0.639, 0.722, 0.4)
-            vals = dict(
-                window_border="rgba(0,0,0,0.06)", hover_bg="rgba(0,0,0,0.03)",
-                sel_bg="rgba(79,70,229,0.08)", sel_border="#4f46e5", search_bg="#ffffff",
-                search_fg="#0f172a", caret="#4f46e5", input_border="rgba(0,0,0,0.08)",
-                tab_fg="rgba(15,23,42,0.55)", tab_active_fg="#0f172a",
-                dialog_bg="#ffffff", text_fg="#0f172a",
-                input_bg="#ffffff", input_fg="#0f172a",
-                btn_bg="rgba(0,0,0,0.04)", btn_border="rgba(0,0,0,0.08)",
-                btn_hover="rgba(0,0,0,0.06)", btn_active="rgba(0,0,0,0.10)",
-            )
+        from theme_config import get_theme, get_panel_css_vals
+        t = get_theme(name)
+        bg = Gdk.RGBA
+
+        self._bg_color = bg(*t["panel_bg"])
+        self._title_color = bg(*t["panel_title"])
+        self._dir_color = bg(*t["panel_dir"])
+        self._snippet_color = bg(*t["panel_snippet"])
+        self._separator_rgba = t["panel_separator"]
+        self._default_separator_rgba = t["panel_separator"]
+        self._dot_live = t["dot_live"]
+        self._dot_recent = t["dot_recent"]
+        self._dot_closed = t["dot_closed"]
+        vals = get_panel_css_vals(name)
         css = (
             "window { border: 1px solid %(window_border)s; }"
             "#searchEntry { font-size: 24px; padding: 12px 16px; background: %(search_bg)s;"

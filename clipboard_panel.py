@@ -1328,6 +1328,8 @@ class ClipboardPanel(Gtk.Box):
             on_dialog_shown=self.on_dialog_shown,
             on_dialog_hidden=self.on_dialog_hidden,
             on_settings_saved=self._ai_chat_panel._reconfigure_mcp,
+            current_theme=self._theme,
+            on_theme_changed=self.set_theme,
         )
 
     def _on_content_key(self, _widget, event):

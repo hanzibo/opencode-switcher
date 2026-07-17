@@ -109,53 +109,8 @@ def get_html_template(theme_name: str, initial_html: str = "",
         Syntax-highlighting CSS from ``_get_pygments_css`` (caller-computed
         to allow caching). Pass empty string to omit highlighting.
     """
-    if theme_name == "dark":
-        bg_color = "#0a0b10"
-        text_color = "rgba(255,255,255,0.95)"
-        pre_bg = "#12131a"
-        code_bg = "rgba(255,255,255,0.06)"
-        code_fg = "#f43f5e"
-        pre_border = "rgba(255,255,255,0.08)"
-        thinking_color = "#38bdf8"
-        answer_color = "#f59e0b"
-        user_color = "#818cf8"
-        assistant_color = "#2dd4bf"
-        table_header_bg = "rgba(255,255,255,0.06)"
-        table_alt_bg = "rgba(255,255,255,0.03)"
-        toggle_color = "#38bdf8"
-    else:
-        bg_color = "#ffffff"
-        text_color = "rgba(15,23,42,0.92)"
-        pre_bg = "rgba(0,0,0,0.04)"
-        code_bg = "rgba(0,0,0,0.06)"
-        code_fg = "#e11d48"
-        pre_border = "rgba(0,0,0,0.12)"
-        thinking_color = "#0284c7"
-        answer_color = "#d97706"
-        user_color = "#6366f1"
-        assistant_color = "#0d9488"
-        table_header_bg = "rgba(0,0,0,0.06)"
-        table_alt_bg = "rgba(0,0,0,0.03)"
-        toggle_color = "#0284c7"
-
-    # 替换 CSS 中的 {variable} 占位符
-    # 注意：不能用 .format()——CSS 选择器中的 { } 会使它崩溃
-    # 改用 str.replace() 逐项替换
-    css_vars = {
-        "bg_color": bg_color,
-        "text_color": text_color,
-        "pre_bg": pre_bg,
-        "code_bg": code_bg,
-        "code_fg": code_fg,
-        "pre_border": pre_border,
-        "thinking_color": thinking_color,
-        "answer_color": answer_color,
-        "user_color": user_color,
-        "assistant_color": assistant_color,
-        "table_header_bg": table_header_bg,
-        "table_alt_bg": table_alt_bg,
-        "toggle_color": toggle_color,
-    }
+    from theme_config import get_web_css_vars
+    css_vars = get_web_css_vars(theme_name)
     css_content = _CHAT_CSS
     for key, value in css_vars.items():
         css_content = css_content.replace("{" + key + "}", value)
