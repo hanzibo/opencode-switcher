@@ -152,6 +152,7 @@ class SettingsDialog:
         outer_sw = Gtk.ScrolledWindow.new()
         outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         outer_sw.set_vexpand(True)
+        outer_sw.set_shadow_type(Gtk.ShadowType.NONE)
 
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
         vbox.set_margin_start(16)
@@ -243,6 +244,7 @@ class SettingsDialog:
         outer_sw = Gtk.ScrolledWindow.new()
         outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         outer_sw.set_vexpand(True)
+        outer_sw.set_shadow_type(Gtk.ShadowType.NONE)
 
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
         vbox.set_margin_start(16)
@@ -336,6 +338,7 @@ class SettingsDialog:
         scrolled = Gtk.ScrolledWindow.new()
         scrolled.set_min_content_height(120)
         scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_shadow_type(Gtk.ShadowType.NONE)
         self._summary_prompt_view = Gtk.TextView.new()
         self._summary_prompt_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
         self._summary_prompt_view.set_monospace(True)
@@ -418,6 +421,7 @@ class SettingsDialog:
         outer_sw = Gtk.ScrolledWindow.new()
         outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         outer_sw.set_vexpand(True)
+        outer_sw.set_shadow_type(Gtk.ShadowType.NONE)
 
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
         vbox.set_margin_start(16)
@@ -528,6 +532,7 @@ class SettingsDialog:
         outer_sw = Gtk.ScrolledWindow.new()
         outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         outer_sw.set_vexpand(True)
+        outer_sw.set_shadow_type(Gtk.ShadowType.NONE)
 
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
         vbox.set_margin_start(16)
@@ -587,6 +592,7 @@ class SettingsDialog:
         outer_sw = Gtk.ScrolledWindow.new()
         outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         outer_sw.set_vexpand(True)
+        outer_sw.set_shadow_type(Gtk.ShadowType.NONE)
 
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
         vbox.set_margin_start(16)
@@ -667,6 +673,7 @@ class SettingsDialog:
         outer_sw = Gtk.ScrolledWindow.new()
         outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         outer_sw.set_vexpand(True)
+        outer_sw.set_shadow_type(Gtk.ShadowType.NONE)
 
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
         vbox.set_margin_start(16)
