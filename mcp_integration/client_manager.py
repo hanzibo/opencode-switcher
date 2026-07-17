@@ -35,7 +35,10 @@ class _MCPClient:
 
     @property
     def is_connected(self) -> bool:
-        return self._process is not None and self._process.returncode is None
+        return (self._process is not None
+                and self._process.returncode is None
+                and self._reader_task is not None
+                and not self._reader_task.done())
 
     async def connect_stdio(self, command: str, args: List[str]) -> str:
         """启动子进程并完成 MCP 初始化握手。
@@ -45,11 +48,13 @@ class _MCPClient:
         str
             Server info 描述（成功）或错误信息。
         """
+        # 流缓冲区 10MB，避免 Playwright 大 JSON（截图/base64）溢出
         self._process = await asyncio.create_subprocess_exec(
             command, *args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=10 * 1024 * 1024,
         )
 
         # 启动后台读取任务
@@ -159,7 +164,7 @@ class _MCPClient:
         await self._send_line(msg)
 
         try:
-            response = await asyncio.wait_for(fut, timeout=30)
+            response = await asyncio.wait_for(fut, timeout=120)
             return response
         except asyncio.TimeoutError:
             self._pending.pop(req_id, None)
@@ -242,6 +247,9 @@ class MCPClientManager:
             existing = self._clients[config.name]
             if existing.is_connected:
                 return False, f"Server '{config.name}' 已连接"
+            # 有旧连接但已断开（如 reader 崩溃），先清理
+            await existing.disconnect()
+            del self._clients[config.name]
 
         client = _MCPClient()
         try:

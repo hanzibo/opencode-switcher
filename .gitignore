@@ -9,3 +9,4 @@ venv/
 .mimocode/
 codebase_analysis.md
 monitor-resources.sh
+.playwright-mcp/
