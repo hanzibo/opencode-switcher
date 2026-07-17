@@ -233,6 +233,7 @@ class App:
 
 if __name__ == "__main__":
     import traceback
+    from theme_config import CONFIG_DIR
 
     # Single-instance lock
     LOCK_PATH = os.path.join(CONFIG_DIR, "lock")
