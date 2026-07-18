@@ -3038,9 +3038,21 @@ class AIChatPanel(Gtk.Box):
         self._update_token_display()
 
     def _generate_summary_async(self, pruned_messages: list, trim_target: int):
-        """在后台线程中调用 LLM（流式），将即将丢弃的消息压缩为摘要并实时显示。"""
+        """在后台线程中调用 LLM（流式），将即将丢弃的消息压缩为摘要并实时显示。
+
+        若 LLM 返回空、超时或网络异常，不裁剪对话，
+        通过系统消息提醒用户更换模型重试。
+        """
         save_summary = False
         cancel_event = threading.Event()
+        timeout_sec = 25  # 摘要生成超时（秒）
+        failure_reason = None
+
+        # 超时定时器：超过 timeout_sec 后自动取消
+        timer = threading.Timer(timeout_sec, cancel_event.set)
+        timer.daemon = True
+        timer.start()
+
         try:
             max_chars = (self._ai_settings_store.summary_max_chars
                          if self._ai_settings_store else 500)
@@ -3069,6 +3081,7 @@ class AIChatPanel(Gtk.Box):
                 )
             except (KeyError, ValueError) as e:
                 print(f"[summary] 模板格式错误（可用占位符：{{prev_summary}}、{{conversation_text}}、{{max_chars}}）: {e}", flush=True)
+                failure_reason = f"模板格式错误：{e}"
                 return
 
             base_url, api_key, model_name, _, temperature, max_tokens, top_p, _, _ = \
@@ -3077,6 +3090,7 @@ class AIChatPanel(Gtk.Box):
 
             if not base_url or not api_key or not model_name:
                 print(f"[summary] 模型配置不完整，跳过摘要生成", flush=True)
+                failure_reason = "当前模型配置不完整（缺少 Base URL / API Key / Model Name）"
                 return
 
             print(f"[summary] 开始流式生成摘要 (已丢弃 {len(pruned_messages)} 条消息, max_chars={max_chars}, model={model_name}, prompt_len={len(prompt)}字)", flush=True)
@@ -3089,7 +3103,7 @@ class AIChatPanel(Gtk.Box):
                 temperature=0.3,
                 max_tokens=max(4096, max_chars * 4),
                 top_p=top_p,
-                timeout=30,
+                timeout=timeout_sec,
             )
             for event in self._llm_client.stream_chat_completion(
                 summary_config,
@@ -3104,32 +3118,57 @@ class AIChatPanel(Gtk.Box):
                 elif event.type == StreamEventType.STREAM_END:
                     break
 
-            result = "".join(result_parts).strip()
-
-            if result:
-                if self._ai_summary:
-                    self._ai_summary = (
-                        f"{self._ai_summary}\n"
-                        f"后续对话摘要：{result}"
-                    )
-                else:
-                    self._ai_summary = result
-                if len(self._ai_summary) > max_chars * 3:
-                    self._ai_summary = self._ai_summary[-max_chars * 3:]
-                save_summary = True
-                print(f"[summary] 摘要生成成功 ({len(result)} 字符)", flush=True)
+            if cancel_event.is_set():
+                failure_reason = f"摘要生成超时（{timeout_sec}秒），请更换模型重试"
+                print(f"[summary] {failure_reason} (model={model_name})", flush=True)
             else:
-                print(f"[summary] LLM 返回空结果，摘要未生成 (model={model_name})", flush=True)
+                result = "".join(result_parts).strip()
+                if result:
+                    if self._ai_summary:
+                        self._ai_summary = (
+                            f"{self._ai_summary}\n"
+                            f"后续对话摘要：{result}"
+                        )
+                    else:
+                        self._ai_summary = result
+                    if len(self._ai_summary) > max_chars * 3:
+                        self._ai_summary = self._ai_summary[-max_chars * 3:]
+                    save_summary = True
+                    print(f"[summary] 摘要生成成功 ({len(result)} 字符)", flush=True)
+                else:
+                    failure_reason = f"模型 {model_name} 返回空结果，请更换模型重试"
+                    print(f"[summary] {failure_reason}", flush=True)
 
         except _LLMHttpError as e:
-            print(f"[summary] 摘要生成失败: {e}", flush=True)
+            failure_reason = f"摘要生成失败（{e}），请更换模型重试"
+            print(f"[summary] {failure_reason}", flush=True)
         except Exception as e:
-            print(f"[summary] 摘要生成失败: {e}", flush=True)
+            failure_reason = f"摘要生成异常：{e}"
+            print(f"[summary] {failure_reason}", flush=True)
             import traceback
             traceback.print_exc()
         finally:
+            timer.cancel()
             self._ai_summary_generating = False
-            GLib.idle_add(self._apply_prune, trim_target, save_summary)
+
+            # 生成失败时通过系统消息提醒用户
+            if failure_reason:
+                GLib.idle_add(self._show_summary_failure, failure_reason)
+            else:
+                GLib.idle_add(self._apply_prune, trim_target, save_summary)
+
+    def _show_summary_failure(self, reason: str):
+        """在对话中插入一条系统消息说明摘要生成失败的原因。"""
+        self._clear_summary_status()
+        html = (
+            '<div class="chat-message system-message" style="margin:8px 0;padding:8px 12px;'
+            'background:var(--notice-bg,#fff3cd);border-left:4px solid var(--notice-border,#ffc107);'
+            'border-radius:4px;font-size:13px;color:var(--notice-text,#856404);">'
+            '⚠️ <b>上下文压缩失败</b><br>'
+            f'{reason}'
+            '</div>'
+        )
+        self.append_html_to_webview(html)
 
     def _save_summary_to_conversation(self):
         """在主线程中仅保存摘要到对话文件，不重建消息列表。"""
