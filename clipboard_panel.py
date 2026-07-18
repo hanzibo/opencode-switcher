@@ -630,7 +630,7 @@ class ClipboardPanel(Gtk.Box):
             ".command-autocomplete-list row { border: none; border-bottom: 1px solid %(input_border)s; padding: 2px 0; background-color: transparent; background-image: none; color: %(text_fg)s; }"
             ".command-autocomplete-list row:last-child { border-bottom: none; }"
             ".command-autocomplete-list row:hover { background-color: %(hover_bg)s; }"
-            ".command-autocomplete-list row:selected { background-color: %(sel_bg)s; color: %(text_fg)s; }"
+            ".command-autocomplete-list row:selected { background-color: %(sel_bg)s; color: %(text_fg)s; border: 1px solid %(sel_border)s; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
         for w in (self, self._cat_list, self._content_scrolled, self._content_list):

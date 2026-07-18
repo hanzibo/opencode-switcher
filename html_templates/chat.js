@@ -425,16 +425,6 @@ function _renderMath(element) {
                     _throttledWindowing();
                     _scrollToBottom();
                 }
-                function appendHtml(msgId, html) {
-                    const div = document.getElementById(msgId + '-bubble') || document.getElementById(msgId);
-                    if (div && html) {
-                        div.insertAdjacentHTML('beforeend', html);
-                        _debouncedRenderMath(div);
-                        addCopyButtons();
-                    }
-                    _throttledWindowing();
-                    _scrollToBottom();
-                }
                 function addCopyButtons() {
                     document.querySelectorAll('pre:not(.has-copy-btn)').forEach(function(pre) {
                         if (pre.classList.contains('tool-result-content')) return;
@@ -603,8 +593,8 @@ function _renderMath(element) {
 
                 /**
                  * appendStreamToken - 增量追加流式文本到当前助手消息的 answer 区域。
-                 * 在流式活跃期（text mode），只追加纯文本节点，不触发 HTML 解析或 KaTeX 渲染。
-                 * 在流结束时由 finalizeStreamingContent() 替换为最终渲染的 HTML。
+                 * 在流式活跃期，只追加纯文本节点，不触发 HTML 解析或 KaTeX 渲染。
+                 * 流结束时由 updateMessageContainer() 替换为最终渲染的 HTML。
                  */
                 function appendStreamToken(text) {
                     if (!text) return;
@@ -779,36 +769,6 @@ function _renderMath(element) {
                     _reasoningState = 'idle';
                     _reasoningCache = '';
                     _reasoningPendingText = '';
-                }
-
-                /**
-                 * finalizeStreamingContent - 用最终 HTML 替换纯文本占位。
-                 * 调用时机：1. 工具调用阶段（TEXT→HTML 切换）2. 流结束阶段（最终渲染）
-                 */
-                function finalizeStreamingContent(html, reasoningHtml) {
-                    const container = document.getElementById(_streamingContainerId);
-                    if (!container) return;
-
-                    const answerRegion = container.querySelector('.bubble-region.answer-region');
-                    if (answerRegion && html) {
-                        answerRegion.innerHTML = html;
-                    }
-
-                    if (reasoningHtml) {
-                        const reasoningRegion = container.querySelector('.bubble-region.reasoning-region');
-                        if (reasoningRegion) {
-                            reasoningRegion.innerHTML = reasoningHtml;
-                        }
-                    }
-
-                    if (answerRegion) {
-                        _debouncedRenderMath(answerRegion);
-                    }
-                    addCopyButtons();
-                    _throttledWindowing();
-                    _scrollToBottom();
-
-                    _streamingTextNode = null;
                 }
 
                 /**

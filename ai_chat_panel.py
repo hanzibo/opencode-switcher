@@ -877,20 +877,6 @@ class AIChatPanel(Gtk.Box):
         js_code = f"updateToolCard({json.dumps(tool_call_id)}, {json.dumps(card_html)});"
         self._ai_webview.run_javascript(js_code, None, None)
 
-    @staticmethod
-    def _build_final_js_sync(msg_id: str, start_idx: int) -> str:
-        return (
-            f"window._isStreaming = false;"
-            f"(function(){{"
-            f"var m=document.getElementById('{msg_id}')?.querySelector('copy-marker');"
-            f"if(m&&!m.dataset.msgIndex)m.dataset.msgIndex='{start_idx}';"
-            f"addCopyButtons();"
-            f"}})();"
-            f"_scrollToBottom();"
-            f"_throttledWindowing();"
-            f"_initRoundNav();"
-        )
-
     # ────────────────────────────────────────────────────────────────────
 
     def _send_user_message(self, text: str):
@@ -1254,14 +1240,6 @@ class AIChatPanel(Gtk.Box):
             extra_system_messages=extra_system_messages,
             mcp_tool_definitions=getattr(self, "_cached_mcp_tools", None),
             mcp_client_manager=getattr(self, "_mcp_client_mgr", None),
-        )
-
-    def _contains_ask_user_question(self, turn_msgs: List[Dict]) -> bool:
-        """检查给定的 turn_msgs 中是否包含 ask_user_question 相关的工具调用或响应。"""
-        return any(
-            (msg.get("role") == "tool" and msg.get("name") == "ask_user_question") or
-            (msg.get("role") == "assistant" and any(tc.get("function", {}).get("name") == "ask_user_question" for tc in msg.get("tool_calls", []) or []))
-            for msg in turn_msgs
         )
 
     def _append_assistant_turn_to_cache(self):
@@ -2620,20 +2598,26 @@ class AIChatPanel(Gtk.Box):
             if keyname in ("Up", "KP_Up"):
                 current = self._ai_cmd_popover.listbox.get_selected_row()
                 if current:
-                    above = current.get_prev_sibling()
-                    if above:
-                        self._ai_cmd_popover.listbox.select_row(above)
+                    idx = current.get_index()
+                    if idx > 0:
+                        above = self._ai_cmd_popover.listbox.get_row_at_index(idx - 1)
+                        if above:
+                            self._ai_cmd_popover.listbox.select_row(above)
+                            self._ai_cmd_popover._scroll_to_row(above)
                 return True
             if keyname in ("Down", "KP_Down"):
                 current = self._ai_cmd_popover.listbox.get_selected_row()
                 if current:
-                    below = current.get_next_sibling()
+                    idx = current.get_index()
+                    below = self._ai_cmd_popover.listbox.get_row_at_index(idx + 1)
                     if below:
                         self._ai_cmd_popover.listbox.select_row(below)
+                        self._ai_cmd_popover._scroll_to_row(below)
                 else:
                     first = self._ai_cmd_popover.listbox.get_row_at_index(0)
                     if first:
                         self._ai_cmd_popover.listbox.select_row(first)
+                        self._ai_cmd_popover._scroll_to_row(first)
                 return True
             if keyname in ("Return", "KP_Enter"):
                 self._ai_cmd_popover.confirm_command_completion()

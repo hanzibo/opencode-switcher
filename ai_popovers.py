@@ -21,6 +21,7 @@ class AICommandPopover(Gtk.Popover):
         cmd_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         cmd_sw.set_min_content_height(100)
         cmd_sw.set_max_content_height(300)
+        self._scrolled_window = cmd_sw
 
         self.listbox = Gtk.ListBox.new()
         self.listbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
@@ -32,6 +33,19 @@ class AICommandPopover(Gtk.Popover):
         self.add(cmd_sw)
         self.connect("closed", self._on_cmd_popover_closed)
         self.connect("key-press-event", self._on_cmd_popover_key_press)
+
+    def _scroll_to_row(self, row):
+        """Scroll the ScrolledWindow to make *row* visible."""
+        if row is None:
+            return
+        adj = self._scrolled_window.get_vadjustment()
+        alloc = row.get_allocation()
+        page = adj.get_page_size()
+        cur = adj.get_value()
+        if alloc.y < cur:
+            adj.set_value(alloc.y)
+        elif alloc.y + alloc.height > cur + page:
+            adj.set_value(alloc.y + alloc.height - page)
 
     def _on_cmd_popover_closed(self, _popover):
         self._ai_cmd_popover_visible = False
@@ -92,21 +106,27 @@ class AICommandPopover(Gtk.Popover):
         if keyname in ("Up", "KP_Up"):
             current = self.listbox.get_selected_row()
             if current:
-                above = current.get_prev_sibling()
-                if above:
-                    self.listbox.select_row(above)
+                idx = current.get_index()
+                if idx > 0:
+                    above = self.listbox.get_row_at_index(idx - 1)
+                    if above:
+                        self.listbox.select_row(above)
+                        self._scroll_to_row(above)
             return True
 
         if keyname in ("Down", "KP_Down"):
             current = self.listbox.get_selected_row()
             if current:
-                below = current.get_next_sibling()
+                idx = current.get_index()
+                below = self.listbox.get_row_at_index(idx + 1)
                 if below:
                     self.listbox.select_row(below)
+                    self._scroll_to_row(below)
             else:
                 first = self.listbox.get_row_at_index(0)
                 if first:
                     self.listbox.select_row(first)
+                    self._scroll_to_row(first)
             return True
 
         if keyname in ("Return", "KP_Enter", "Tab"):
