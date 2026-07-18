@@ -3040,6 +3040,11 @@ class AIChatPanel(Gtk.Box):
                                                 preserve_updated_at=True)
             except Exception as e:
                 print(f"[prune] 保存裁剪后对话失败: {e}", flush=True)
+            # 刷新历史下拉框中的消息条数
+            try:
+                self._ai_history_popover.refresh_dropdown()
+            except Exception as e:
+                print(f"[prune] 刷新历史下拉框失败: {e}", flush=True)
         self._clear_summary_status()
         self._update_token_display()
 
