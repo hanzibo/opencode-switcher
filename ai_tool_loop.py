@@ -55,7 +55,7 @@ def run_llm_react_loop(
     on_token_delta_fn=None,
     on_reasoning_delta_fn=None,
     on_tool_result_fn=None,
-    switch_to_html_mode_fn=None,
+    on_tool_calls_started_fn=None,
     conv_id: str = None,
     extra_system_messages: Optional[list] = None,
     # ── MCP 支持 ──
@@ -104,7 +104,7 @@ def run_llm_react_loop(
                 on_token_delta_fn=on_token_delta_fn,
                 on_reasoning_delta_fn=on_reasoning_delta_fn,
                 on_tool_result_fn=on_tool_result_fn,
-                switch_to_html_mode_fn=switch_to_html_mode_fn,
+                on_tool_calls_started_fn=on_tool_calls_started_fn,
                 extra_system_messages=extra_system_messages,
                 mcp_tool_definitions=mcp_tool_definitions,
                 mcp_client_manager=mcp_client_manager,
@@ -140,7 +140,7 @@ def _perform_llm_call(
     on_token_delta_fn=None,
     on_reasoning_delta_fn=None,
     on_tool_result_fn=None,
-    switch_to_html_mode_fn=None,
+    on_tool_calls_started_fn=None,
     extra_system_messages: Optional[list] = None,
     # ── MCP 支持 ──
     mcp_tool_definitions: Optional[list] = None,
@@ -171,8 +171,8 @@ def _perform_llm_call(
 
             if event.type == StreamEventType.TOOL_CALLS:
                 if event.tool_calls:
-                    if switch_to_html_mode_fn is not None:
-                        GLib.idle_add(switch_to_html_mode_fn, req_id)
+                    if on_tool_calls_started_fn is not None:
+                        GLib.idle_add(on_tool_calls_started_fn, req_id)
                     tool_calls_found.extend(event.tool_calls)
                 continue
 

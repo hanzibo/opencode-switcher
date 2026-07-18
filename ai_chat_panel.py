@@ -92,13 +92,10 @@ class AIChatPanel(Gtk.Box):
         ("/summary", "压缩上下文（/summary keep=N，保留最近N条，默认50）"),
     ]
     _SUSPEND_DELAY_SECONDS = 5
-    # ── Streaming v2: Token batching ──
+    # ── Streaming: Token batching ──
     _BATCH_FLUSH_MS = 60                    # 批处理窗口（ms）
-    _STREAM_MODE_OFF = "off"                # 特性开关：关闭 v2
-    _STREAM_MODE_TEXT = "text"              # 特性开关：仅纯文本流式
-    _STREAM_MODE_FULL = "full"             # 特性开关：含工具调用兼容
-    _MPS = None
     _STREAM_PERF_LOG = False
+    _MPS = None  # WebKit memory pressure settings (lazy init)
     # ── Token 计数常量 ──
     _TOKEN_CALIBRATION_FACTOR = 0.89  # cl100k_base 对中文模型约高估 12%
     _ESTIMATED_OVERHEAD_PER_MSG = 20  # role/tool_call_id 等结构字段的字符开销估算
@@ -179,13 +176,12 @@ class AIChatPanel(Gtk.Box):
         self._webview_suspended = False
         self._suspend_timeout_id = 0
 
-        # ── Streaming v2: Token batching state ──
+        # ── Streaming: Token batching state ──
         self._token_buffer = ""
         self._flush_scheduled = False
         self._reasoning_buffer = ""
         self._reasoning_flush_scheduled = False
         self._last_flushed_len = 0
-        self._streaming_mode = self._STREAM_MODE_OFF
         self._streaming_container_created = False
 
         # Callback hooks
@@ -764,14 +760,6 @@ class AIChatPanel(Gtk.Box):
         self._last_flushed_len = 0
         self._streaming_container_created = False
 
-        v2_mode = getattr(self._ai_settings_store, 'streaming_v2_mode', 'full') if self._ai_settings_store else 'full'
-        if v2_mode == self._STREAM_MODE_OFF:
-            self._streaming_mode = self._STREAM_MODE_OFF
-        elif v2_mode == "full":
-            self._streaming_mode = self._STREAM_MODE_FULL
-        else:
-            self._streaming_mode = self._STREAM_MODE_TEXT
-
     def _ensure_streaming_container(self) -> bool:
         """确保流式消息容器已创建，若未创建则发送 appendMessageContainer JS。"""
         if not self._streaming_container_created and hasattr(self, "_ai_webview") and self._ai_webview:
@@ -786,8 +774,6 @@ class AIChatPanel(Gtk.Box):
         """收到 LLM 文本增量，累积到 buffer 并安排 60ms flush（主线程调用）。"""
         if self._STREAM_PERF_LOG:
             print(f"[perf] token_delta: +{len(text)}ch, buffer={len(self._token_buffer)}ch", flush=True)
-        if self._streaming_mode == self._STREAM_MODE_OFF:
-            return
 
         self._token_buffer += text
 
@@ -801,10 +787,6 @@ class AIChatPanel(Gtk.Box):
             print(f"[perf] flush_token: {len(self._token_buffer)}ch → JS", flush=True)
         self._flush_scheduled = False
         self._flush_source_id = 0
-
-        if self._streaming_mode == self._STREAM_MODE_OFF:
-            self._token_buffer = ""
-            return False
 
         if not self._token_buffer:
             return False
@@ -824,8 +806,6 @@ class AIChatPanel(Gtk.Box):
         """收到 LLM 推理增量，累积到 buffer 并安排 60ms flush。"""
         if self._STREAM_PERF_LOG:
             print(f"[perf] reasoning_delta: +{len(text)}ch, buffer={len(self._reasoning_buffer)}ch", flush=True)
-        if self._streaming_mode == self._STREAM_MODE_OFF:
-            return
         self._reasoning_buffer += text
         if not self._reasoning_flush_scheduled:
             self._reasoning_flush_scheduled = True
@@ -835,9 +815,6 @@ class AIChatPanel(Gtk.Box):
         """60ms 定时器回调：将累积的推理文本批量 flush 到 WebView。"""
         self._reasoning_flush_scheduled = False
         self._reasoning_flush_source_id = 0
-        if self._streaming_mode == self._STREAM_MODE_OFF:
-            self._reasoning_buffer = ""
-            return False
         if not self._reasoning_buffer:
             return False
 
@@ -849,19 +826,11 @@ class AIChatPanel(Gtk.Box):
         self._reasoning_buffer = ""
         return False
 
-    def _flush_all_buffers(self):
-        """flush 所有累积 buffer（在流结束/模式切换时调用）。"""
-        if self._reasoning_buffer:
-            self._flush_reasoning_buffer()
-        if self._token_buffer:
-            self._flush_token_buffer()
-
-    def _switch_to_html_mode(self, req_id: int):
-        """工具调用阶段：停止推理状态，切换渲染模式。"""
+    def _on_tool_calls_started(self, req_id: int):
+        """工具调用开始时：停止推理状态，通知 JS 端结束 thinking 动画。"""
         if self._STREAM_PERF_LOG:
-            print(f"[perf] switch_to_html_mode: req={req_id}", flush=True)
+            print(f"[perf] tool_calls_started: req={req_id}", flush=True)
 
-        # 0. 无论 TEXT/FULL 模式，工具调用时都应结束 thinking 状态
         # 取消排期定时器 + 发送 finishReasoning 到 JS
         if hasattr(self, "_ai_webview") and self._ai_webview:
             if self._reasoning_flush_source_id:
@@ -873,50 +842,6 @@ class AIChatPanel(Gtk.Box):
                 self._flush_source_id = 0
                 self._flush_scheduled = False
             self._ai_webview.run_javascript("finishReasoning();", None, None)
-
-        if self._streaming_mode != self._STREAM_MODE_TEXT:
-            return
-
-        # 1. flush 所有累积 buffer（TEXT 模式才需要，FULL 模式由独立 flush 处理）
-        self._flush_all_buffers()
-
-        # 2. 构建完整渲染（TEXT→FULL 转换）
-        msg_id = f"msg-{req_id}"
-        turn_msgs = self._get_turn_messages()
-        output = render_turn(TurnRenderInput(
-            turn_messages=turn_msgs,
-            all_messages=self._ai_messages,
-            streaming_reasoning=self._ai_current_reasoning_text,
-            streaming_content=self._ai_current_assistant_text,
-            is_streaming=True,
-            show_tool_details=self._show_tool_details,
-        ))
-
-        # 4. 发送 answer 的最终 HTML，替换之前 TextNode 追加的纯文本
-        # reasoningHtml 为空的场合 (is_streaming=True 时 _render_reasoning_html 返回空)，
-        # finalizeStreamingContent 不会覆盖 JS 端已完成的 thought badge
-        js_code = f"finalizeStreamingContent({json.dumps(output.answer_html)}, {json.dumps(output.reasoning_html)});"
-        if hasattr(self, "_ai_webview") and self._ai_webview:
-            self._ai_webview.run_javascript(js_code, None, None)
-
-        # 5. 更新 HTML 缓存，确保工具调用期间 webview suspend 后恢复时内容不丢失
-        #     不修改 _last_rendered_html / _ai_markdown_text，避免干扰 _finalize_streaming_render 的缓存重建
-        try:
-            _snap_md = _rebuild_markdown_from_messages(
-                self._ai_messages,
-                streaming_reasoning="",
-                streaming_content="",
-                is_streaming=False,
-                show_details=self._show_tool_details,
-            )
-            if _snap_md.strip():
-                _snap_html = _markdown_to_html_safe(_snap_md, fallback_content="")
-                if self._ai_conversation_id:
-                    self._ai_html_cache[self._ai_conversation_id] = _snap_html
-        except Exception as e:
-            print(f"[switch_to_html] 缓存快照失败: {e}", flush=True)
-
-        self._streaming_mode = self._STREAM_MODE_FULL
 
     def _find_tool_call_by_id(self, tool_call_id: str) -> Optional[dict]:
         """在 _ai_messages 中查找指定 tool_call_id 的工具调用定义。"""
@@ -934,8 +859,6 @@ class AIChatPanel(Gtk.Box):
     def _on_tool_result(self, tool_call_id: str, result_text: str, status: str, req_id: int):
         if (not self._ai_settings_store
                 or not self._ai_settings_store.enable_incremental_tools):
-            return
-        if self._streaming_mode == self._STREAM_MODE_OFF:
             return
 
         # 确保是当前可见对话
@@ -1236,7 +1159,6 @@ class AIChatPanel(Gtk.Box):
                 self._ai_response_div_added = False
                 self._ai_assistant_html_base = ""
                 self._ai_current_reasoning_text = ""
-                self._ai_dirty_stream = False
                 # v2: 清理 token + reasoning buffer
                 self._token_buffer = ""
                 self._flush_scheduled = False
@@ -1265,7 +1187,7 @@ class AIChatPanel(Gtk.Box):
                 is_active_stream = (req_id == getattr(self, "_ai_request_id", 0))
                 dom_ready = (self._streaming_container_created
                              and (st.get("response_div_added", False) if st else False))
-                if msg.get("role") == "tool" and self._streaming_mode != self._STREAM_MODE_OFF and enable_inc and is_active_stream and dom_ready:
+                if msg.get("role") == "tool" and enable_inc and is_active_stream and dom_ready:
                     pass
                 else:
                     GLib.idle_add(self._render_current_assistant_message, req_id)
@@ -1276,8 +1198,6 @@ class AIChatPanel(Gtk.Box):
                 st["current_reasoning_text"] = text
             if self._ai_conversation_id == conv_id:
                 self._ai_current_reasoning_text = text
-                if self._streaming_mode == self._STREAM_MODE_OFF:
-                    self._ai_dirty_stream = True
 
         def set_assistant_callback(text):
             st = self._ai_running_convs.get(conv_id)
@@ -1285,9 +1205,6 @@ class AIChatPanel(Gtk.Box):
                 st["current_assistant_text"] = text
             if self._ai_conversation_id == conv_id:
                 self._ai_current_assistant_text = text
-                # v2: text mode 下由 token batching 驱动渲染，不设 dirty flag
-                if self._streaming_mode == self._STREAM_MODE_OFF:
-                    self._ai_dirty_stream = True
 
         def append_html_callback(html):
             if self._ai_conversation_id == conv_id:
@@ -1332,7 +1249,7 @@ class AIChatPanel(Gtk.Box):
             on_token_delta_fn=on_token_delta_fn,
             on_reasoning_delta_fn=on_reasoning_delta_fn,
             on_tool_result_fn=on_tool_result_fn,
-            switch_to_html_mode_fn=self._switch_to_html_mode,
+            on_tool_calls_started_fn=self._on_tool_calls_started,
             conv_id=conv_id,
             extra_system_messages=extra_system_messages,
             mcp_tool_definitions=getattr(self, "_cached_mcp_tools", None),
@@ -1378,36 +1295,6 @@ class AIChatPanel(Gtk.Box):
         if self._ai_conversation_id == conv_id:
             target_messages = state["messages"] if state else self._ai_messages
             self._ai_messages = target_messages
-
-            # ── 旧版路径（特性开关关闭时走旧版渲染） ──
-            if self._streaming_mode == self._STREAM_MODE_OFF:
-                msg_id = f"msg-{req_id}"
-                last_user_idx = -1
-                for idx in range(len(target_messages) - 1, -1, -1):
-                    if target_messages[idx].get("role") == "user":
-                        last_user_idx = idx
-                        break
-                turn_msgs = target_messages[last_user_idx + 1:] if last_user_idx != -1 else target_messages
-                
-                output = render_turn(TurnRenderInput(
-                    turn_messages=turn_msgs,
-                    all_messages=target_messages,
-                    is_streaming=False,
-                    show_tool_details=self._show_tool_details,
-                ))
-                combined_html = output.combined_html
-                is_split = output.is_split
-
-                js_final = build_update_js(msg_id, output)
-                if hasattr(self, "_ai_webview") and self._ai_webview:
-                    self._ai_webview.run_javascript(js_final, None, None)
-
-                start_idx = last_user_idx + 1
-                self._append_assistant_turn_to_cache()
-
-                js_sync = self._build_final_js_sync(msg_id, start_idx)
-                if hasattr(self, "_ai_webview") and self._ai_webview:
-                    self._ai_webview.run_javascript(js_sync, None, None)
 
             self._ai_spinner.stop()
             self._ai_spinner.hide()
@@ -1529,8 +1416,6 @@ class AIChatPanel(Gtk.Box):
 
     def _finalize_streaming_render(self):
         """流结束时 flush 剩余 buffer，触发前端最终 HTML 渲染（仅当前可见对话）。"""
-        if self._streaming_mode == self._STREAM_MODE_OFF:
-            return
 
         # 0. 取消所有排期的 60ms 定时器，防止 _flush_reasoning_buffer 在 finalize 之前
         #    向 JS 队列插入 appendStreamReasoning 导致不必要的状态切换
@@ -1663,25 +1548,7 @@ class AIChatPanel(Gtk.Box):
         return self._ai_messages[last_user_idx + 1:] if last_user_idx != -1 else self._ai_messages
 
     def _render_current_assistant_message(self, req_id: int):
-        # v2: text mode 下由 token batching 处理渲染，跳过全量 HTML 构建
-        if self._streaming_mode == self._STREAM_MODE_TEXT:
-            if not self._streaming_container_created:
-                conv_id = None
-                for cid, st in self._ai_running_convs.items():
-                    if st.get("req_id") == req_id:
-                        conv_id = cid
-                        break
-                if not conv_id or self._ai_conversation_id != conv_id:
-                    return
-                st = self._ai_running_convs.get(conv_id)
-                if not st or not st.get("streaming", False):
-                    return
-                msg_id = f"msg-{req_id}"
-                js = f"appendMessageContainer('{msg_id}');"
-                self._ai_webview.run_javascript(js, None, None)
-                self._streaming_container_created = True
-            return
-
+        """Render the current assistant message for the given request ID."""
         conv_id = None
         for cid, st in self._ai_running_convs.items():
             if st.get("req_id") == req_id:
@@ -1768,67 +1635,6 @@ class AIChatPanel(Gtk.Box):
         elif target_messages and assistant_text:
             target_messages.append(assistant_msg)
 
-        # ── 旧版路径（特性开关关闭时走旧版渲染） ──
-        if self._streaming_mode == self._STREAM_MODE_OFF:
-            msg_id = f"msg-{req_id}"
-            last_user_idx = -1
-            for idx in range(len(target_messages) - 1, -1, -1):
-                if target_messages[idx].get("role") == "user":
-                    last_user_idx = idx
-                    break
-            turn_msgs = target_messages[last_user_idx + 1:] if last_user_idx != -1 else target_messages
-            
-            output = render_turn(TurnRenderInput(
-                turn_messages=turn_msgs,
-                all_messages=target_messages,
-                is_streaming=False,
-                show_tool_details=self._show_tool_details,
-            ))
-            combined_html = output.combined_html
-            is_split = output.is_split
-
-            js_final = build_update_js(msg_id, output)
-            if hasattr(self, "_ai_webview") and self._ai_webview:
-                self._ai_webview.run_javascript(js_final, None, None)
-
-            if state:
-                state["current_assistant_text"] = ""
-                state["current_reasoning_text"] = ""
-                state["response_div_added"] = False
-                state["streaming"] = False
-
-            if self._ai_conversation_id == conv_id:
-                self._ai_messages = target_messages
-                self._ai_assistant_buffer = ""
-                self._ai_current_assistant_text = ""
-                self._ai_current_reasoning_text = ""
-                self._ai_response_div_added = False
-                self._ai_assistant_html_base = ""
-                self._ai_dirty_stream = False
-                self._ai_streaming = False
-
-                if getattr(self, "_ai_render_timeout_id", 0) != 0:
-                    GLib.source_remove(self._ai_render_timeout_id)
-                    self._ai_render_timeout_id = 0
-
-                start_idx = last_user_idx + 1
-                self._append_assistant_turn_to_cache()
-
-                js_sync = self._build_final_js_sync(msg_id, start_idx)
-                if hasattr(self, "_ai_webview") and self._ai_webview:
-                    self._ai_webview.run_javascript(js_sync, None, None)
-
-                self._ai_spinner.stop()
-                self._ai_spinner.hide()
-                self._update_send_button(False)
-                self._ai_entry.placeholder_text = ""
-            else:
-                self._render_background_conversation(conv_id, target_messages, state)
-
-            self._ai_running_convs.pop(conv_id, None)
-            self._handle_stream_end(req_id)
-            return
-
         # ── 新版路径 ──
         if state:
             state["current_assistant_text"] = ""
@@ -1843,7 +1649,6 @@ class AIChatPanel(Gtk.Box):
             self._ai_current_reasoning_text = ""
             self._ai_response_div_added = False
             self._ai_assistant_html_base = ""
-            self._ai_dirty_stream = False
             self._ai_streaming = False
 
             if getattr(self, "_ai_render_timeout_id", 0) != 0:
