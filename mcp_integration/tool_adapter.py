@@ -68,6 +68,7 @@ def parse_mcp_tool_name(full_name: str) -> Tuple[str, str]:
 
 
 def tool_result_to_text(result: CallToolResult) -> str:
+    # DEPRECATED: 当前未被调用，保留以供参考
     """将 MCP CallToolResult 转换为纯文本字符串。
 
     MCP 工具结果可能包含多种内容类型（text、image 等），
@@ -102,6 +103,8 @@ def merge_mcp_tools_into_definitions(
     mcp_tools: List[Tool],
     existing_defs: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
+    # DEPRECATED: 当前未被调用，保留以供参考
+    # BUG: 过滤前缀用 f"{server_name}:" 与实际使用的 f"{server_name}__{tool.name}" 不匹配
     """将 MCP Server 的工具合并到现有工具定义列表中。
 
     同名工具以后添加的 MCP 工具为准（后覆盖前）。

@@ -289,6 +289,8 @@ class JsonRpcSession:
             return
         fut = self._pending.pop(rid, None)
         if fut is None or fut.done():
+            if fut is None:
+                logger.warning("JSON-RPC 收到未知 msg_id=%s（可能已超时）", msg_id)
             return
         if exc:
             fut.set_exception(exc)

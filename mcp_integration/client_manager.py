@@ -7,13 +7,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from mcp_integration.gtk_asyncio_bridge import GtkAsyncioBridge
 from mcp_integration.server_config import MCPServerConfig
 from mcp_integration.tool_adapter import (
     mcp_tool_to_openai_schema,
 )
+
+if TYPE_CHECKING:
+    from mcp_integration.mcp_session import MCPSession
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +27,7 @@ class MCPClientManager:
     def __init__(self, bridge: Optional[GtkAsyncioBridge] = None) -> None:
         self._bridge = bridge or GtkAsyncioBridge.get()
         # session 字典：name -> MCPSession
-        self._sessions: Dict[str, Any] = {}
+        self._sessions: Dict[str, MCPSession] = {}
 
     # ── 连接管理 ────────────────────────────────────────────────
 
