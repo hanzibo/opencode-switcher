@@ -1,7 +1,9 @@
 import json
 import threading
 import requests
-from typing import Optional, List, Dict, Any
+from dataclasses import dataclass, field
+from dataclasses import dataclass
+from typing import Optional, List, Dict, Any, Generator
 
 from clipboard_store import (
     DEFAULT_TEMPERATURE,
@@ -12,6 +14,7 @@ from ai_text_utils import (
     _model_supports_vision,
     _vision_content_to_text,
     _cached_image_to_data_uri,
+    _strip_ai_markup,
 )
 import tool_registry
 from event_types import (
@@ -19,6 +22,59 @@ from event_types import (
     text_delta, reasoning_delta, tool_calls_event, stream_end,
     parse_tool_call_from_dict,
 )
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  数据模型
+# ═══════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class LLMRequestConfig:
+    """LLM API 请求参数聚合。
+
+    替代 stream_chat_completion / sync_chat_completion 中重复出现的
+    base_url / api_key / model_name / temperature / max_tokens / top_p / tools 等参数。
+    """
+    base_url: str
+    api_key: str
+    model_name: str
+    temperature: float = DEFAULT_TEMPERATURE
+    max_tokens: int = DEFAULT_MAX_TOKENS
+    top_p: float = DEFAULT_TOP_P
+    timeout: int = 30
+    tools: Optional[list] = None
+    tool_choice: Optional[str] = None
+    extra_system_messages: Optional[list] = None
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  消息预处理
+# ═══════════════════════════════════════════════════════════════════
+
+
+def clean_messages_for_llm(messages: list) -> list:
+    """清理消息列表：去除 AI 回复的 HTML/Markdown 标记等。
+
+    从 ai_tool_loop 提取至此以统一消息预处理入口。
+    """
+    cleaned = []
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+        if role == "assistant" and isinstance(content, str):
+            cleaned_content = _strip_ai_markup(content)
+            msg_copy = dict(msg)
+            msg_copy["content"] = cleaned_content
+            cleaned.append(msg_copy)
+        else:
+            cleaned.append(msg)
+    return cleaned
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  SSE 流解析
+# ═══════════════════════════════════════════════════════════════════
 
 
 class _ToolCallAccumulator:
@@ -71,11 +127,116 @@ class _ToolCallAccumulator:
         return any(c["id"] and c["function"]["name"] for c in self._calls.values())
 
 
+def parse_sse_events(
+    response,
+    cancel_event: Optional[threading.Event] = None,
+) -> Generator[StreamEvent, None, None]:
+    """从 requests 流式响应中解析 SSE 事件，产出 StreamEvent。
+
+    将 SSE 行解析逻辑从 stream_chat_completion 中剥离，
+    使其可独立测试和复用。
+
+    Parameters
+    ----------
+    response : requests.Response
+        已开始流式读取的 HTTP 响应。
+    cancel_event : threading.Event, optional
+        取消事件，设置后停止读取。
+
+    Yields
+    ------
+    StreamEvent
+        文本增量、推理增量或工具调用事件。
+    """
+    tc_accum = _ToolCallAccumulator()
+
+    for line in response.iter_lines(decode_unicode=True):
+        if cancel_event and cancel_event.is_set():
+            return
+        if not line:
+            continue
+        if not line.startswith("data:"):
+            continue
+
+        data_str = line[5:].strip()
+        if data_str == "[DONE]":
+            calls = tc_accum.get_calls()
+            if calls:
+                typed_calls = [parse_tool_call_from_dict(c) for c in calls]
+                yield tool_calls_event(typed_calls)
+            return
+        if not data_str:
+            continue
+
+        try:
+            chunk = json.loads(data_str)
+        except json.JSONDecodeError:
+            continue
+
+        choices = chunk.get("choices", [{}])
+        if not choices:
+            continue
+        delta = choices[0].get("delta", {})
+        finish_reason = choices[0].get("finish_reason")
+
+        # 处理工具调用增量
+        tc_delta = delta.get("tool_calls")
+        if tc_delta:
+            for tcd in tc_delta:
+                tc_accum.add_delta(tcd)
+            if finish_reason == "tool_calls":
+                calls = tc_accum.get_calls()
+                if calls:
+                    tc_accum.clear()
+                    typed_calls = [parse_tool_call_from_dict(c) for c in calls]
+                    yield tool_calls_event(typed_calls)
+            continue
+
+        # finish_reason == "tool_calls" 但无 tc_delta（罕见情况）
+        if finish_reason == "tool_calls":
+            calls = tc_accum.get_calls()
+            if calls:
+                tc_accum.clear()
+                typed_calls = [parse_tool_call_from_dict(c) for c in calls]
+                yield tool_calls_event(typed_calls)
+            continue
+
+        # 文本 / 推理增量
+        content = delta.get("content")
+        reasoning = delta.get("reasoning_content")
+        if content is not None:
+            yield text_delta(content)
+        if reasoning is not None:
+            yield reasoning_delta(reasoning)
+
+    # Fallback: 流自然结束时产出残留工具调用
+    calls = tc_accum.get_calls()
+    if calls:
+        typed_calls = [parse_tool_call_from_dict(c) for c in calls]
+        yield tool_calls_event(typed_calls)
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  异常
+# ═══════════════════════════════════════════════════════════════════
+
+
 class _LLMHttpError(Exception):
     pass
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  HTTP 客户端
+# ═══════════════════════════════════════════════════════════════════
+
+
 class _LLMHttpClient:
+    """LLM HTTP 客户端。
+
+    封装与 OpenAI-compatible API 的 HTTP 通信。
+    支持流式与非流式两种模式。
+    """
+
     def __init__(self):
         self._session = requests.Session()
         self._active_response = None
@@ -83,7 +244,7 @@ class _LLMHttpClient:
         self._init_session_retry()
 
     def _init_session_retry(self):
-        """Configure the session with retry strategy and mount adapters."""
+        """Configure retry strategy for transient failures."""
         retry_strategy = requests.packages.urllib3.util.retry.Retry(
             total=3,
             connect=3,
@@ -95,21 +256,33 @@ class _LLMHttpClient:
         self._session.mount("https://", adapter)
         self._session.mount("http://", adapter)
 
-    def _build_request(self, base_url: str, api_key: str, model_name: str, messages: list,
-                       stream: bool, temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
-                       top_p: float = DEFAULT_TOP_P,
-                       tools: Optional[list] = None,
-                       tool_choice: Optional[str] = None,
-                       extra_system_messages: Optional[list] = None):
-        url = base_url.rstrip("/") + "/chat/completions"
+    def _build_request(self, config: LLMRequestConfig, messages: list, stream: bool):
+        """构建 HTTP 请求的 url、headers 和 body。
+
+        Parameters
+        ----------
+        config : LLMRequestConfig
+            请求配置（模型名、温度等）。
+        messages : list
+            已预处理的 messages（入参 messages 已通过 apply_message_template 处理）。
+        stream : bool
+            是否流式请求。
+
+        Returns
+        -------
+        tuple
+            (url, headers, body)
+        """
+        url = config.base_url.rstrip("/") + "/chat/completions"
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {config.api_key}",
         }
+
         cleaned_messages = []
-        # 注入额外的 system 消息（如历史摘要），仅在 HTTP 请求层生效，不污染原始消息列表
-        if extra_system_messages:
-            for extra_msg in extra_system_messages:
+        # 注入额外的 system 消息（如历史摘要）
+        if config.extra_system_messages:
+            for extra_msg in config.extra_system_messages:
                 cleaned_messages.append({
                     "role": "system",
                     "content": extra_msg.get("content", ""),
@@ -119,9 +292,9 @@ class _LLMHttpClient:
             content = m.get("content")
             msg = {"role": role}
 
-            # Multimodal content (list of content parts for vision/audio) → resolve hash / downcast if model has no vision
+            # Multimodal content → resolve hash / downcast if model has no vision
             if isinstance(content, list):
-                if not _model_supports_vision(model_name):
+                if not _model_supports_vision(config.model_name):
                     msg["content"] = _vision_content_to_text(content)
                 else:
                     resolved_parts = []
@@ -147,11 +320,7 @@ class _LLMHttpClient:
                 tool_calls = m.get("tool_calls")
                 if tool_calls:
                     msg["tool_calls"] = tool_calls
-                    if content:
-                        msg["content"] = content
-                    else:
-                        msg["content"] = None
-                    # 思考模式下工具调用轮次必须回传 reasoning_content，否则 API 返回 400
+                    msg["content"] = content if content else None
                     rc = m.get("reasoning_content")
                     if rc:
                         msg["reasoning_content"] = rc
@@ -167,17 +336,17 @@ class _LLMHttpClient:
                 msg["content"] = content or ""
             cleaned_messages.append(msg)
 
-        body = {
-            "model": model_name,
+        body: Dict[str, Any] = {
+            "model": config.model_name,
             "messages": cleaned_messages,
             "stream": stream,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "top_p": top_p,
+            "temperature": config.temperature,
+            "max_tokens": config.max_tokens,
+            "top_p": config.top_p,
         }
-        if tools:
-            body["tools"] = tools
-            body["tool_choice"] = tool_choice or tool_registry.TOOL_CHOICE_AUTO
+        if config.tools:
+            body["tools"] = config.tools
+            body["tool_choice"] = config.tool_choice or tool_registry.TOOL_CHOICE_AUTO
         return url, headers, body
 
     def _active_response_check_cancel(self, cancel_event) -> bool:
@@ -189,37 +358,31 @@ class _LLMHttpClient:
         self._active_response = None
         return bool(cancel_event and cancel_event.is_set())
 
+    # ── 流式请求 ────────────────────────────────────────────────
+
     def stream_chat_completion(
         self,
-        base_url: str,
-        api_key: str,
-        model_name: str,
+        config: LLMRequestConfig,
         messages: list,
-        timeout: int = 30,
         cancel_event: Optional[threading.Event] = None,
-        temperature: float = DEFAULT_TEMPERATURE,
-        max_tokens: int = DEFAULT_MAX_TOKENS,
-        top_p: float = DEFAULT_TOP_P,
-        tools: Optional[list] = None,
-        tool_choice: Optional[str] = None,
-        extra_system_messages: Optional[list] = None,
     ):
         """SSE streaming. Yields StreamEvent instances.
 
-        Each yielded event has a ``type`` field (StreamEventType enum) and
-        exactly one of ``text_delta``, ``reasoning_delta``, or ``tool_calls``
-        populated (determined by ``type``).
+        Parameters
+        ----------
+        config : LLMRequestConfig
+            请求配置（base_url、api_key、model 等）。
+        messages : list
+            对话消息列表。
+        cancel_event : threading.Event, optional
+            取消事件。
 
-        For tool_calls, this method accumulates SSE chunks internally via
-        ``_ToolCallAccumulator`` and yields a single ``TOOL_CALLS`` event
-        with all accumulated calls when the stream signals tool_calls finish.
+        Yields
+        ------
+        StreamEvent
+            文本增量、推理增量或工具调用事件。
         """
-        url, headers, body = self._build_request(
-            base_url, api_key, model_name, messages, stream=True,
-            temperature=temperature, max_tokens=max_tokens, top_p=top_p,
-            tools=tools, tool_choice=tool_choice,
-            extra_system_messages=extra_system_messages,
-        )
+        url, headers, body = self._build_request(config, messages, stream=True)
 
         try:
             with self._session.post(
@@ -227,78 +390,21 @@ class _LLMHttpClient:
                 json=body,
                 headers=headers,
                 stream=True,
-                timeout=(self._connect_timeout, timeout),
+                timeout=(self._connect_timeout, config.timeout),
             ) as response:
                 self._active_response = response
                 response.raise_for_status()
                 response.encoding = "utf-8"
 
-                # Accumulator for incremental tool_calls delta
-                tc_accum = _ToolCallAccumulator()
-
-                for line in response.iter_lines(decode_unicode=True):
-                    if cancel_event and cancel_event.is_set():
-                        response.close()
-                        return
-                    if not line:
-                        continue
-                    if line.startswith("data:"):
-                        data_str = line[5:].strip()
-                        if data_str == "[DONE]":
-                            calls = tc_accum.get_calls()
-                            if calls:
-                                typed_calls = [parse_tool_call_from_dict(c) for c in calls]
-                                yield tool_calls_event(typed_calls)
-                            return
-                        if not data_str:
-                            continue
-                        try:
-                            chunk = json.loads(data_str)
-                            delta = chunk.get("choices", [{}])[0].get("delta", {})
-                        except (json.JSONDecodeError, IndexError, KeyError):
-                            continue
-
-                        tc_delta = delta.get("tool_calls")
-                        if tc_delta:
-                            for tcd in tc_delta:
-                                tc_accum.add_delta(tcd)
-                            finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
-                            if finish_reason == "tool_calls":
-                                calls = tc_accum.get_calls()
-                                if calls:
-                                    tc_accum.clear()
-                                    typed_calls = [parse_tool_call_from_dict(c) for c in calls]
-                                    yield tool_calls_event(typed_calls)
-                            continue
-
-                        finish_reason = chunk.get("choices", [{}])[0].get("finish_reason")
-                        if finish_reason == "tool_calls":
-                            calls = tc_accum.get_calls()
-                            if calls:
-                                tc_accum.clear()
-                                typed_calls = [parse_tool_call_from_dict(c) for c in calls]
-                                yield tool_calls_event(typed_calls)
-                            continue
-
-                        content = delta.get("content")
-                        reasoning = delta.get("reasoning_content")
-                        if content is not None:
-                            yield text_delta(content)
-                        if reasoning is not None:
-                            yield reasoning_delta(reasoning)
-
-                # Fallback: if loop exits naturally without [DONE] message, yield remaining tool_calls
-                calls = tc_accum.get_calls()
-                if calls:
-                    typed_calls = [parse_tool_call_from_dict(c) for c in calls]
-                    yield tool_calls_event(typed_calls)
+                for event in parse_sse_events(response, cancel_event):
+                    yield event
 
             self._active_response = None
 
         except requests.exceptions.Timeout:
             if self._active_response_check_cancel(cancel_event):
                 return
-            raise _LLMHttpError(f"请求超时（{timeout}秒）")
+            raise _LLMHttpError(f"请求超时（{config.timeout}秒）")
         except requests.exceptions.ConnectionError as e:
             if self._active_response_check_cancel(cancel_event):
                 return
@@ -330,19 +436,12 @@ class _LLMHttpClient:
             self._session = requests.Session()
             self._init_session_retry()
 
+    # ── 同步请求 ────────────────────────────────────────────────
+
     def sync_chat_completion(
         self,
-        base_url: str,
-        api_key: str,
-        model_name: str,
+        config: LLMRequestConfig,
         messages: list,
-        timeout: int = 15,
-        temperature: float = DEFAULT_TEMPERATURE,
-        max_tokens: int = DEFAULT_MAX_TOKENS,
-        top_p: float = DEFAULT_TOP_P,
-        tools: Optional[list] = None,
-        tool_choice: Optional[str] = None,
-        extra_system_messages: Optional[list] = None,
     ) -> dict:
         """Non-streaming chat completion. Returns the full assistant message dict.
 
@@ -352,17 +451,24 @@ class _LLMHttpClient:
         If the model responds with tool calls, the dict also contains:
           - "tool_calls": list of ToolCall dicts
 
-        Pass ``tools`` and ``tool_choice`` to enable function calling.
+        Pass ``tools`` and ``tool_choice`` in ``config`` to enable function calling.
+
+        Parameters
+        ----------
+        config : LLMRequestConfig
+            请求配置。
+        messages : list
+            对话消息列表。
+
+        Returns
+        -------
+        dict
+            完整的 assistant message dict，可直接追加到 messages 列表。
         """
-        url, headers, body = self._build_request(
-            base_url, api_key, model_name, messages, stream=False,
-            temperature=temperature, max_tokens=max_tokens, top_p=top_p,
-            tools=tools, tool_choice=tool_choice,
-            extra_system_messages=extra_system_messages,
-        )
+        url, headers, body = self._build_request(config, messages, stream=False)
 
         try:
-            resp = self._session.post(url, json=body, headers=headers, timeout=timeout)
+            resp = self._session.post(url, json=body, headers=headers, timeout=config.timeout)
             resp.raise_for_status()
             data = resp.json()
             msg = data["choices"][0]["message"]

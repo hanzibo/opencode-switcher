@@ -263,21 +263,24 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
         subagent_max_tokens = 4096
 
     try:
-        from llm_client import _LLMHttpClient, _LLMHttpError
+        from llm_client import _LLMHttpClient, _LLMHttpError, LLMRequestConfig
         llm = _LLMHttpClient()
         final_text = ""
 
         for turn in range(clamped_turns):
             try:
-                response = llm.sync_chat_completion(
+                sub_config = LLMRequestConfig(
                     base_url=config.base_url,
                     api_key=config.api_key,
                     model_name=config.model_name,
-                    messages=messages,
                     timeout=_SUBAGENT_TIMEOUT_PER_TURN,
+                    max_tokens=subagent_max_tokens,
                     tools=sub_tools,
                     tool_choice="auto",
-                    max_tokens=subagent_max_tokens,
+                )
+                response = llm.sync_chat_completion(
+                    sub_config,
+                    messages=messages,
                 )
             except _LLMHttpError as e:
                 return f"子代理 LLM 请求失败：{e}"

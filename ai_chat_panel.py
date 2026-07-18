@@ -59,12 +59,12 @@ from dynamic_copy_dialog import show_dynamic_copy_dialog
 from sort_dialog import show_sort_dialog
 from recycle_bin_dialog import show_recycle_bin_dialog
 from sort_cats_dialog import show_sort_cats_dialog
-from llm_client import _LLMHttpClient, _LLMHttpError
+from llm_client import _LLMHttpClient, _LLMHttpError, LLMRequestConfig
 from event_types import StreamEventType
 from prompt_dialog import show_prompt_dialog
 from prompts_config_dialog import show_prompts_config_dialog
 from ai_popovers import AICommandPopover, HistoryPopover
-from ai_tool_loop import run_llm_react_loop
+from ai_tool_loop import run_llm_react_loop, ToolLoopContext
 
 AI_BTN_LABEL_SEND = "发送"
 AI_BTN_LABEL_STOP = "暂停"
@@ -1211,16 +1211,21 @@ class AIChatPanel(Gtk.Box):
             if self._ai_conversation_id == conv_id:
                 GLib.idle_add(self._on_tool_result, tool_call_id, result_text, status, req_id)
 
-        run_llm_react_loop(
-            llm_client=self._llm_client,
+        # ── 构建 LLMRequestConfig ──
+        config = LLMRequestConfig(
             base_url=base_url,
             api_key=api_key,
             model_name=model_name,
-            messages=state["messages"],
-            req_id=req_id,
             temperature=temperature,
             max_tokens=max_tokens,
             top_p=top_p,
+            timeout=30,
+            extra_system_messages=extra_system_messages,
+        )
+
+        # ── 构建 ToolLoopContext（替代 20+ 个独立回调参数） ──
+        ctx = ToolLoopContext(
+            req_id=req_id,
             cancel_event=cancel_event,
             get_current_request_id_fn=lambda: req_id,
             append_message_fn=append_message_callback,
@@ -1237,9 +1242,15 @@ class AIChatPanel(Gtk.Box):
             on_tool_result_fn=on_tool_result_fn,
             on_tool_calls_started_fn=self._on_tool_calls_started,
             conv_id=conv_id,
-            extra_system_messages=extra_system_messages,
             mcp_tool_definitions=getattr(self, "_cached_mcp_tools", None),
             mcp_client_manager=getattr(self, "_mcp_client_mgr", None),
+        )
+
+        run_llm_react_loop(
+            llm_client=self._llm_client,
+            config=config,
+            ctx=ctx,
+            messages=state["messages"],
         )
 
     def _append_assistant_turn_to_cache(self):
@@ -3053,13 +3064,18 @@ class AIChatPanel(Gtk.Box):
             print(f"[summary] 开始流式生成摘要 (已丢弃 {len(pruned_messages)} 条消息, max_chars={max_chars}, model={model_name}, prompt_len={len(prompt)}字)", flush=True)
 
             result_parts = []
-            for event in self._llm_client.stream_chat_completion(
-                base_url, api_key, model_name,
-                [{"role": "user", "content": prompt}],
-                timeout=30,
+            summary_config = LLMRequestConfig(
+                base_url=base_url,
+                api_key=api_key,
+                model_name=model_name,
                 temperature=0.3,
                 max_tokens=max(4096, max_chars * 4),
                 top_p=top_p,
+                timeout=30,
+            )
+            for event in self._llm_client.stream_chat_completion(
+                summary_config,
+                [{"role": "user", "content": prompt}],
                 cancel_event=cancel_event,
             ):
                 if cancel_event.is_set():
@@ -3409,9 +3425,13 @@ class AIChatPanel(Gtk.Box):
                         model_name: str, timeout: int = 15,
                         temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
                         top_p: float = DEFAULT_TOP_P) -> Optional[str]:
+        config = LLMRequestConfig(
+            base_url=base_url, api_key=api_key, model_name=model_name,
+            timeout=timeout, temperature=temperature,
+            max_tokens=max_tokens, top_p=top_p,
+        )
         return self._llm_client.sync_chat_completion(
-            base_url, api_key, model_name, messages, timeout=timeout,
-            temperature=temperature, max_tokens=max_tokens, top_p=top_p,
+            config, messages,
         ).get("content")
 
     def _call_llm_and_set_title(self, prompt: str, conv_id: str,
