@@ -3034,6 +3034,12 @@ class AIChatPanel(Gtk.Box):
         self._render_markdown(self._ai_markdown_text)
         if save_summary:
             self._save_summary_to_conversation()
+            # 同时写回裁剪后的消息列表，确保对话文件与内存状态一致
+            try:
+                self._save_current_conversation(self._build_model_snapshot(),
+                                                preserve_updated_at=True)
+            except Exception as e:
+                print(f"[prune] 保存裁剪后对话失败: {e}", flush=True)
         self._clear_summary_status()
         self._update_token_display()
 
