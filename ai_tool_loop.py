@@ -10,7 +10,7 @@ import json
 import logging
 from dataclasses import dataclass, replace
 from threading import Event
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from gi.repository import GLib
 
@@ -19,6 +19,9 @@ from event_types import StreamEventType, ToolCallData, tool_call_to_dict
 from llm_client import _LLMHttpError
 # clean_messages_for_llm 已移至 llm_client 模块
 from llm_client import clean_messages_for_llm
+
+if TYPE_CHECKING:
+    from mcp_integration.client_manager import MCPClientManager
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +75,7 @@ class ToolLoopContext:
     on_tool_calls_started_fn: Optional[Callable[[int], None]] = None
     conv_id: Optional[str] = None
     mcp_tool_definitions: Optional[list] = None
-    mcp_client_manager: Optional[Any] = None
+    mcp_client_manager: Optional['MCPClientManager'] = None
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -135,16 +138,6 @@ def _execute_tool_call(tc: ToolCallData, ctx: ToolLoopContext) -> str:
         tool_call_to_dict(tc),
         cancel_event=ctx.cancel_event,
     )
-
-
-def _get_tool_status(result: str, ctx: ToolLoopContext) -> str:
-    """判断工具执行结果状态。"""
-    if ctx.cancel_event and ctx.cancel_event.is_set():
-        return "cancelled"
-    if result.strip().startswith(tool_registry.ERROR_PREFIXES):
-        return "error"
-    return "success"
-
 
 # ═══════════════════════════════════════════════════════════════════
 #  主循环
@@ -296,7 +289,10 @@ def _perform_llm_call(
 
             # 增量工具结果通知（v3 特性）
             if ctx.on_tool_result_fn is not None:
-                ctx.on_tool_result_fn(tc.id, result, _get_tool_status(result, ctx))
+                status = ("cancelled" if ctx.cancel_event and ctx.cancel_event.is_set()
+                          else "error" if result.strip().startswith(tool_registry.ERROR_PREFIXES)
+                          else "success")
+                ctx.on_tool_result_fn(tc.id, result, status)
 
             # 用户取消 → 追加已取消后缀
             if ctx.cancel_event and ctx.cancel_event.is_set():
