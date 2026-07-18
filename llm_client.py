@@ -46,6 +46,8 @@ class LLMRequestConfig:
     tools: Optional[list] = None
     tool_choice: Optional[str] = None
     extra_system_messages: Optional[list] = None
+    thinking_enabled: bool = False
+    reasoning_effort: str = "high"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -347,6 +349,10 @@ class _LLMHttpClient:
         if config.tools:
             body["tools"] = config.tools
             body["tool_choice"] = config.tool_choice or tool_registry.TOOL_CHOICE_AUTO
+        if config.thinking_enabled:
+            body["reasoning_effort"] = config.reasoning_effort
+            # DeepSeek 兼容：需额外传递 thinking 开关（OpenAI 标准模型会忽略此字段）
+            body["thinking"] = {"type": "enabled"}
         return url, headers, body
 
     def _active_response_check_cancel(self, cancel_event) -> bool:

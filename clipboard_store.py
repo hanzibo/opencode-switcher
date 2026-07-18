@@ -867,6 +867,8 @@ class LLMModelConfig:
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
     top_p: float = DEFAULT_TOP_P
+    thinking_enabled: bool = False
+    reasoning_effort: str = "high"
 
 
 LLM_SETTINGS_PATH = os.path.join(CONFIG_DIR, "llm_settings.json")
@@ -906,6 +908,8 @@ class LLMSettingsStore:
                         temperature=m.get("temperature", DEFAULT_TEMPERATURE),
                         max_tokens=m.get("max_tokens", DEFAULT_MAX_TOKENS),
                         top_p=m.get("top_p", DEFAULT_TOP_P),
+                        thinking_enabled=m.get("thinking_enabled", False),
+                        reasoning_effort=m.get("reasoning_effort", "high"),
                     ))
             else:
                 # Migrate old format

@@ -568,8 +568,19 @@ class AIChatPanel(Gtk.Box):
             if "top_p" in model_info:
                 top_p = model_info["top_p"]
 
+        # 思考配置优先级：model_info（对话快照）> model_config（当前设置）> 默认值
+        if model_info and "thinking_enabled" in model_info:
+            thinking_enabled = model_info["thinking_enabled"]
+        else:
+            thinking_enabled = model_config.thinking_enabled if model_config else False
+
+        if model_info and "reasoning_effort" in model_info:
+            reasoning_effort = model_info["reasoning_effort"]
+        else:
+            reasoning_effort = model_config.reasoning_effort if model_config else "high"
+
         display_name = f"{model_config.alias} ({model_name})" if model_config else model_name
-        return base_url, api_key, model_name, display_name, temperature, max_tokens, top_p
+        return base_url, api_key, model_name, display_name, temperature, max_tokens, top_p, thinking_enabled, reasoning_effort
 
     def _get_title_model_config(self):
         """Return (base_url, api_key, model_name, temperature, max_tokens, top_p)
@@ -943,7 +954,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_spinner.show()
         self._ai_spinner.start()
 
-        base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+        base_url, api_key, model_name, _, temperature, max_tokens, top_p, _, _ = self._read_model_config(
             self._ai_last_prompt_obj,
             getattr(self, "_ai_active_model_info", None)
         )
@@ -1021,7 +1032,7 @@ class AIChatPanel(Gtk.Box):
         self._update_send_button(True)
         self._ai_entry.placeholder_text = "等待回复中..."
 
-        base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+        base_url, api_key, model_name, _, temperature, max_tokens, top_p, _, _ = self._read_model_config(
             self._ai_last_prompt_obj,
             getattr(self, "_ai_active_model_info", None)
         )
@@ -1063,7 +1074,7 @@ class AIChatPanel(Gtk.Box):
         self._start_new_conversation(prompt_text)
         self._ai_last_prompt_obj = prompt_obj
 
-        base_url, api_key, model_name, display_name, temperature, max_tokens, top_p = self._read_model_config(prompt_obj)
+        base_url, api_key, model_name, display_name, temperature, max_tokens, top_p, thinking_enabled, reasoning_effort = self._read_model_config(prompt_obj)
         self._ai_active_model_info = {
             "alias": display_name.split(" (")[0] if " (" in display_name else display_name,
             "base_url": base_url,
@@ -1071,6 +1082,8 @@ class AIChatPanel(Gtk.Box):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "top_p": top_p,
+            "thinking_enabled": thinking_enabled,
+            "reasoning_effort": reasoning_effort,
         }
         self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
 
@@ -1108,14 +1121,15 @@ class AIChatPanel(Gtk.Box):
             target=self._run_llm_api_request,
             args=(base_url, api_key, model_name, msgs_for_llm, current_req_id,
                   temperature, max_tokens, top_p, self._ai_markdown_text,
-                  self._ai_conversation_id, extra_sys),
+                  self._ai_conversation_id, extra_sys, thinking_enabled, reasoning_effort),
             daemon=True
         ).start()
 
     def _run_llm_api_request(self, base_url: str, api_key: str, model_name: str, messages: list,
                               req_id: int, temperature: float = DEFAULT_TEMPERATURE, max_tokens: int = DEFAULT_MAX_TOKENS,
                               top_p: float = DEFAULT_TOP_P, markdown_text: str = "", conv_id: str = "",
-                              extra_system_messages: Optional[list] = None):
+                              extra_system_messages: Optional[list] = None,
+                              thinking_enabled: bool = False, reasoning_effort: str = "high"):
         """Start the ReAct loop by delegating execution to the run_llm_react_loop orchestrator."""
         # 等待 MCP 工具缓存就绪（异步预取可能还未完成，但后续迭代会拿到）
         cancel_event = threading.Event()
@@ -1221,6 +1235,8 @@ class AIChatPanel(Gtk.Box):
             top_p=top_p,
             timeout=30,
             extra_system_messages=extra_system_messages,
+            thinking_enabled=thinking_enabled,
+            reasoning_effort=reasoning_effort,
         )
 
         # ── 构建 ToolLoopContext（替代 20+ 个独立回调参数） ──
@@ -1390,7 +1406,7 @@ class AIChatPanel(Gtk.Box):
                     if title_cfg:
                         base_url, api_key, model_name, temperature, max_tokens, top_p = title_cfg
                     else:
-                        base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+                        base_url, api_key, model_name, _, temperature, max_tokens, top_p, _, _ = self._read_model_config(
                             None, getattr(self, "_ai_active_model_info", None)
                         )
                     if base_url and api_key:
@@ -1502,7 +1518,7 @@ class AIChatPanel(Gtk.Box):
             if title_cfg:
                 base_url, api_key, model_name, temperature, max_tokens, top_p = title_cfg
             else:
-                base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+                base_url, api_key, model_name, _, temperature, max_tokens, top_p, _, _ = self._read_model_config(
                     self._ai_last_prompt_obj,
                     getattr(self, "_ai_active_model_info", None)
                 )
@@ -2196,6 +2212,8 @@ class AIChatPanel(Gtk.Box):
             "temperature": model.temperature,
             "max_tokens": model.max_tokens,
             "top_p": model.top_p,
+            "thinking_enabled": model.thinking_enabled,
+            "reasoning_effort": model.reasoning_effort,
         }
         self._ai_last_prompt_obj = None  # manual switch overrides prompt binding
 
@@ -2361,7 +2379,7 @@ class AIChatPanel(Gtk.Box):
                 if title_cfg:
                     base_url, api_key, model_name, temperature, max_tokens, top_p = title_cfg
                 else:
-                    base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+                    base_url, api_key, model_name, _, temperature, max_tokens, top_p, _, _ = self._read_model_config(
                         self._ai_last_prompt_obj,
                         getattr(self, "_ai_active_model_info", None)
                     )
@@ -3178,7 +3196,7 @@ class AIChatPanel(Gtk.Box):
         active = getattr(self, "_ai_active_model_info", None)
         if active:
             return dict(active)  # shallow copy to prevent caller from mutating _ai_active_model_info
-        base_url, api_key, model_name, _, temperature, max_tokens, top_p = self._read_model_config(
+        base_url, api_key, model_name, _, temperature, max_tokens, top_p, _, _ = self._read_model_config(
             self._ai_last_prompt_obj, None
         )
         return {
@@ -3188,6 +3206,8 @@ class AIChatPanel(Gtk.Box):
             "temperature": temperature,
             "max_tokens": max_tokens,
             "top_p": top_p,
+            "thinking_enabled": False,
+            "reasoning_effort": "high",
         }
 
     def _save_current_conversation(self, model_snapshot: Dict[str, Any],
@@ -3328,7 +3348,7 @@ class AIChatPanel(Gtk.Box):
         self._refresh_subagent_bar()
 
         # Update model info display label
-        _, _, _, display_name, _, _, _ = self._read_model_config(None, self._ai_active_model_info)
+        _, _, _, display_name, _, _, _, _, _ = self._read_model_config(None, self._ai_active_model_info)
         self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
 
         # Ensure AI panel + input area are visible
@@ -3599,7 +3619,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_assistant_html_base = ""
         self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
         self._ai_entry.get_buffer().set_text("")
-        _, _, _, display_name, _, _, _ = self._read_model_config(None, None)
+        _, _, _, display_name, _, _, _, _, _ = self._read_model_config(None, None)
         self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
         self._ai_active_model_info = None
         self._ai_last_prompt_obj = None

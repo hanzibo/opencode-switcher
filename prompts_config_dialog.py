@@ -350,6 +350,45 @@ class PromptsConfigDialog:
         top_p_hbox.pack_start(top_p_hint, False, False, 0)
         params_vbox.pack_start(top_p_hbox, False, False, 0)
 
+        # ── Thinking Mode ──
+        thinking_sep = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        thinking_sep.set_margin_top(4)
+        thinking_sep.set_margin_bottom(4)
+        params_vbox.pack_start(thinking_sep, False, False, 0)
+
+        thinking_toggle_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        thinking_check = Gtk.CheckButton.new_with_label("启用思考模式 (reasoning_effort)")
+        thinking_check.set_tooltip_text(
+            "开启后发送 reasoning_effort 参数。\n"
+            "适用于 DeepSeek-V4、o1、o3 等推理模型。\n"
+            "思考模式下 temperature/top_p 等参数无效。"
+        )
+        thinking_toggle_hbox.pack_start(thinking_check, False, False, 0)
+        params_vbox.pack_start(thinking_toggle_hbox, False, False, 0)
+
+        # Reasoning Effort dropdown
+        effort_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        effort_lbl = Gtk.Label.new("思考程度:")
+        effort_lbl.set_size_request(120, -1)
+        effort_lbl.set_xalign(0)
+        effort_combo = Gtk.ComboBoxText.new()
+        effort_combo.append("high", "high (高)")
+        effort_combo.append("max", "max (最高)")
+        effort_combo.set_active_id("high")
+        effort_combo.set_hexpand(True)
+        effort_combo.set_sensitive(False)  # 默认跟随 thinking_check
+        effort_hint = Gtk.Label.new("(越高越耗时)")
+        effort_hint.get_style_context().add_class("dim-label")
+        effort_hbox.pack_start(effort_lbl, False, False, 0)
+        effort_hbox.pack_start(effort_combo, True, True, 0)
+        effort_hbox.pack_start(effort_hint, False, False, 0)
+        params_vbox.pack_start(effort_hbox, False, False, 0)
+
+        # thinking_check 控制 effort_combo 的可用性
+        def on_thinking_toggled(cb):
+            effort_combo.set_sensitive(cb.get_active())
+        thinking_check.connect("toggled", on_thinking_toggled)
+
         params_frame.add(params_vbox)
 
         vbox_right.pack_start(check_hbox, False, False, 0)
@@ -447,6 +486,8 @@ class PromptsConfigDialog:
                 m.temperature = temperature_spin.get_value()
                 m.max_tokens = int(max_tokens_spin.get_value())
                 m.top_p = top_p_spin.get_value()
+                m.thinking_enabled = thinking_check.get_active()
+                m.reasoning_effort = effort_combo.get_active_id() or "high"
 
         def _model_label(m):
             parts = []
@@ -500,6 +541,9 @@ class PromptsConfigDialog:
                 temperature_spin.set_value(m.temperature)
                 max_tokens_spin.set_value(m.max_tokens)
                 top_p_spin.set_value(m.top_p)
+                thinking_check.set_active(m.thinking_enabled)
+                effort_combo.set_active_id(m.reasoning_effort or "high")
+                effort_combo.set_sensitive(m.thinking_enabled)
                 self._updating_model_ui = False
 
                 alias_entry.set_sensitive(True)
@@ -511,6 +555,8 @@ class PromptsConfigDialog:
                 temperature_spin.set_sensitive(True)
                 max_tokens_spin.set_sensitive(True)
                 top_p_spin.set_sensitive(True)
+                thinking_check.set_sensitive(True)
+                effort_combo.set_sensitive(m.thinking_enabled)
                 delete_model_btn.set_sensitive(len(local_models) > 1)
             else:
                 self._updating_model_ui = True
@@ -523,6 +569,9 @@ class PromptsConfigDialog:
                 temperature_spin.set_value(DEFAULT_TEMPERATURE)
                 max_tokens_spin.set_value(DEFAULT_MAX_TOKENS)
                 top_p_spin.set_value(DEFAULT_TOP_P)
+                thinking_check.set_active(False)
+                effort_combo.set_active_id("high")
+                effort_combo.set_sensitive(False)
                 self._updating_model_ui = False
 
                 alias_entry.set_sensitive(False)
@@ -534,6 +583,8 @@ class PromptsConfigDialog:
                 temperature_spin.set_sensitive(False)
                 max_tokens_spin.set_sensitive(False)
                 top_p_spin.set_sensitive(False)
+                thinking_check.set_sensitive(False)
+                effort_combo.set_sensitive(False)
                 delete_model_btn.set_sensitive(False)
 
         def on_model_row_selected(listbox, row):
