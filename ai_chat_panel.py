@@ -3071,7 +3071,7 @@ class AIChatPanel(Gtk.Box):
                 print(f"[summary] 模板格式错误（可用占位符：{{prev_summary}}、{{conversation_text}}、{{max_chars}}）: {e}", flush=True)
                 return
 
-            base_url, api_key, model_name, _, temperature, max_tokens, top_p = \
+            base_url, api_key, model_name, _, temperature, max_tokens, top_p, _, _ = \
                 self._read_model_config(self._ai_last_prompt_obj,
                                         getattr(self, "_ai_active_model_info", None))
 
