@@ -8,11 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from mcp import Tool
-from mcp.types import CallToolResult
 
-
-def mcp_tool_to_openai_schema(server_name: str, tool: Tool) -> Dict[str, Any]:
+def mcp_tool_to_openai_schema(server_name: str, tool: Any) -> Dict[str, Any]:
     """将 MCP Tool 转换为 OpenAI-compatible function schema。
 
     工具名称添加 ``{server_name}:`` 前缀以避免同名冲突。
@@ -31,6 +28,7 @@ def mcp_tool_to_openai_schema(server_name: str, tool: Tool) -> Dict[str, Any]:
     dict
         OpenAI function-calling schema，可混入 TOOL_DEFINITIONS 列表。
     """
+    from mcp import Tool  # lazy import
     params = tool.inputSchema or {"type": "object", "properties": {}}
     # 移除 OpenAI 不支持的 JSON Schema 元字段
     if isinstance(params, dict):
