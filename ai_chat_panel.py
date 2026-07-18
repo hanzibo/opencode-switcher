@@ -2603,7 +2603,7 @@ class AIChatPanel(Gtk.Box):
                         above = self._ai_cmd_popover.listbox.get_row_at_index(idx - 1)
                         if above:
                             self._ai_cmd_popover.listbox.select_row(above)
-                            self._ai_cmd_popover._scroll_to_row(above)
+                            self._ai_cmd_popover.scroll_to_row(above)
                 return True
             if keyname in ("Down", "KP_Down"):
                 current = self._ai_cmd_popover.listbox.get_selected_row()
@@ -2612,12 +2612,12 @@ class AIChatPanel(Gtk.Box):
                     below = self._ai_cmd_popover.listbox.get_row_at_index(idx + 1)
                     if below:
                         self._ai_cmd_popover.listbox.select_row(below)
-                        self._ai_cmd_popover._scroll_to_row(below)
+                        self._ai_cmd_popover.scroll_to_row(below)
                 else:
                     first = self._ai_cmd_popover.listbox.get_row_at_index(0)
                     if first:
                         self._ai_cmd_popover.listbox.select_row(first)
-                        self._ai_cmd_popover._scroll_to_row(first)
+                        self._ai_cmd_popover.scroll_to_row(first)
                 return True
             if keyname in ("Return", "KP_Enter"):
                 self._ai_cmd_popover.confirm_command_completion()

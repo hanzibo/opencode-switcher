@@ -432,7 +432,7 @@ class SettingsDialog:
 
         # ── Streaming mode info ──
         mode_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
-        mode_lbl = Gtk.Label.new("流式 v2 模式:")
+        mode_lbl = Gtk.Label.new("流式模式:")
         mode_lbl.set_size_request(180, -1)
         mode_lbl.set_xalign(0)
 
@@ -446,7 +446,7 @@ class SettingsDialog:
         mode_hint = Gtk.Label.new()
         mode_hint.set_markup(
             "<span size='small' foreground='#888888'>"
-            "流式 v2 始终启用完整模式。旧版关闭/纯文本模式已移除。\n"
+            "流式始终启用完整模式。旧版关闭/纯文本模式已移除。\n"
             "更改需重启应用后生效。"
             "</span>"
         )

@@ -34,7 +34,7 @@ class AICommandPopover(Gtk.Popover):
         self.connect("closed", self._on_cmd_popover_closed)
         self.connect("key-press-event", self._on_cmd_popover_key_press)
 
-    def _scroll_to_row(self, row):
+    def scroll_to_row(self, row):
         """Scroll the ScrolledWindow to make *row* visible."""
         if row is None:
             return
@@ -111,7 +111,7 @@ class AICommandPopover(Gtk.Popover):
                     above = self.listbox.get_row_at_index(idx - 1)
                     if above:
                         self.listbox.select_row(above)
-                        self._scroll_to_row(above)
+                        self.scroll_to_row(above)
             return True
 
         if keyname in ("Down", "KP_Down"):
@@ -121,12 +121,12 @@ class AICommandPopover(Gtk.Popover):
                 below = self.listbox.get_row_at_index(idx + 1)
                 if below:
                     self.listbox.select_row(below)
-                    self._scroll_to_row(below)
+                    self.scroll_to_row(below)
             else:
                 first = self.listbox.get_row_at_index(0)
                 if first:
                     self.listbox.select_row(first)
-                    self._scroll_to_row(first)
+                    self.scroll_to_row(first)
             return True
 
         if keyname in ("Return", "KP_Enter", "Tab"):
