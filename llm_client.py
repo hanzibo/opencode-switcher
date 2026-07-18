@@ -203,9 +203,9 @@ def parse_sse_events(
                 yield tool_calls_event(typed_calls)
             continue
 
-        # 文本 / 推理增量
+        # 文本 / 推理增量（兼容 DeepSeek reasoning_content 和 MiMo reasoning）
         content = delta.get("content")
-        reasoning = delta.get("reasoning_content")
+        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
         if content is not None:
             yield text_delta(content)
         if reasoning is not None:
@@ -323,7 +323,8 @@ class _LLMHttpClient:
                 if tool_calls:
                     msg["tool_calls"] = tool_calls
                     msg["content"] = content if content else None
-                    rc = m.get("reasoning_content")
+                    # 兼容 DeepSeek (reasoning_content) 和 MiMo (reasoning)
+                    rc = m.get("reasoning_content") or m.get("reasoning")
                     if rc:
                         msg["reasoning_content"] = rc
                 else:
