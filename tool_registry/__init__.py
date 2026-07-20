@@ -34,11 +34,21 @@ ERROR_PREFIXES = ("❌", "⚠️", "错误：", "执行工具「", "搜索失败
 # ── Assemble TOOL_DEFINITIONS from per-module TOOL_SCHEMAS ──────────
 
 TOOL_DEFINITIONS: List[Dict[str, Any]] = []
+# 工具名 → 模块名映射（用于 UI 分组）
+TOOL_MODULE_MAP: Dict[str, str] = {}
+_MODULE_NAMES: Dict[str, str] = {
+    common: "common", todo: "todo", filesystem: "filesystem",
+    search: "search", web: "web", bash: "bash",
+    notification: "notification", mail: "mail", display: "display",
+    subagent: "subagent", _code_analysis: "code_analysis", _memory: "memory",
+}
 for _mod in [common, todo, filesystem, search, web, bash,
              notification, mail, display, subagent, _code_analysis,
              _memory]:
+    _mod_name = _MODULE_NAMES[_mod]
     for _schema in getattr(_mod, "TOOL_SCHEMAS", []):
         TOOL_DEFINITIONS.append(_schema)
+        TOOL_MODULE_MAP[_schema["function"]["name"]] = _mod_name
 
 
 # ── Assemble TOOL_EXECUTORS dispatch dict ───────────────────────────

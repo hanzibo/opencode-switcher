@@ -425,7 +425,7 @@ class SettingsDialog:
 
         按模块分组显示所有内置工具，每组可折叠，每个工具有独立开关。
         """
-        from tool_registry import TOOL_DEFINITIONS
+        from tool_registry import TOOL_DEFINITIONS, TOOL_MODULE_MAP
 
         # ── Section title ──
         title = Gtk.Label.new()
@@ -445,13 +445,9 @@ class SettingsDialog:
         parent_vbox.pack_start(hint, False, False, 0)
 
         # ── 解析工具按模块分组 ──
-        # 模块名 → 工具列表
         groups: dict = {}
-        # 每个工具名 → 风险级别
         risk_map = {
-            # 高风险 (🔴)
             "bash": "high", "write_file": "high", "edit_file": "high", "sub_agent": "high",
-            # 中风险 (🟡)
             "read_file": "medium", "grep_search": "medium",
             "web_search": "medium", "web_fetch": "medium",
             "read_qq_mail": "medium", "memory_save": "medium",
@@ -459,31 +455,7 @@ class SettingsDialog:
 
         for s in TOOL_DEFINITIONS:
             name = s["function"]["name"]
-            # 根据命名规律推断所属模块组
-            if name in ("get_current_time", "ask_user_question"):
-                group = "common"
-            elif name.startswith("todo_"):
-                group = "todo"
-            elif name in ("list_directory", "read_file", "write_file", "edit_file", "file_info"):
-                group = "filesystem"
-            elif name in ("grep_search", "glob_find"):
-                group = "search"
-            elif name in ("web_search", "web_fetch"):
-                group = "web"
-            elif name in ("bash", "bash_get_session_info"):
-                group = "bash"
-            elif name == "send_notification":
-                group = "notification"
-            elif name == "read_qq_mail":
-                group = "mail"
-            elif name in ("sub_agent", "get_subagent_status"):
-                group = "subagent"
-            elif name in ("get_code_metrics", "find_project_dependencies", "parse_file_ast"):
-                group = "code_analysis"
-            elif name.startswith("memory_"):
-                group = "memory"
-            else:
-                group = "other"
+            group = TOOL_MODULE_MAP.get(name, "other")
             groups.setdefault(group, []).append(s)
 
         # 组排序（按重要性）
@@ -500,6 +472,7 @@ class SettingsDialog:
 
         # 存储所有 checkbutton 以便保存时读取
         self._tool_toggle_widgets: list[dict] = []
+        self._tool_toggle_lookup: dict[str, Gtk.CheckButton] = {}
         disabled_set = set(self._ai_settings_store.disabled_tools)
 
         # 每组一个可折叠区域
@@ -574,6 +547,7 @@ class SettingsDialog:
                     "check": check,
                     "group": g,
                 })
+                self._tool_toggle_lookup[name] = check
 
         expander.add(inner_box)
         parent_vbox.pack_start(expander, False, False, 0)
@@ -597,11 +571,9 @@ class SettingsDialog:
         """组全选/全不选按钮切换时，同步组内所有工具。"""
         active = btn.get_active()
         for s in schemas:
-            name = s["function"]["name"]
-            for w in self._tool_toggle_widgets:
-                if w["name"] == name:
-                    w["check"].set_active(active)
-                    break
+            check = self._tool_toggle_lookup.get(s["function"]["name"])
+            if check:
+                check.set_active(active)
 
     def _on_tool_enable_all(self, btn):
         """全部启用按钮。"""
