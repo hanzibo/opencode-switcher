@@ -124,9 +124,8 @@ class MCPClientManager:
             await session.connect()
             info = await session.initialize()
 
-            # initialize 成功后，将 session_id 注入 transport（2025-11-25 协议）
-            if hasattr(transport, "update_session_id"):
-                transport.update_session_id(info or "")
+            # session_id 已由 HttpTransport.send_line 自动从响应头提取，
+            # 此处无需手动设置
 
             self._sessions[config.name] = session
             self._configs[config.name] = config
