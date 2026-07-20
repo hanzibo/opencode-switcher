@@ -396,6 +396,8 @@ class HttpTransport(BaseTransport):
     @staticmethod
     def _find_last_event_end(text: str, events: List[SseEvent]) -> int:
         """找到已解析事件的结束位置。"""
+        if not events:
+            return 0
         # 简单方法：找到最后一个解析出的事件的 data 所在位置之后的第一个 \n\n
         last_data = events[-1].data if events else ""
         if not last_data:

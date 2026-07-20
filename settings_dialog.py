@@ -18,6 +18,7 @@ from typing import Optional, Callable
 
 from clipboard_store import QQMailCredentialsStore, AISettingsStore
 from ai_text_utils import set_code_highlight
+from mcp_integration import MCPServerConfig, MCPClientManager
 
 
 def show_settings_dialog(parent_window: Gtk.Window,
@@ -715,7 +716,6 @@ class SettingsDialog:
 
     def _add_mcp_server_card(self, data: Optional[dict] = None):
         """添加一个 MCP 服务器配置卡片，支持 stdio 和 http 两种模式。"""
-        from mcp_integration.server_config import MCPServerConfig
         cfg = MCPServerConfig.from_dict(data or {})
 
         frame = Gtk.Frame.new()
@@ -956,9 +956,6 @@ class SettingsDialog:
         def _do_test():
             import asyncio
             try:
-                from mcp_integration.client_manager import MCPClientManager
-                from mcp_integration.server_config import MCPServerConfig
-
                 config = MCPServerConfig(
                     name=name,
                     transport=transport,
