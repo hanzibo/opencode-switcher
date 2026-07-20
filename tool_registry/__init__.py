@@ -86,18 +86,50 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
 
 # ── Tool dispatcher ─────────────────────────────────────────────────
 
-def execute_tool_call(tool_call: dict, cancel_event=None) -> str:
+def get_enabled_tool_definitions(
+    disabled_list: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """返回过滤后的工具定义列表，排除 disabled_list 中的工具名。
+
+    Args:
+        disabled_list: 禁用的工具名称列表，None 或空列表表示全部启用。
+
+    Returns:
+        过滤后的 TOOL_DEFINITIONS 子集。
+    """
+    if not disabled_list:
+        return list(TOOL_DEFINITIONS)
+    disabled_set = set(disabled_list)
+    return [s for s in TOOL_DEFINITIONS
+            if s["function"]["name"] not in disabled_set]
+
+
+def is_tool_disabled(tool_name: str, disabled_list: Optional[List[str]] = None) -> bool:
+    """判断工具是否被禁用。"""
+    return bool(disabled_list) and tool_name in disabled_list
+
+
+def execute_tool_call(
+    tool_call: dict,
+    cancel_event=None,
+    disabled_list: Optional[List[str]] = None,
+) -> str:
     """Execute a single tool call and return the result as a string.
 
     Args:
         tool_call: OpenAI-format tool_call dict with "id", "type", "function" keys.
         cancel_event: Optional threading.Event for cancellation signaling.
+        disabled_list: Optional list of disabled tool names.
 
     Returns:
         String result to be sent back as tool role content.
     """
     name = tool_call.get("function", {}).get("name", "")
     arguments_raw = tool_call.get("function", {}).get("arguments", "{}")
+
+    # 检查工具是否被禁用
+    if is_tool_disabled(name, disabled_list):
+        return f"⚠️ 工具「{name}」已被禁用，如需使用请在设置中启用"
 
     try:
         arguments = json.loads(arguments_raw)
