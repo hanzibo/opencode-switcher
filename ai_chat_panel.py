@@ -2429,10 +2429,17 @@ class AIChatPanel(Gtk.Box):
         """Handle /summary command: summarize old messages and trim to keep N.
 
         Called from _on_send_clicked (GTK signal callback, main thread).
-        Format: /summary keep=N  (default keep=50, minimum 5)
+        Format: /summary keep=N  (default from settings trim_target)
         """
-        # 1. Parse keep parameter
-        keep = 50
+        # 1. Read default from settings (与自动裁剪统一)
+        if self._ai_settings_store is not None:
+            default_keep = self._ai_settings_store.trim_target
+        else:
+            from clipboard_store import AISettingsStore
+            default_keep = AISettingsStore().trim_target
+
+        # 2. Parse keep parameter
+        keep = default_keep
         if text.startswith("/summary "):
             arg = text[len("/summary "):].strip()
             if arg.startswith("keep="):
