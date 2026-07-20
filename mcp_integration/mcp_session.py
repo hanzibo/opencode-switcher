@@ -211,6 +211,33 @@ class MCPSession:
             text = f"❌ {text}"
         return text
 
+    # ── 健康检测 ────────────────────────────────────────────────
+
+    async def ping(self) -> bool:
+        """发送 ping 健康检测（notifications/ping）。
+
+        Returns
+        -------
+        bool
+            True 表示 Server 正常响应，False 表示连接异常。
+        """
+        try:
+            # 使用通知（无响应）或请求（有响应）方式
+            await self._jrpc.request("ping", timeout=10)
+            return True
+        except Exception as e:
+            logger.warning("MCP ping 失败: %s", e)
+            return False
+
+    async def refresh_tools_cache(self) -> List[dict]:
+        """强制刷新工具缓存并返回最新列表。"""
+        self._tools_cache = None
+        return await self.list_tools()
+
+    def get_tools_cache(self) -> Optional[List[dict]]:
+        """获取缓存的工具列表（若存在）。"""
+        return self._tools_cache
+
     # ── 预留：资源 ──────────────────────────────────────────────
 
     async def list_resources(self) -> List[dict]:

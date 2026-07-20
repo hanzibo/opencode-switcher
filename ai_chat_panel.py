@@ -626,15 +626,29 @@ class AIChatPanel(Gtk.Box):
         server_dicts = getattr(self._ai_settings_store, "mcp_servers", None) or []
         for sd in server_dicts:
             config = MCPServerConfig.from_dict(sd)
-            if config.enabled and config.auto_connect:
-                if config.transport == "stdio" and config.command:
-                    self._mcp_bridge.call_async(
-                        self._mcp_client_mgr.connect_stdio(config),
-                        callback=lambda result, err, n=config.name: (
-                            print(f"[MCP] {n}: {result[1] if result and not err else err}", flush=True)
-                            or (self._refresh_mcp_tools() if result and result[0] else None)
-                        ),
-                    )
+            if not (config.enabled and config.auto_connect):
+                continue
+            # stdio 需要 command，http 需要 url
+            if config.transport == "stdio" and not config.command:
+                continue
+            if config.transport == "http" and not config.url:
+                continue
+            if config.transport == "http":
+                self._mcp_bridge.call_async(
+                    self._mcp_client_mgr.connect_http(config),
+                    callback=lambda result, err, n=config.name: (
+                        print(f"[MCP] {n}: {result[1] if result and not err else err}", flush=True)
+                        or (self._refresh_mcp_tools() if result and result[0] else None)
+                    ),
+                )
+            else:
+                self._mcp_bridge.call_async(
+                    self._mcp_client_mgr.connect_stdio(config),
+                    callback=lambda result, err, n=config.name: (
+                        print(f"[MCP] {n}: {result[1] if result and not err else err}", flush=True)
+                        or (self._refresh_mcp_tools() if result and result[0] else None)
+                    ),
+                )
 
     def _refresh_mcp_tools(self) -> None:
         """异步预取 MCP 工具列表并缓存。"""
@@ -673,8 +687,14 @@ class AIChatPanel(Gtk.Box):
         new_configs = {}
         for sd in server_dicts:
             config = MCPServerConfig.from_dict(sd)
-            if config.enabled and config.auto_connect and config.command:
-                new_configs[config.name] = config
+            if not (config.enabled and config.auto_connect):
+                continue
+            # stdio 需要 command，http 需要 url
+            if config.transport == "stdio" and not config.command:
+                continue
+            if config.transport == "http" and not config.url:
+                continue
+            new_configs[config.name] = config
 
         # 2. 断开已禁用或不再存在的 Server
         has_disconnect = False
@@ -694,7 +714,7 @@ class AIChatPanel(Gtk.Box):
             if not self._mcp_client_mgr.is_connected(name):
                 has_connect = True
                 self._mcp_bridge.call_async(
-                    self._mcp_client_mgr.connect_stdio(config),
+                    self._mcp_client_mgr.connect_by_config(config),
                     callback=lambda result, err, n=name: (
                         print(f"[MCP] {n}: {result[1] if result and not err else err}", flush=True)
                         or (self._refresh_mcp_tools() if result and result[0] else None)

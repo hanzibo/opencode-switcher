@@ -13,6 +13,7 @@ from mcp_integration.tool_adapter import (
     mcp_tool_to_openai_schema,
     parse_mcp_tool_name,
 )
+from mcp_integration.transports.http import HttpTransport
 
 __all__ = [
     "GtkAsyncioBridge",
@@ -20,4 +21,5 @@ __all__ = [
     "MCPClientManager",
     "mcp_tool_to_openai_schema",
     "parse_mcp_tool_name",
+    "HttpTransport",
 ]
