@@ -1280,6 +1280,7 @@ class AIChatPanel(Gtk.Box):
             conv_id=conv_id,
             mcp_tool_definitions=getattr(self, "_cached_mcp_tools", None),
             mcp_client_manager=getattr(self, "_mcp_client_mgr", None),
+            disabled_tools=getattr(self._ai_settings_store, "disabled_tools", []),
         )
 
         run_llm_react_loop(

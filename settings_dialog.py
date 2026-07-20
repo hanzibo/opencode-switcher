@@ -404,12 +404,190 @@ class SettingsDialog:
         hl_hint.set_margin_top(4)
         vbox.pack_start(hl_hint, False, False, 0)
 
+        # ── Separator before built-in tool toggle ──
+        tool_sep = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        tool_sep.set_margin_top(16)
+        tool_sep.set_margin_bottom(12)
+        vbox.pack_start(tool_sep, False, False, 0)
+
+        # ── Built-in tool toggle section ──
+        self._build_tool_toggle_section(vbox)
+
         # ── Spacer ──
         spacer = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
         spacer.set_vexpand(True)
         vbox.pack_start(spacer, True, True, 0)
 
         return outer_sw
+
+    def _build_tool_toggle_section(self, parent_vbox):
+        """Build the built-in tool enable/disable toggle section.
+
+        按模块分组显示所有内置工具，每组可折叠，每个工具有独立开关。
+        """
+        from tool_registry import TOOL_DEFINITIONS, TOOL_MODULE_MAP
+
+        # ── Section title ──
+        title = Gtk.Label.new()
+        title.set_markup("<b>🔧 内置工具开关</b>")
+        title.set_xalign(0)
+        parent_vbox.pack_start(title, False, False, 0)
+
+        hint = Gtk.Label.new()
+        hint.set_markup(
+            "<span size='small' foreground='#888888'>"
+            "取消勾选可禁用对应内置工具，AI 将无法调用。"
+            "MCP 工具不受此设置影响。"
+            "</span>"
+        )
+        hint.set_xalign(0)
+        hint.set_margin_top(4)
+        parent_vbox.pack_start(hint, False, False, 0)
+
+        # ── 解析工具按模块分组 ──
+        groups: dict = {}
+        risk_map = {
+            "bash": "high", "write_file": "high", "edit_file": "high", "sub_agent": "high",
+            "read_file": "medium", "grep_search": "medium",
+            "web_search": "medium", "web_fetch": "medium",
+            "read_qq_mail": "medium", "memory_save": "medium",
+        }
+
+        for s in TOOL_DEFINITIONS:
+            name = s["function"]["name"]
+            group = TOOL_MODULE_MAP.get(name, "other")
+            groups.setdefault(group, []).append(s)
+
+        # 组排序（按重要性）
+        group_order = ["common", "todo", "filesystem", "search", "web", "bash",
+                       "notification", "mail", "subagent", "code_analysis", "memory"]
+        group_labels = {
+            "common": "🟢 通用", "todo": "🟢 任务管理",
+            "filesystem": "🔴 文件系统", "search": "🟡 搜索",
+            "web": "🟡 网页", "bash": "🔴 Shell",
+            "notification": "🟢 通知", "mail": "🟡 邮件",
+            "subagent": "🔴 子代理", "code_analysis": "🟢 代码分析",
+            "memory": "🟡 记忆",
+        }
+
+        # 存储所有 checkbutton 以便保存时读取
+        self._tool_toggle_widgets: list[dict] = []
+        self._tool_toggle_lookup: dict[str, Gtk.CheckButton] = {}
+        disabled_set = set(self._ai_settings_store.disabled_tools)
+
+        # 每组一个可折叠区域
+        expander = Gtk.Expander.new("全部工具 (点击展开/收起)")
+        expander.set_expanded(False)
+        expander.set_margin_top(8)
+
+        inner_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
+        inner_box.set_margin_start(12)
+
+        for g in group_order:
+            schemas = groups.get(g, [])
+            if not schemas:
+                continue
+
+            # ── 组标题（不可折叠，仅用于视觉分组） ──
+            group_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+            group_box.set_margin_top(8)
+
+            group_label_text = group_labels.get(g, g)
+            group_lbl = Gtk.Label.new()
+            group_lbl.set_markup(f"<b>{group_label_text}</b>")
+            group_lbl.set_xalign(0)
+            group_lbl.set_size_request(120, -1)
+            group_box.pack_start(group_lbl, False, False, 0)
+
+            # 全选/全不选按钮
+            group_all_in = all(
+                s["function"]["name"] not in disabled_set for s in schemas
+            )
+            group_check = Gtk.CheckButton.new_with_label("全选")
+            group_check.set_active(group_all_in)
+            group_check.connect("toggled", self._on_group_toggle, schemas, inner_box)
+            group_box.pack_start(group_check, False, False, 0)
+
+            inner_box.pack_start(group_box, False, False, 0)
+
+            # ── 每个工具一个 checkbutton ──
+            for s in schemas:
+                name = s["function"]["name"]
+                desc = s["function"]["description"][:60] + ("…" if len(s["function"]["description"]) > 60 else "")
+
+                tool_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
+                tool_hbox.set_margin_start(16)
+                tool_hbox.set_margin_top(2)
+
+                risk = risk_map.get(name, "low")
+                risk_icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(risk, "🟢")
+
+                check = Gtk.CheckButton.new()
+                check.set_active(name not in disabled_set)
+                check.set_tooltip_text(f"{name}: {desc}")
+                tool_hbox.pack_start(check, False, False, 0)
+
+                name_lbl = Gtk.Label.new()
+                name_lbl.set_markup(f"{risk_icon} {name}")
+                name_lbl.set_xalign(0)
+                name_lbl.set_size_request(220, -1)
+                tool_hbox.pack_start(name_lbl, False, False, 0)
+
+                desc_lbl = Gtk.Label.new()
+                desc_lbl.set_markup(f"<span size='small' foreground='#888888'>{desc}</span>")
+                desc_lbl.set_xalign(0)
+                desc_lbl.set_ellipsize(3)  # PANGO_ELLIPSIZE_END
+                desc_lbl.set_size_request(300, -1)
+                tool_hbox.pack_start(desc_lbl, False, False, 0)
+
+                inner_box.pack_start(tool_hbox, False, False, 0)
+
+                self._tool_toggle_widgets.append({
+                    "name": name,
+                    "check": check,
+                    "group": g,
+                })
+                self._tool_toggle_lookup[name] = check
+
+        expander.add(inner_box)
+        parent_vbox.pack_start(expander, False, False, 0)
+
+        # ── 底部操作按钮 ──
+        btn_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        btn_box.set_margin_top(8)
+
+        enable_all_btn = Gtk.Button.new_with_label("全部启用")
+        enable_all_btn.connect("clicked", self._on_tool_enable_all)
+        btn_box.pack_start(enable_all_btn, False, False, 0)
+
+        disable_high_btn = Gtk.Button.new_with_label("禁用高风险")
+        disable_high_btn.set_tooltip_text("一键禁用 bash、write_file、edit_file、sub_agent")
+        disable_high_btn.connect("clicked", self._on_tool_disable_high_risk)
+        btn_box.pack_start(disable_high_btn, False, False, 0)
+
+        parent_vbox.pack_start(btn_box, False, False, 0)
+
+    def _on_group_toggle(self, btn, schemas, inner_box):
+        """组全选/全不选按钮切换时，同步组内所有工具。"""
+        active = btn.get_active()
+        for s in schemas:
+            check = self._tool_toggle_lookup.get(s["function"]["name"])
+            if check:
+                check.set_active(active)
+
+    def _on_tool_enable_all(self, btn):
+        """全部启用按钮。"""
+        for w in self._tool_toggle_widgets:
+            w["check"].set_active(True)
+
+    def _on_tool_disable_high_risk(self, btn):
+        """禁用高风险工具。"""
+        high_risk = {"bash", "write_file", "edit_file", "sub_agent"}
+        for w in self._tool_toggle_widgets:
+            if w["name"] in high_risk:
+                w["check"].set_active(False)
+            else:
+                w["check"].set_active(True)
 
     # ── Tab: 流式输出 ────────────────────────────────────────────────────
 
@@ -1029,6 +1207,13 @@ class SettingsDialog:
         self._ai_settings_store.show_tool_details = self._show_tool_details_check.get_active()
         self._ai_settings_store.enable_code_highlight = self._code_highlight_check.get_active()
         set_code_highlight(self._ai_settings_store.enable_code_highlight)
+
+        # 内置工具开关
+        disabled = []
+        for w in self._tool_toggle_widgets:
+            if not w["check"].get_active():
+                disabled.append(w["name"])
+        self._ai_settings_store.disabled_tools = disabled
 
         # MCP 服务器配置
         mcp_servers = []

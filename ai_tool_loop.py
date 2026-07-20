@@ -8,7 +8,7 @@
 
 import json
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from threading import Event
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
@@ -76,6 +76,7 @@ class ToolLoopContext:
     conv_id: Optional[str] = None
     mcp_tool_definitions: Optional[list] = None
     mcp_client_manager: Optional['MCPClientManager'] = None
+    disabled_tools: list[str] = field(default_factory=list)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -137,6 +138,7 @@ def _execute_tool_call(tc: ToolCallData, ctx: ToolLoopContext) -> str:
     return tool_registry.execute_tool_call(
         tool_call_to_dict(tc),
         cancel_event=ctx.cancel_event,
+        disabled_list=ctx.disabled_tools,
     )
 
 # ═══════════════════════════════════════════════════════════════════
@@ -215,8 +217,8 @@ def _perform_llm_call(
 
     try:
         cleaned_msgs = clean_messages_for_llm(messages)
-        # 合并内置工具与 MCP 工具定义
-        all_tools = list(tool_registry.TOOL_DEFINITIONS)
+        # 合并内置工具（过滤已禁用的）与 MCP 工具定义
+        all_tools = tool_registry.get_enabled_tool_definitions(ctx.disabled_tools)
         if ctx.mcp_tool_definitions:
             all_tools.extend(ctx.mcp_tool_definitions)
 
