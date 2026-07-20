@@ -3073,16 +3073,31 @@ class AIChatPanel(Gtk.Box):
 
         若 LLM 返回空、超时或网络异常，不裁剪对话，
         通过系统消息提醒用户更换模型重试。
+
+        超时逻辑：从首次收到 token 开始计时 25s，每收到新 token 重置计时器。
+        仅当模型真正停顿 25s 才中断，避免长摘要被误杀。
         """
         save_summary = False
         cancel_event = threading.Event()
-        timeout_sec = 25  # 摘要生成超时（秒）
+        idle_timeout_sec = 25  # 流式停顿超时（秒），收到 token 则重置
+        total_timeout_sec = 120  # 总超时硬限制（防止无限等待）
         failure_reason = None
+        has_received_token = False  # 是否已收到首个 token
 
-        # 超时定时器：超过 timeout_sec 后自动取消
-        timer = threading.Timer(timeout_sec, cancel_event.set)
-        timer.daemon = True
-        timer.start()
+        # 总超时硬限制（从调用开始算）
+        total_timer = threading.Timer(total_timeout_sec, cancel_event.set)
+        total_timer.daemon = True
+        total_timer.start()
+
+        # 空闲超时定时器：每次收到 token 后重置
+        idle_timer = None
+        def _reset_idle_timer():
+            nonlocal idle_timer
+            if idle_timer:
+                idle_timer.cancel()
+            idle_timer = threading.Timer(idle_timeout_sec, cancel_event.set)
+            idle_timer.daemon = True
+            idle_timer.start()
 
         try:
             max_chars = (self._ai_settings_store.summary_max_chars
@@ -3134,7 +3149,7 @@ class AIChatPanel(Gtk.Box):
                 temperature=0.3,
                 max_tokens=max(4096, max_chars * 4),
                 top_p=top_p,
-                timeout=timeout_sec,
+                timeout=idle_timeout_sec,
             )
             for event in self._llm_client.stream_chat_completion(
                 summary_config,
@@ -3144,13 +3159,25 @@ class AIChatPanel(Gtk.Box):
                 if cancel_event.is_set():
                     break
                 if event.type == StreamEventType.TEXT_DELTA and event.text_delta:
+                    if not has_received_token:
+                        has_received_token = True
+                        # 首次收到 token 后启动空闲超时
+                        _reset_idle_timer()
+                        # 同时取消总超时（已收到 token，模型正在工作）
+                        total_timer.cancel()
+                    else:
+                        # 每收到一个 token 重置空闲超时
+                        _reset_idle_timer()
                     result_parts.append(event.text_delta)
                     GLib.idle_add(self._update_summary_display, event.text_delta)
                 elif event.type == StreamEventType.STREAM_END:
                     break
 
             if cancel_event.is_set():
-                failure_reason = f"摘要生成超时（{timeout_sec}秒），请更换模型重试"
+                if has_received_token:
+                    failure_reason = f"摘要生成超时（流式停顿超过{idle_timeout_sec}秒），请更换模型重试"
+                else:
+                    failure_reason = f"摘要生成超时（{total_timeout_sec}秒内未收到首个token），请更换模型重试"
                 print(f"[summary] {failure_reason} (model={model_name})", flush=True)
             else:
                 result = "".join(result_parts).strip()
@@ -3179,7 +3206,9 @@ class AIChatPanel(Gtk.Box):
             import traceback
             traceback.print_exc()
         finally:
-            timer.cancel()
+            total_timer.cancel()
+            if idle_timer:
+                idle_timer.cancel()
             self._ai_summary_generating = False
 
             # 生成失败时通过系统消息提醒用户
