@@ -12,12 +12,13 @@ Pattern references:
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk
+from gi.repository import Gtk, Gdk, GLib
 
 from typing import Optional, Callable
 
 from clipboard_store import QQMailCredentialsStore, AISettingsStore
 from ai_text_utils import set_code_highlight
+from mcp_integration import MCPServerConfig, MCPClientManager
 
 
 def show_settings_dialog(parent_window: Gtk.Window,
@@ -653,7 +654,7 @@ class SettingsDialog:
     def _build_mcp_tab(self):
         """Build the MCP Server configuration tab page.
 
-        用户可添加/编辑/删除 MCP Server 配置（name, command, args, enabled, auto_connect）。
+        支持 stdio（本地子进程）和 http（远程 Streamable HTTP）两种模式。
         数据存储在 AISettingsStore.mcp_servers (list[dict]) 中。
         """
         outer_sw = Gtk.ScrolledWindow.new()
@@ -672,7 +673,7 @@ class SettingsDialog:
         hint = Gtk.Label.new()
         hint.set_markup(
             "<span size='small' foreground='#888888'>"
-            "MCP Server 通过 stdio 子进程提供额外工具。\n"
+            "MCP Server 通过 <b>stdio</b>（本地子进程）或 <b>Streamable HTTP</b>（远程）提供额外工具。\n"
             "保存后即时生效，已连接的 Server 会自动重连。"
             "</span>"
         )
@@ -684,7 +685,7 @@ class SettingsDialog:
         vbox.pack_start(self._mcp_servers_box, False, False, 0)
 
         # ── 从配置加载已有服务器 ──
-        self._mcp_server_widgets = []  # 每个元素: {"name", "command", "args", "enabled", "auto_connect", "box"}
+        self._mcp_server_widgets = []
         for sd in getattr(self._ai_settings_store, "mcp_servers", []):
             self._add_mcp_server_card(sd)
 
@@ -698,7 +699,8 @@ class SettingsDialog:
         example = Gtk.Label.new()
         example.set_markup(
             "<span size='small' foreground='#aaaaaa'>"
-            "示例：command=<b>npx</b>, args=<b>-y @modelcontextprotocol/server-filesystem /tmp</b>"
+            "stdio 示例：command=<b>npx</b>, args=<b>-y @modelcontextprotocol/server-filesystem /tmp</b>\n"
+            "http  示例：URL=<b>http://localhost:8123/mcp</b>, API Key=<b>可选</b>"
             "</span>"
         )
         example.set_xalign(0)
@@ -713,8 +715,8 @@ class SettingsDialog:
         return outer_sw
 
     def _add_mcp_server_card(self, data: Optional[dict] = None):
-        """添加一个 MCP 服务器配置卡片。"""
-        data = data or {}
+        """添加一个 MCP 服务器配置卡片，支持 stdio 和 http 两种模式。"""
+        cfg = MCPServerConfig.from_dict(data or {})
 
         frame = Gtk.Frame.new()
         frame.set_shadow_type(Gtk.ShadowType.ETCHED_IN)
@@ -727,21 +729,29 @@ class SettingsDialog:
         card_vbox.set_margin_bottom(8)
         frame.add(card_vbox)
 
-        # ── Row 1: Name + Enabled + Auto-connect + Delete ──
+        # ── Row 1: Name + Transport + Enabled + Auto-connect + Delete ──
         row1 = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
 
         name_entry = Gtk.Entry.new()
         name_entry.set_placeholder_text("Server 名称（如 filesystem）")
         name_entry.set_hexpand(True)
-        name_entry.set_text(data.get("name", ""))
+        name_entry.set_text(cfg.name)
         row1.pack_start(name_entry, True, True, 0)
 
+        # 传输方式下拉
+        transport_combo = Gtk.ComboBoxText.new()
+        transport_combo.append("stdio", "stdio")
+        transport_combo.append("http", "http")
+        transport_combo.set_active_id(cfg.transport)
+        transport_combo.set_tooltip_text("传输方式：stdio（本地子进程）或 http（远程 HTTP）")
+        row1.pack_start(transport_combo, False, False, 0)
+
         enabled_check = Gtk.CheckButton.new_with_label("启用")
-        enabled_check.set_active(data.get("enabled", True))
+        enabled_check.set_active(cfg.enabled)
         row1.pack_start(enabled_check, False, False, 0)
 
         auto_check = Gtk.CheckButton.new_with_label("自动连接")
-        auto_check.set_active(data.get("auto_connect", True))
+        auto_check.set_active(cfg.auto_connect)
         row1.pack_start(auto_check, False, False, 0)
 
         del_btn = Gtk.Button.new_with_label("✕")
@@ -751,34 +761,240 @@ class SettingsDialog:
 
         card_vbox.pack_start(row1, False, False, 0)
 
-        # ── Row 2: Command + Args ──
-        row2 = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+        # ── Row 2: stdio: Command + Args ──
+        row2_stdio = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
 
         cmd_entry = Gtk.Entry.new()
         cmd_entry.set_placeholder_text("命令（如 npx）")
-        cmd_entry.set_text(data.get("command", ""))
+        cmd_entry.set_text(cfg.command)
         cmd_entry.set_size_request(180, -1)
-        row2.pack_start(cmd_entry, False, False, 0)
+        row2_stdio.pack_start(cmd_entry, False, False, 0)
 
         args_entry = Gtk.Entry.new()
-        args_entry.set_placeholder_text("参数（空格分隔，如 -y @modelcontextprotocol/... /tmp）")
+        args_entry.set_placeholder_text(
+            "参数（空格分隔，如 -y @modelcontextprotocol/server-filesystem /tmp）"
+        )
         args_entry.set_hexpand(True)
-        args_entry.set_text(" ".join(data.get("args", [])))
-        row2.pack_start(args_entry, True, True, 0)
+        args_entry.set_text(" ".join(cfg.args))
+        row2_stdio.pack_start(args_entry, True, True, 0)
 
-        card_vbox.pack_start(row2, False, False, 0)
+        card_vbox.pack_start(row2_stdio, False, False, 0)
+
+        # ── Row 3: http: URL + Auth Type + API Key ──
+        row3_http = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+
+        url_entry = Gtk.Entry.new()
+        url_entry.set_placeholder_text("URL（如 http://localhost:8123/mcp）")
+        url_entry.set_hexpand(True)
+        url_entry.set_text(cfg.url)
+        row3_http.pack_start(url_entry, True, True, 0)
+
+        auth_combo = Gtk.ComboBoxText.new()
+        auth_combo.append("none", "无认证")
+        auth_combo.append("bearer", "Bearer Token")
+        auth_combo.append("oauth2", "OAuth 2.1")
+        auth_combo.set_active_id(cfg.auth_type or "bearer")
+        auth_combo.set_tooltip_text("HTTP 认证方式")
+        row3_http.pack_start(auth_combo, False, False, 0)
+
+        api_key_entry = Gtk.Entry.new()
+        api_key_entry.set_placeholder_text("API Key（Bearer token，可选）")
+        api_key_entry.set_text(cfg.api_key)
+        api_key_entry.set_width_chars(30)
+        api_key_entry.set_visibility(False)  # 密码模式
+        row3_http.pack_start(api_key_entry, False, False, 0)
+
+        card_vbox.pack_start(row3_http, False, False, 0)
+
+        # ── Row 4: http: 高级选项（协议版本 + 2026 headers） ──
+        row4_http_advanced = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+
+        proto_combo = Gtk.ComboBoxText.new()
+        proto_combo.append("2025-11-25", "2025-11-25（稳定）")
+        proto_combo.append("2026-07-28", "2026-07-28（新）")
+        proto_combo.set_active_id(cfg.protocol_version or "2025-11-25")
+        proto_combo.set_tooltip_text("MCP 协议版本")
+        row4_http_advanced.pack_start(proto_combo, False, False, 0)
+
+        header_check = Gtk.CheckButton.new_with_label("发送 2026 新 headers")
+        header_check.set_active(cfg.enable_2026_headers)
+        header_check.set_tooltip_text("启用 Mcp-Method / Mcp-Name 等 2026-07-28 headers")
+        row4_http_advanced.pack_start(header_check, False, False, 0)
+
+        card_vbox.pack_start(row4_http_advanced, False, False, 0)
+
+        # ── Row 5: 连接状态 + 测试按钮 ──
+        row5_status = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+
+        status_label = Gtk.Label.new()
+        last_status = data.get("last_status", "") if data else ""
+        if last_status == "connected":
+            status_label.set_markup("<span foreground='green'>● 已连接</span>")
+        elif last_status and last_status.startswith("error"):
+            status_label.set_markup(
+                f"<span foreground='red'>● {last_status}</span>"
+            )
+        else:
+            status_label.set_markup("<span foreground='#888'>○ 未连接</span>")
+        row5_status.pack_start(status_label, False, False, 0)
+
+        test_btn = Gtk.Button.new_with_label("测试连接")
+        test_btn.set_tooltip_text("发送 initialize 请求验证连通性")
+        row5_status.pack_start(test_btn, False, False, 0)
+
+        card_vbox.pack_start(row5_status, False, False, 0)
 
         # ── 存引用 ──
         self._mcp_server_widgets.append({
             "name": name_entry,
+            "transport": transport_combo,
             "command": cmd_entry,
             "args": args_entry,
+            "url": url_entry,
+            "api_key": api_key_entry,
+            "auth_type": auth_combo,
+            "protocol_version": proto_combo,
+            "enable_2026_headers": header_check,
             "enabled": enabled_check,
             "auto_connect": auto_check,
+            "status_label": status_label,
             "box": frame,
         })
         self._mcp_servers_box.pack_start(frame, False, False, 0)
-        self._mcp_servers_box.show_all()
+
+        # ── 初始显隐 ──
+        def _apply_visibility(is_http_mode: bool):
+            row2_stdio.set_visible(not is_http_mode)
+            row3_http.set_visible(is_http_mode)
+            row4_http_advanced.set_visible(is_http_mode)
+            api_key_entry.set_visible(
+                is_http_mode and auth_combo.get_active_id() == "bearer"
+            )
+
+        is_http = cfg.transport == "http"
+        _apply_visibility(is_http)
+        frame.show_all()
+        # 第二次确保（show_all 可能覆盖）
+        _apply_visibility(is_http)
+
+        # 每次 frame 被映射（显示/切换标签页）时重新应用
+        frame.connect("map", lambda *_: _apply_visibility(
+            transport_combo.get_active_id() == "http"
+        ))
+
+        # ── 切换传输方式 ──
+        transport_combo.connect("changed", lambda cb: _apply_visibility(
+            cb.get_active_id() == "http"
+        ))
+
+        # ── 认证方式切换 ──
+        def _on_auth_changed(combo):
+            mode = combo.get_active_id()
+            is_bearer = (mode == "bearer")
+            api_key_entry.set_no_show_all(not is_bearer)
+            api_key_entry.set_visible(is_bearer)
+
+        auth_combo.connect("changed", _on_auth_changed)
+        _on_auth_changed(auth_combo)
+
+        # ── 测试连接回调 ──
+        test_btn.connect("clicked", lambda _: self._on_test_mcp_connection(
+            name_entry, transport_combo,
+            cmd_entry, args_entry,
+            url_entry, api_key_entry, auth_combo,
+            status_label,
+        ))
+
+    def _on_test_mcp_connection(
+        self,
+        name_entry,
+        transport_combo,
+        cmd_entry,
+        args_entry,
+        url_entry,
+        api_key_entry,
+        auth_combo,
+        status_label,
+    ):
+        """测试 MCP Server 连接。启动真实的 initialize 握手验证连通性。
+
+        工作原理：
+        1. 从 UI 读取配置（传输方式、命令/URL、认证信息等）
+        2. 在后台线程创建临时 asyncio 事件循环
+        3. 构建 MCPClientManager，调用 connect_by_config()
+           - stdio：启动子进程，发送 initialize JSON-RPC 请求
+           - http：POST initialize 请求到远程端点
+        4. 握手成功后立即断开连接
+        5. 通过 GLib.idle_add 回到 GTK 主线程更新状态标签
+        """
+        name = name_entry.get_text().strip()
+        transport = transport_combo.get_active_id()
+        cmd = cmd_entry.get_text().strip()
+        args_text = args_entry.get_text().strip()
+        args_list = args_text.split() if args_text else []
+        url = url_entry.get_text().strip()
+        api_key = api_key_entry.get_text().strip()
+        auth_type = auth_combo.get_active_id()
+
+        if not name:
+            status_label.set_markup("<span foreground='red'>● 名称不能为空</span>")
+            return
+
+        if transport == "http":
+            if not url:
+                status_label.set_markup("<span foreground='red'>● URL 不能为空</span>")
+                return
+        else:  # stdio
+            if not cmd:
+                status_label.set_markup("<span foreground='red'>● 命令不能为空</span>")
+                return
+
+        status_label.set_markup("<span foreground='orange'>● 测试中…</span>")
+
+        # 在后台线程执行异步测试（避免阻塞 GTK 主循环）
+        import threading
+        def _do_test():
+            import asyncio
+            try:
+                config = MCPServerConfig(
+                    name=name,
+                    transport=transport,
+                    command=cmd,
+                    args=args_list,
+                    url=url,
+                    api_key=api_key,
+                    auth_type=auth_type,
+                    auto_connect=False,
+                )
+
+                mgr = MCPClientManager()
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    ok, msg = loop.run_until_complete(mgr.connect_by_config(config))
+                    if ok:
+                        loop.run_until_complete(mgr.disconnect(name))
+                        GLib.idle_add(
+                            lambda: status_label.set_markup(
+                                "<span foreground='green'>● 测试通过 ✓</span>"
+                            )
+                        )
+                    else:
+                        GLib.idle_add(
+                            lambda: status_label.set_markup(
+                                f"<span foreground='red'>● {msg}</span>"
+                            )
+                        )
+                finally:
+                    loop.close()
+            except Exception as e:
+                GLib.idle_add(
+                    lambda: status_label.set_markup(
+                        f"<span foreground='red'>● 测试异常: {e}</span>"
+                    )
+                )
+
+        threading.Thread(target=_do_test, daemon=True).start()
 
     def _remove_mcp_server_card(self, frame):
         """移除一个 MCP 服务器配置卡片。"""
@@ -820,16 +1036,25 @@ class SettingsDialog:
             name = w["name"].get_text().strip()
             if not name:
                 continue
+            transport = w["transport"].get_active_id()
             args_text = w["args"].get_text().strip()
             args_list = args_text.split() if args_text else []
+            url = w["url"].get_text().strip()
+            api_key = w["api_key"].get_text().strip()
+            auth_type = w["auth_type"].get_active_id() if w["auth_type"].get_active_id() else "bearer"
+            proto_ver = w["protocol_version"].get_active_id() if w["protocol_version"].get_active_id() else "2025-11-25"
+            enable_2026 = w["enable_2026_headers"].get_active()
             mcp_servers.append({
                 "name": name,
-                "transport": "stdio",
-                "command": w["command"].get_text().strip(),
-                "args": args_list,
+                "transport": transport,
+                "command": w["command"].get_text().strip() if transport == "stdio" else "",
+                "args": args_list if transport == "stdio" else [],
                 "cwd": None,
-                "url": "",
-                "api_key": "",
+                "url": url,
+                "api_key": api_key,
+                "auth_type": auth_type,
+                "protocol_version": proto_ver,
+                "enable_2026_headers": enable_2026,
                 "enabled": w["enabled"].get_active(),
                 "auto_connect": w["auto_connect"].get_active(),
             })

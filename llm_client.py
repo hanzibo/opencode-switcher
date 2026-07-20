@@ -1,4 +1,5 @@
 import json
+import logging
 import threading
 import requests
 from dataclasses import dataclass
@@ -9,6 +10,8 @@ from clipboard_store import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_TOP_P,
 )
+
+logger = logging.getLogger(__name__)
 from ai_text_utils import (
     _model_supports_vision,
     _vision_content_to_text,
@@ -151,64 +154,76 @@ def parse_sse_events(
     """
     tc_accum = _ToolCallAccumulator()
 
-    for line in response.iter_lines(decode_unicode=True):
-        if cancel_event and cancel_event.is_set():
-            return
-        if not line:
-            continue
-        if not line.startswith("data:"):
-            continue
+    try:
+        lines_iter = response.iter_lines(decode_unicode=True)
+    except Exception as e:
+        logger.error("SSE 无法开始读取响应流: %s", e)
+        return
 
-        data_str = line[5:].strip()
-        if data_str == "[DONE]":
-            calls = tc_accum.get_calls()
-            if calls:
-                typed_calls = [parse_tool_call_from_dict(c) for c in calls]
-                yield tool_calls_event(typed_calls)
-            return
-        if not data_str:
-            continue
+    try:
+        for line in lines_iter:
+            if cancel_event and cancel_event.is_set():
+                return
+            if line is None:
+                continue
+            if not line:
+                continue
+            if not line.startswith("data:"):
+                continue
 
-        try:
-            chunk = json.loads(data_str)
-        except json.JSONDecodeError:
-            continue
+            data_str = line[5:].strip()
+            if data_str == "[DONE]":
+                calls = tc_accum.get_calls()
+                if calls:
+                    typed_calls = [parse_tool_call_from_dict(c) for c in calls]
+                    yield tool_calls_event(typed_calls)
+                return
+            if not data_str:
+                continue
 
-        choices = chunk.get("choices", [{}])
-        if not choices:
-            continue
-        delta = choices[0].get("delta", {})
-        finish_reason = choices[0].get("finish_reason")
+            try:
+                chunk = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
 
-        # 处理工具调用增量
-        tc_delta = delta.get("tool_calls")
-        if tc_delta:
-            for tcd in tc_delta:
-                tc_accum.add_delta(tcd)
+            choices = chunk.get("choices", [{}])
+            if not choices:
+                continue
+            delta = choices[0].get("delta", {})
+            finish_reason = choices[0].get("finish_reason")
+
+            # 处理工具调用增量
+            tc_delta = delta.get("tool_calls")
+            if tc_delta:
+                for tcd in tc_delta:
+                    tc_accum.add_delta(tcd)
+                if finish_reason == "tool_calls":
+                    calls = tc_accum.get_calls()
+                    if calls:
+                        tc_accum.clear()
+                        typed_calls = [parse_tool_call_from_dict(c) for c in calls]
+                        yield tool_calls_event(typed_calls)
+                continue
+
+            # finish_reason == "tool_calls" 但无 tc_delta（罕见情况）
             if finish_reason == "tool_calls":
                 calls = tc_accum.get_calls()
                 if calls:
                     tc_accum.clear()
                     typed_calls = [parse_tool_call_from_dict(c) for c in calls]
                     yield tool_calls_event(typed_calls)
-            continue
+                continue
 
-        # finish_reason == "tool_calls" 但无 tc_delta（罕见情况）
-        if finish_reason == "tool_calls":
-            calls = tc_accum.get_calls()
-            if calls:
-                tc_accum.clear()
-                typed_calls = [parse_tool_call_from_dict(c) for c in calls]
-                yield tool_calls_event(typed_calls)
-            continue
+            content = delta.get("content")
+            if content:
+                yield text_delta(content)
 
-        # 文本 / 推理增量（兼容 DeepSeek reasoning_content 和 MiMo reasoning）
-        content = delta.get("content")
-        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
-        if content is not None:
-            yield text_delta(content)
-        if reasoning is not None:
-            yield reasoning_delta(reasoning)
+            reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+            if reasoning:
+                yield reasoning_delta(reasoning)
+    except Exception as e:
+        logger.error("SSE 流读取异常: %s", e)
+        return
 
     # Fallback: 流自然结束时产出残留工具调用
     calls = tc_accum.get_calls()
