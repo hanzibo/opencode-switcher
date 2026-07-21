@@ -123,6 +123,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_pending_image_path = None
         self._ai_pending_image_data_uri = None
         self._ai_cancel_event = threading.Event()
+        self._ai_cancelling = False
         self._ai_messages = []
         self._ai_conversation_id = uuid4().hex[:12]
         self._ai_history_popover = None
@@ -1315,6 +1316,10 @@ class AIChatPanel(Gtk.Box):
         else:
             state = self._ai_running_convs.get(conv_id)
 
+        # 看门狗已提前清理，安全返回
+        if conv_id and state is None and not self._ai_cancelling:
+            return
+
         if state:
             state["streaming"] = False
 
@@ -1333,6 +1338,7 @@ class AIChatPanel(Gtk.Box):
                 self._render_background_conversation(conv_id, target_messages, state)
 
         self._ai_running_convs.pop(conv_id, None)
+        self._ai_cancelling = False
         self._handle_stream_end(req_id)
 
     def _handle_ask_user_question(self, tool_call: dict) -> str:
@@ -1649,6 +1655,10 @@ class AIChatPanel(Gtk.Box):
         else:
             state = self._ai_running_convs.get(conv_id)
 
+        # 看门狗已提前清理（conv_id 存在但 state 已弹），安全返回
+        if conv_id and state is None and not self._ai_cancelling:
+            return
+
         assistant_text = state["current_assistant_text"] if state else self._ai_current_assistant_text
         reasoning = state["current_reasoning_text"] if state else self._ai_current_reasoning_text
         assistant_msg = {"role": "assistant", "content": assistant_text}
@@ -1692,6 +1702,7 @@ class AIChatPanel(Gtk.Box):
                 self._render_background_conversation(conv_id, target_messages, state)
 
         self._ai_running_convs.pop(conv_id, None)
+        self._ai_cancelling = False
         self._handle_stream_end(req_id)
 
     def _adjust_ai_entry_height(self):
@@ -2077,17 +2088,19 @@ class AIChatPanel(Gtk.Box):
             ask_state["event"].set()
             return
 
-        if self._ai_streaming:
-            active_state = self._ai_running_convs.get(self._ai_conversation_id)
-            if active_state:
-                active_state["cancel_event"].set()
-                self._ai_running_convs.pop(self._ai_conversation_id, None)
-            self._llm_client.cancel_active_request()
-            self._update_send_button(False, sensitive=False)
-            self._ai_entry.placeholder_text = "正在中止..."
-            self._ai_spinner.stop()
-            self._ai_spinner.hide()
-            self._ai_streaming = False
+        if self._ai_streaming or self._ai_cancelling:
+            if not self._ai_cancelling:
+                # 首次点击暂停：发信号，不销毁状态，由后台线程回调清理
+                self._ai_cancelling = True
+                active_state = self._ai_running_convs.get(self._ai_conversation_id)
+                if active_state:
+                    active_state["cancel_event"].set()
+                self._llm_client.cancel_active_request()
+                self._update_send_button(False, sensitive=False)
+                self._ai_entry.placeholder_text = "正在中止..."
+                # 看门狗：10 秒后若线程未响应则强制清理
+                GLib.timeout_add(10000, self._force_cleanup_after_cancel)
+            # 取消中忽略重复点击
             return
         buf = self._ai_entry.get_buffer()
         start = buf.get_start_iter()
@@ -2259,8 +2272,24 @@ class AIChatPanel(Gtk.Box):
                 self._ai_messages.append({"role": "assistant", "content": partial})
             self._update_send_button(False)
             self._ai_streaming = False
+            self._ai_cancelling = False
             self._ai_spinner.stop()
             self._ai_spinner.hide()
+
+    def _force_cleanup_after_cancel(self) -> bool:
+        """看门狗：暂停后后台线程未在超时内完成，强制清理。"""
+        if not self._ai_cancelling:
+            return False  # 已清理过
+        self._ai_cancelling = False
+        self._ai_running_convs.pop(self._ai_conversation_id, None)
+        self._ai_streaming = False
+        self._update_send_button(True, sensitive=True)
+        self._ai_entry.placeholder_text = "输入后续问题..."
+        self._ai_entry.grab_focus()
+        self._ai_spinner.stop()
+        self._ai_spinner.hide()
+        print("[cancel] 看门狗触发：强制清理取消状态", flush=True)
+        return False  # 单次 GLib timeout
 
     def _re_render_after_tool_cancel(self):
         """Re-render and save conversation after tool result appended post-cancel."""

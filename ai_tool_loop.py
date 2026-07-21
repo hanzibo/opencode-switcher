@@ -173,6 +173,7 @@ def run_llm_react_loop(
 
         while iteration < max_iter:
             if ctx.cancel_event and ctx.cancel_event.is_set():
+                GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)
                 break
 
             # 在每轮 LLM 调用前检查后台子代理完成情况
@@ -269,6 +270,11 @@ def _perform_llm_call(
             GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)
             return False
 
+        # 在开始执行工具前检查取消（流式解析结束但可能已取消）
+        if ctx.cancel_event and ctx.cancel_event.is_set():
+            GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)
+            return False
+
         # 追加 assistant 消息（含 tool_calls 定义）
         tool_call_msg: Dict[str, Any] = {
             "role": "assistant",
@@ -316,6 +322,7 @@ def _perform_llm_call(
                         "name": remaining_tc.name,
                         "content": tool_registry.TOOL_CANCELLED,
                     })
+                GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)
                 return False
 
             ctx.append_message_fn({
@@ -326,6 +333,7 @@ def _perform_llm_call(
             })
 
         if ctx.cancel_event and ctx.cancel_event.is_set():
+            GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)
             return False
 
         # 检查是否达到最大迭代次数
