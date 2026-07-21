@@ -125,14 +125,10 @@ install_python_deps() {
     mkdir -p "$INSTALL_DIR"
     python3 -m venv --system-site-packages "$INSTALL_DIR/venv"
     # 从 requirements.txt 安装（单一事实来源）
-    # 使用清华镜像源加速国内下载
     "$INSTALL_DIR/venv/bin/pip" install --quiet \
-        --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
         -r "$SCRIPT_DIR/requirements.txt"
     # tiktoken 可选安装（token 计数更精准，安装失败不影响核心功能）
-    "$INSTALL_DIR/venv/bin/pip" install --quiet \
-        --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-        "tiktoken>=0.7" 2>/dev/null || true
+    "$INSTALL_DIR/venv/bin/pip" install --quiet "tiktoken>=0.7" 2>/dev/null || true
     info "Python 依赖安装完成"
 }
 
