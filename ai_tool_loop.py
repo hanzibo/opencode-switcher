@@ -285,6 +285,12 @@ def _perform_llm_call(
             tool_call_msg["reasoning_content"] = reasoning_text
         ctx.append_message_fn(tool_call_msg)
 
+        # assistant 文本已随 tool_call_msg 追加到 _ai_messages，
+        # 清空 state 中的缓存避免 _render_current_assistant_message
+        # 在 turn_msgs 和 streaming_content 中重复渲染同一段文本
+        if ctx.set_assistant_text_fn:
+            ctx.set_assistant_text_fn("")
+
         # 逐个执行工具调用
         for tc_idx, tc in enumerate(tool_calls_found):
             if ctx.get_current_request_id_fn() != ctx.req_id:

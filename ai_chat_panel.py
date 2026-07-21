@@ -804,6 +804,8 @@ class AIChatPanel(Gtk.Box):
 
     def _on_token_delta(self, text: str):
         """收到 LLM 文本增量，累积到 buffer 并安排 60ms flush（主线程调用）。"""
+        if not self._ai_streaming:
+            return  # 流已结束，忽略延迟回调防止重复渲染
         if self._STREAM_PERF_LOG:
             print(f"[perf] token_delta: +{len(text)}ch, buffer={len(self._token_buffer)}ch", flush=True)
 
@@ -815,6 +817,11 @@ class AIChatPanel(Gtk.Box):
 
     def _flush_token_buffer(self) -> bool:
         """60ms 定时器回调：将累积的 token 文本批量 flush 到 WebView。"""
+        if not self._ai_streaming:
+            self._token_buffer = ""
+            self._flush_scheduled = False
+            self._flush_source_id = 0
+            return False  # 流已结束，丢弃残留 buffer
         if self._STREAM_PERF_LOG:
             print(f"[perf] flush_token: {len(self._token_buffer)}ch → JS", flush=True)
         self._flush_scheduled = False
@@ -836,6 +843,8 @@ class AIChatPanel(Gtk.Box):
 
     def _on_reasoning_delta(self, text: str):
         """收到 LLM 推理增量，累积到 buffer 并安排 60ms flush。"""
+        if not self._ai_streaming:
+            return  # 流已结束，忽略延迟回调
         if self._STREAM_PERF_LOG:
             print(f"[perf] reasoning_delta: +{len(text)}ch, buffer={len(self._reasoning_buffer)}ch", flush=True)
         self._reasoning_buffer += text
@@ -845,6 +854,11 @@ class AIChatPanel(Gtk.Box):
 
     def _flush_reasoning_buffer(self) -> bool:
         """60ms 定时器回调：将累积的推理文本批量 flush 到 WebView。"""
+        if not self._ai_streaming:
+            self._reasoning_buffer = ""
+            self._reasoning_flush_scheduled = False
+            self._reasoning_flush_source_id = 0
+            return False  # 流已结束，丢弃残留 buffer
         self._reasoning_flush_scheduled = False
         self._reasoning_flush_source_id = 0
         if not self._reasoning_buffer:
