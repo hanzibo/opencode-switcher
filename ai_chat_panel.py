@@ -3281,6 +3281,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_entry.set_sensitive(True)
         self._ai_send_btn.set_sensitive(True)
         self._ai_entry.placeholder_text = "输入后续问题..."
+        self._ai_entry.grab_focus()
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(
                 "var e=document.getElementById('summary-display');if(e)e.remove();"
