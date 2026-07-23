@@ -1,6 +1,6 @@
 # OpenCode Switcher — Agent Instructions
 
-Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipboard history management, and an AI assistant sidebar. Python 3 + GTK3 + AyatanaAppIndicator. **No CI/linter/formatter/typechecker. No automated tests.** 507 commits, all by single author.
+Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipboard history management, an AI assistant sidebar, and Model Context Protocol (MCP) tool integration. Python 3 + GTK3 + AyatanaAppIndicator. 619 commits, single primary author. Automated tests run via `unittest`.
 
 ## Commands
 
@@ -8,6 +8,8 @@ Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipb
 |--------|---------|-------|
 | Run (dev) | `venv/bin/python3 main.py` | Needs `opencode` in PATH |
 | Run (prod) | `./run.sh` | 10MB log rotation, nvm, `JSC_useJIT=false` |
+| Test (all) | `venv/bin/python3 -m unittest discover tests` | Runs unit test suite |
+| Test (single) | `venv/bin/python3 -m unittest tests/test_mcp_integration.py` | Runs specific test file |
 | Venv setup | `python3 -m venv --system-site-packages venv && venv/bin/pip install -r requirements.txt` | `--system-site-packages` required for system PyGObject |
 | Install | `./install.sh install` | Copies to `~/.local/share/opencode-switcher/`, enables systemd, installs GNOME ext |
 | Uninstall | `./install.sh uninstall` | Interactive — asks about keeping user data |
@@ -16,13 +18,13 @@ Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipb
 
 **System deps** (beyond pip): `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard gir1.2-webkit2-4.1` — webkit2gtk is NOT in `install.sh` but required at runtime (AI panel crashes without it).
 
-**Commit convention**: `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `optimize(area):`, `perf(area):`, `style(area):`, `docs(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`, `tool-registry`, `clipboard`).
+**Commit convention**: `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `optimize(area):`, `perf(area):`, `style(area):`, `docs(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`, `tool-registry`, `clipboard`, `mcp`).
 
 ## Architecture
 
 ### Entrypoint & Startup Flow
 
-`main.py` (~288 lines) is the sole entrypoint. Startup sequence:
+`main.py` (~261 lines) is the sole entrypoint. Startup sequence:
 ```
 systemd/.desktop → run.sh → main.py (flock lock)
   → _load_config() → migrate_history.run_migration() (from `migrate_history.py`)
@@ -34,35 +36,41 @@ systemd/.desktop → run.sh → main.py (flock lock)
 
 ### Module Roles
 
-| File | Lines | Role |
-|------|-------|------|
-| `main.py` | 288 | Entrypoint: flock lock, App(), Gtk.main() |
-| `ai_chat_panel.py` | 3329 | AI assistant — WebView, ReAct loops, background threads, subagent UI |
-| `clipboard_panel.py` | 2137 | Clipboard panel — assembles subcomponents + event routing |
-| `panel.py` | 1369 | Search panel — tab switcher, slash cmds, CSS-in-code, session list |
-| `clipboard_store.py` | 1272 | God module — clipboard, categories, conversations, memory (`MemStore`), prompts |
-| `ai_html_template.py` | 1682 | WebView HTML template + KaTeX + lightbox JS + DOM Windowing + 3-zone streaming |
-| `prompts_config_dialog.py` | 910 | Prompt/category management dialog |
-| `ai_text_utils.py` | 1047 | Pure markdown/math/vision helpers (zero GTK dep), 3 sub-renderers for streaming |
-| `ai_popovers.py` | 522 | AI command autocomplete + conversation history popover |
-| `settings_dialog.py` | 427 | Settings dialog layout and fields |
-| `llm_client.py` | 368 | LLM HTTP client + `_ToolCallAccumulator` for SSE delta merge |
-| `gnome-extension/` | 350 | GNOME Shell extension (Wayland clipboard + focus IPC) |
+| File / Module | Lines | Role |
+|---------------|-------|------|
+| `main.py` | 261 | Entrypoint: flock lock, App(), Gtk.main() |
+| `ai_chat_panel.py` | 3939 | AI assistant — WebView, ReAct loops, background threads, subagent UI |
+| `clipboard_panel.py` | 2145 | Clipboard panel — assembles subcomponents + event routing |
+| `panel.py` | 1372 | Search panel — tab switcher, slash cmds, CSS-in-code, session list |
+| `clipboard_store.py` | 1307 | God module — clipboard, categories, conversations, memory (`MemStore`), prompts |
+| `settings_dialog.py` | 1261 | Settings dialog layout, LLM, MCP, and memory management tabs |
+| `llm_client.py` | 506 | LLM HTTP client + `_ToolCallAccumulator` for SSE delta merge |
+| `ai_popovers.py` | 542 | AI command autocomplete + conversation history popover |
+| `ai_tool_loop.py` | 366 | ReAct loop orchestrator — LLM call + tool iteration execution |
+| `dynamic_copy_dialog.py` | 345 | Dynamic template placeholder dialog |
 | `sort_cats_dialog.py` | 329 | Category drag-and-drop sorting dialog |
 | `sort_dialog.py` | 277 | Clipboard item drag-and-drop sorting dialog |
 | `recycle_bin_dialog.py` | 240 | Recycle bin browsing/restore/delete dialog |
-| `ai_tool_loop.py` | 231 | ReAct loop orchestrator — LLM call + tool iteration execution |
-| `session_store.py` | 202 | SQLite reader + live-session detection via `/proc` |
+| `theme_config.py` | 232 | Application themes and CSS style provider management |
+| `render_pipeline.py` | 222 | Render pipeline for AI chat responses and markdown processing |
+| `session_store.py` | 204 | SQLite reader + live-session detection via `/proc` |
 | `memory_manager_dialog.py` | 193 | Semantic memory CRUD and search dialog |
+| `ai_html_template.py` | 159 | WebKit WebView HTML structure loader (delegates JS/CSS to `html_templates/`) |
+| `event_types.py` | 142 | Central event type constants and dataclasses |
 | `prompt_dialog.py` | 77 | Prompt create/edit dialog |
 | `launcher.py` | 75 | Terminal detection + session spawner |
 | `hotkey.py` | 66 | Unix socket server for GNOME Extension hotkey toggling (Wayland) |
 | `migrate_history.py` | 59 | Clipboard history type migration runner (startup) |
 | `utils.py` | 49 | Utility helpers (`is_wayland`, `relative_time`, `request_window_focus`) |
-| `docs/` | 2 files | Usage guide (`docs/usage.md`) + agent tools roadmap (`docs/agent-tools-roadmap.md`) |
+| `inspect_db.py` | 49 | DB inspection CLI utility |
+| `mcp_integration/` | 2141 | MCP protocol integration layer (JSON-RPC over stdio, GTK asyncio bridge) |
+| `html_templates/` | 1913 | Extracted web assets (`chat.js`, `chat.css`) for WebKit WebView rendering |
+| `ai_text_utils/` | 1274 | Pure text, markdown, math, image, and cleanup helpers (zero GTK dep) |
+| `gnome-extension/` | 350 | GNOME Shell extension (Wayland clipboard + focus IPC) |
+| `tests/` | 272 | Unit test suite (`test_mcp_integration.py`) |
 | `tool_registry/` | 28 tools across 14 modules | AI tool executors (see below) |
 
-**Flat root** — no `__init__.py` at project level, not an importable Python package. All `.py` files imported directly by `main.py`.
+**Flat root** — no `__init__.py` at project level, not an importable Python package. Root `.py` files imported directly by `main.py`.
 
 ### Tool Registry (`tool_registry/`)
 
@@ -83,7 +91,7 @@ systemd/.desktop → run.sh → main.py (flock lock)
 
 Tool calls: LLM streams → `_ToolCallAccumulator` merges SSE deltas → `execute_tool_call()` dispatches → result fed back as `role: "tool"`. Cancel via `cancel_event` threading.Event.
 
-Each tool call carries a `purpose` parameter (agent-generated description), displayed in the tool summary line alongside file/query/URL (via `_TOOL_DISPLAY_FIELD` mapping in `ai_text_utils.py` — 13 tools covered, module-level constant).
+Each tool call carries a `purpose` parameter (agent-generated description), displayed in the tool summary line alongside file/query/URL (via `_TOOL_DISPLAY_FIELD` mapping in `ai_text_utils/render.py` — 13 tools covered, module-level constant).
 
 ### Wayland Integration (GNOME Shell Extension)
 
@@ -125,8 +133,8 @@ Heuristic regex scoring in `clipboard_store.py` (`classify_text()`, `detect_lang
 - Conversation HTML caching: history switching renders from cached HTML instead of re-rendering.
 - Truncation threshold configurable via Settings UI (`soft_limit`/`trim_target` in `~/.config/opencode-switcher/ai_settings.json`).
 - Tool calls display `purpose` description + file path in summary line via `_TOOL_DISPLAY_FIELD` + `_render_tool_step()`.
-- **Streaming rendering architecture** (Phase 1→3a): Three-zone DOM structure (`.bubble-region` for reasoning/tool/answer). `_render_current_assistant_message()` calls JS `updateMessageContainer()` to incrementally update only the answer region during streaming. `_render_active_turn_to_html()` in `ai_text_utils.py` is a wrapper calling 3 sub-renderers (`_render_reasoning_html`, `_render_tool_steps_html`, `_render_answer_html`). `_render_markdown()` is only used for non-streaming final renders (conversation switching, full rebuilds). Poll interval: 200ms. No full DOM rebuild at stream end — final tokens delivered via 兜底渲染 that sets `window._isStreaming=false` then calls `updateMessageContainer`.
-- **DOM Windowing**: Keeps only the last 10 conversation rounds visible (older ones hidden with `display:none`). Batch-loads 3 more rounds per click. Controlled by JS functions `applyWindowing()`/`showOlderBatch()`/`showAllMessages()`/`updateShowOlderBar()` in `ai_html_template.py`. CSS classes: `.msg-windowed`, `.show-older-bar`. Injected into 5 key lifecycle functions.
+- **Streaming rendering architecture** (Phase 1→3a): Three-zone DOM structure (`.bubble-region` for reasoning/tool/answer). `_render_current_assistant_message()` calls JS `updateMessageContainer()` to incrementally update only the answer region during streaming. `_render_active_turn_to_html()` in `ai_text_utils/render.py` is a wrapper calling 3 sub-renderers (`_render_reasoning_html`, `_render_tool_steps_html`, `_render_answer_html`). `_render_markdown()` is only used for non-streaming final renders (conversation switching, full rebuilds). Poll interval: 200ms. No full DOM rebuild at stream end — final tokens delivered via 兜底渲染 that sets `window._isStreaming=false` then calls `updateMessageContainer`.
+- **DOM Windowing**: Keeps only the last 10 conversation rounds visible (older ones hidden with `display:none`). Batch-loads 3 more rounds per click. Controlled by JS functions `applyWindowing()`/`showOlderBatch()`/`showAllMessages()`/`updateShowOlderBar()` in `html_templates/chat.js`. CSS classes: `.msg-windowed`, `.show-older-bar`. Injected into 5 key lifecycle functions.
 
 ### AI Input: Multi-line Preservation
 When re-rendering chat after AI responds, the original Shift+Enter line breaks in user messages are preserved via `_preserve_newlines()`. This function detects fenced code blocks to avoid adding `<br>` inside them.
@@ -164,6 +172,7 @@ Dynamically add/remove `.subagent-status-bar` class on `self._ai_subagent_bar` F
 | `~/.config/opencode-switcher/llm_settings.json` | LLM API keys (perms 0o600) |
 | `~/.config/opencode-switcher/ai_settings.json` | AI truncation threshold (`soft_limit`, `trim_target`) |
 | `~/.config/opencode-switcher/memory.json` | Long-term semantic memory (perms 0o600) |
+| `~/.config/opencode-switcher/mcp_servers.json` | MCP server configurations (perms 0o600) |
 | `~/.config/opencode-switcher/lock` | Flock lock file |
 | `~/.config/opencode-switcher/images/` | Clipboard image PNGs |
 | `~/.cache/opencode-switcher/toggle.sock` | Unix socket (Wayland hotkey) |
@@ -176,7 +185,7 @@ Dynamically add/remove `.subagent-status-bar` class on `self._ai_subagent_bar` F
 
 - **Strings**: double quotes (~10:1 over single). Docstrings: `"""`
 - **Imports**: stdlib → third-party → local. `gi.require_version()` BEFORE `from gi.repository import ...`
-- **Thread safety**: `GLib.idle_add(callback, *args)` for background→UI updates. No `asyncio`.
+- **Thread safety**: `GLib.idle_add(callback, *args)` for background→UI updates. No `asyncio` loop directly driving GTK widgets except through `mcp_integration.gtk_asyncio_bridge`.
 - **Comments**: `# <space><text>`, Chinese or English.
 - **`# ponytail:`** marks intentionally removed code — searchable breadcrumb for deleted blocks.
 - **`console.error('opencode-switcher: ...')`** prefix in GNOME extension JS error messages.

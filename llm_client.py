@@ -223,7 +223,7 @@ def parse_sse_events(
                 yield reasoning_delta(reasoning)
     except Exception as e:
         logger.error("SSE 流读取异常: %s", e)
-        return
+        raise _LLMHttpError(f"SSE 流读取中断: {e}")
 
     # Fallback: 流自然结束时产出残留工具调用
     calls = tc_accum.get_calls()

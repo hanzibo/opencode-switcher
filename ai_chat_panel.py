@@ -1319,7 +1319,7 @@ class AIChatPanel(Gtk.Box):
     def _finalize_after_tool_loop(self, req_id: int):
         """Finalize after tool loop ends (used when tool iteration limit hit)."""
         conv_id = None
-        for cid, st in self._ai_running_convs.items():
+        for cid, st in list(self._ai_running_convs.items()):
             if st.get("req_id") == req_id:
                 conv_id = cid
                 break
@@ -1596,7 +1596,7 @@ class AIChatPanel(Gtk.Box):
     def _render_current_assistant_message(self, req_id: int):
         """Render the current assistant message for the given request ID."""
         conv_id = None
-        for cid, st in self._ai_running_convs.items():
+        for cid, st in list(self._ai_running_convs.items()):
             if st.get("req_id") == req_id:
                 conv_id = cid
                 break
@@ -1658,7 +1658,7 @@ class AIChatPanel(Gtk.Box):
     def _on_llm_api_finished(self, req_id: int):
         """Called when LLM stream completes with a pure text response (no tool_calls)."""
         conv_id = None
-        for cid, st in self._ai_running_convs.items():
+        for cid, st in list(self._ai_running_convs.items()):
             if st.get("req_id") == req_id:
                 conv_id = cid
                 break
@@ -1881,8 +1881,13 @@ class AIChatPanel(Gtk.Box):
         self._streaming_container_created = False  # DOM 已重建，流式容器需重新创建
 
         if parent:
-            GLib.idle_add(lambda: parent.remove(old_webview) or True)
-            GLib.idle_add(lambda: parent.add(self._ai_webview) or self._ai_webview.show() or True)
+            def _reparent_webview():
+                if parent:
+                    parent.remove(old_webview)
+                    parent.add(self._ai_webview)
+                    self._ai_webview.show()
+                return False
+            GLib.idle_add(_reparent_webview)
 
         if current_html:
             self._ai_webview.run_javascript(f"updateContent({json.dumps(current_html)});", None, None)
@@ -3540,7 +3545,7 @@ class AIChatPanel(Gtk.Box):
                 existing_ids.add(active_id)
 
         # Add any running background conversations not on disk
-        for cid, st in self._ai_running_convs.items():
+        for cid, st in list(self._ai_running_convs.items()):
             if cid not in existing_ids:
                 msgs = st.get("messages", [])
                 if msgs:
@@ -3725,9 +3730,10 @@ class AIChatPanel(Gtk.Box):
         print(f"[AI] suspend timer started: {self._SUSPEND_DELAY_SECONDS}s, running_convs={len(self._ai_running_convs)}", flush=True)
 
     def _suspend_webview_cb(self) -> bool:
-        any_running = any(st.get("streaming", False) for st in self._ai_running_convs.values())
+        running_states = list(self._ai_running_convs.values())
+        any_running = any(st.get("streaming", False) for st in running_states)
         if any_running:
-            print(f"[AI] suspend deferred: {sum(1 for st in self._ai_running_convs.values() if st.get('streaming'))} convs still streaming", flush=True)
+            print(f"[AI] suspend deferred: {sum(1 for st in running_states if st.get('streaming'))} convs still streaming", flush=True)
             return True
 
         self._suspend_timeout_id = 0

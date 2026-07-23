@@ -101,19 +101,23 @@ def _escape_tool_results(text: str) -> Tuple[str, List[str]]:
         placeholders.append(match.group(1))
         return placeholder
 
-    # Pattern 1: tool-result-box (collapsible preview from display.py)
-    pattern1 = re.compile(r'(?:^|\n)(<div class="tool-result-box">.*?<!-- tool-result-marker -->)(?=\n|$)', re.DOTALL)
-    escaped_text = pattern1.sub(_repl, text)
+_TOOL_RESULT_PATTERN1 = re.compile(r'(?:^|\n)(<div class="tool-result-box">.*?<!-- tool-result-marker -->)(?=\n|$)', re.DOTALL)
+_TOOL_RESULT_PATTERN2 = re.compile(r'(?:^|\n)(<details class="tool-step-details".*?>.*?<!-- tool-step-marker -->)(?=\n|$)', re.DOTALL)
+_TOOL_RESULT_PATTERN3 = re.compile(r'(?:^|\n)(<div class="tool-ask-user">.*?<!-- tool-step-marker -->)(?=\n|$)', re.DOTALL)
 
-    # Pattern 2: tool-step-details (tool execution steps from conversation HTML)
-    # Protects tool step HTML from being mangled by the markdown renderer.
-    # Uses .*? to allow arbitrary attributes on <details> (e.g. data-tool-call-id).
-    pattern2 = re.compile(r'(?:^|\n)(<details class="tool-step-details".*?>.*?<!-- tool-step-marker -->)(?=\n|$)', re.DOTALL)
-    escaped_text = pattern2.sub(_repl, escaped_text)
 
-    # Pattern 3: tool-ask-user confirmation box
-    pattern3 = re.compile(r'(?:^|\n)(<div class="tool-ask-user">.*?<!-- tool-step-marker -->)(?=\n|$)', re.DOTALL)
-    escaped_text = pattern3.sub(_repl, escaped_text)
+def _escape_tool_results(text: str) -> Tuple[str, List[str]]:
+    """Scan the text for tool result box HTML chunks and escape them using placeholders."""
+    placeholders = []
+
+    def _repl(match):
+        placeholder = f"\n<!--TOOL_RESULT_PLACEHOLDER_{len(placeholders)}-->"
+        placeholders.append(match.group(1))
+        return placeholder
+
+    escaped_text = _TOOL_RESULT_PATTERN1.sub(_repl, text)
+    escaped_text = _TOOL_RESULT_PATTERN2.sub(_repl, escaped_text)
+    escaped_text = _TOOL_RESULT_PATTERN3.sub(_repl, escaped_text)
     return escaped_text, placeholders
 
 
