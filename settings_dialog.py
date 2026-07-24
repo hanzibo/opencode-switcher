@@ -9,10 +9,11 @@ Pattern references:
   - sort_cats_dialog.py      → custom-dialog + focus guards
 """
 
+import html
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib
+from gi.repository import Gtk, Gdk, GLib, Pango
 
 from typing import Optional, Callable
 
@@ -432,6 +433,40 @@ class SettingsDialog:
         hl_hint.set_margin_top(4)
         vbox.pack_start(hl_hint, False, False, 0)
 
+        # ── Separator before Skill settings ──
+        skill_sep = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
+        skill_sep.set_margin_top(16)
+        skill_sep.set_margin_bottom(12)
+        vbox.pack_start(skill_sep, False, False, 0)
+
+        # ── Skill section title ──
+        skill_title = Gtk.Label.new()
+        skill_title.set_markup("<b>🎯 AI Skill 技能系统</b>")
+        skill_title.set_xalign(0)
+        vbox.pack_start(skill_title, False, False, 0)
+
+        # ── Enable global skills CheckButton ──
+        skill_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        skill_hbox.set_margin_top(8)
+        self._enable_global_skills_check = Gtk.CheckButton.new_with_label("启用全局 Skill 自动发现 (~/.config/opencode-switcher/skills, ~/.agents/skills 等)")
+        self._enable_global_skills_check.set_active(self._ai_settings_store.enable_global_skills)
+        skill_hbox.pack_start(self._enable_global_skills_check, False, False, 0)
+        vbox.pack_start(skill_hbox, False, False, 0)
+
+        skill_hint = Gtk.Label.new()
+        skill_hint.set_markup(
+            "<span size='small' foreground='#888888'>"
+            "关闭后 AI 助手将仅自动识别当前项目根路径（.opencode/skills 及 .gemini/skills）下的 Skill，"
+            "屏蔽全局通用 Skill 目录。\n下方可对已识别到的每个 Skill 进行单独开启/关闭管理。"
+            "</span>"
+        )
+        skill_hint.set_xalign(0)
+        skill_hint.set_margin_top(4)
+        vbox.pack_start(skill_hint, False, False, 0)
+
+        # ── Per-Skill enable/disable toggle list ──
+        self._build_skill_toggle_section(vbox)
+
         # ── Separator before built-in tool toggle ──
         tool_sep = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
         tool_sep.set_margin_top(16)
@@ -447,6 +482,58 @@ class SettingsDialog:
         vbox.pack_start(spacer, True, True, 0)
 
         return self._make_tab_scrolled_window(vbox)
+
+    def _build_skill_toggle_section(self, parent_vbox):
+        """动态渲染每个已扫描到的 Skill 的独立使能开关。"""
+        from skill_store import SkillStore
+        from tool_registry import get_bash_cwd
+
+        cwd = get_bash_cwd()
+        all_skills = SkillStore(disabled_skills=[]).get_skills(cwd=cwd)
+
+        self._skill_toggle_widgets = []
+        disabled_set = set(self._ai_settings_store.disabled_skills)
+
+        if not all_skills:
+            no_skills_lbl = Gtk.Label.new("（当前未扫描到任何已安装的 Skill）")
+            no_skills_lbl.set_xalign(0)
+            no_skills_lbl.set_opacity(0.6)
+            no_skills_lbl.set_margin_top(6)
+            parent_vbox.pack_start(no_skills_lbl, False, False, 0)
+            return
+
+        skill_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
+        skill_box.set_margin_top(8)
+
+        global_dirs = SkillStore().global_dirs
+
+        for sk in all_skills:
+            hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+            check = Gtk.CheckButton.new_with_label(sk.name)
+            check.set_active(sk.name not in disabled_set)
+
+            is_global = any(sk.path.startswith(g) for g in global_dirs if g)
+            tag_text = "[全局]" if is_global else "[项目]"
+            tag_color = "#3b82f6" if is_global else "#10b981"
+
+            desc_lbl = Gtk.Label.new()
+            desc_lbl.set_markup(
+                f"<span foreground='{tag_color}'><b>{tag_text}</b></span> "
+                f"<span foreground='#888888'>{html.escape(sk.description)}</span>"
+            )
+            desc_lbl.set_xalign(0)
+            desc_lbl.set_ellipsize(Pango.EllipsizeMode.END)
+
+            hbox.pack_start(check, False, False, 0)
+            hbox.pack_start(desc_lbl, True, True, 0)
+            skill_box.pack_start(hbox, False, False, 0)
+
+            self._skill_toggle_widgets.append({
+                "name": sk.name,
+                "check": check,
+            })
+
+        parent_vbox.pack_start(skill_box, False, False, 0)
 
     def _build_tool_toggle_section(self, parent_vbox):
         """Build the built-in tool enable/disable toggle section.
@@ -1211,6 +1298,14 @@ class SettingsDialog:
         self._ai_settings_store.show_tool_details = self._show_tool_details_check.get_active()
         self._ai_settings_store.enable_code_highlight = self._code_highlight_check.get_active()
         set_code_highlight(self._ai_settings_store.enable_code_highlight)
+        self._ai_settings_store.enable_global_skills = self._enable_global_skills_check.get_active()
+
+        # 独立 Skill 使能开关
+        disabled_skills = []
+        for w in getattr(self, "_skill_toggle_widgets", []):
+            if not w["check"].get_active():
+                disabled_skills.append(w["name"])
+        self._ai_settings_store.disabled_skills = disabled_skills
 
         # 内置工具开关
         disabled = []

@@ -1105,6 +1105,8 @@ class AISettingsStore:
         self.enable_incremental_tools: bool = True  # v3 增量工具卡片
         self.show_tool_details: bool = True  # 是否渲染工具调用结果详情
         self.enable_code_highlight: bool = True  # 是否启用代码语法高亮
+        self.enable_global_skills: bool = True  # 是否启用全局 Skill 自动发现
+        self.disabled_skills: list[str] = []  # 禁用的 Skill 名称列表
         # ── 内置工具开关 ──
         self.disabled_tools: list[str] = []  # 禁用的内置工具名称列表
         # ── MCP Server 配置列表 ──
@@ -1129,6 +1131,8 @@ class AISettingsStore:
             self.enable_incremental_tools = data.get("enable_incremental_tools", True)
             self.show_tool_details = data.get("show_tool_details", True)
             self.enable_code_highlight = data.get("enable_code_highlight", True)
+            self.enable_global_skills = data.get("enable_global_skills", True)
+            self.disabled_skills = data.get("disabled_skills", [])
             self.disabled_tools = data.get("disabled_tools", [])
             self.mcp_servers = data.get("mcp_servers", [])
         except Exception:
@@ -1153,6 +1157,8 @@ class AISettingsStore:
                     "enable_incremental_tools": self.enable_incremental_tools,
                     "show_tool_details": self.show_tool_details,
                     "enable_code_highlight": self.enable_code_highlight,
+                    "enable_global_skills": self.enable_global_skills,
+                    "disabled_skills": self.disabled_skills,
                     "disabled_tools": self.disabled_tools,
                     "mcp_servers": self.mcp_servers,
                 }, f, indent=2)
