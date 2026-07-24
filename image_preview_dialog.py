@@ -23,7 +23,6 @@ try:
 except ImportError:
     WebKit2 = None
 
-from ai_text_utils import _image_to_data_uri
 from ai_html_template import _CHAT_CSS, _CHAT_JS, get_shared_web_context
 
 
@@ -129,7 +128,13 @@ def show_image_preview_dialog(
 
     webview.load_html(html, "file:///")
 
+    is_closed = False
+
     def _close_dialog():
+        nonlocal is_closed
+        if is_closed:
+            return
+        is_closed = True
         dialog.destroy()
 
     def on_decide_policy(wv, decision, decision_type):
@@ -153,8 +158,13 @@ def show_image_preview_dialog(
     dialog.connect("key-press-event", on_key_press)
 
     def on_destroy(*_):
+        nonlocal is_closed
+        is_closed = True
         if on_dialog_hidden:
-            on_dialog_hidden()
+            try:
+                on_dialog_hidden()
+            except Exception as e:
+                print(f"Warning: error in on_dialog_hidden: {e}", flush=True)
 
     dialog.connect("destroy", on_destroy)
     dialog.show_all()
