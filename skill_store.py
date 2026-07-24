@@ -88,7 +88,7 @@ class SkillStore:
     _cache: Dict[str, tuple] = {}
     _TTL_SECONDS: float = 2.0
 
-    def __init__(self, global_dir: Optional[Any] = None):
+    def __init__(self, global_dir: Optional[Any] = None, enable_global_skills: Optional[bool] = None, disabled_skills: Optional[List[str]] = None):
         if isinstance(global_dir, str):
             self.global_dirs = [global_dir]
         elif isinstance(global_dir, list):
@@ -100,12 +100,30 @@ class SkillStore:
                 os.path.expanduser("~/.config/opencode/skills"),
             ]
 
+        if enable_global_skills is not None:
+            self.enable_global_skills = enable_global_skills
+        else:
+            try:
+                from clipboard_store import AISettingsStore
+                self.enable_global_skills = AISettingsStore().enable_global_skills
+            except Exception:
+                self.enable_global_skills = True
+
+        if disabled_skills is not None:
+            self.disabled_skills = set(disabled_skills)
+        else:
+            try:
+                from clipboard_store import AISettingsStore
+                self.disabled_skills = set(AISettingsStore().disabled_skills)
+            except Exception:
+                self.disabled_skills = set()
+
     @property
     def global_dir(self) -> str:
         return self.global_dirs[0] if self.global_dirs else ""
 
     def _get_skill_directories(self, cwd: Optional[str] = None) -> List[str]:
-        dirs = list(self.global_dirs)
+        dirs = list(self.global_dirs) if self.enable_global_skills else []
         if cwd:
             dirs.append(os.path.join(cwd, ".opencode", "skills"))
             dirs.append(os.path.join(cwd, ".gemini", "skills"))
@@ -118,7 +136,8 @@ class SkillStore:
         Uses a 2-second TTL cache per cwd to avoid excessive disk scans.
         """
         import time
-        cache_key = f"{','.join(self.global_dirs)}:{cwd or ''}"
+        disabled_hash = ",".join(sorted(self.disabled_skills))
+        cache_key = f"{','.join(self.global_dirs)}:{cwd or ''}:{disabled_hash}"
         now = time.time()
 
         if cache_key in self._cache:
@@ -139,12 +158,12 @@ class SkillStore:
                         skill_file = os.path.join(entry.path, "SKILL.md")
                         if os.path.isfile(skill_file):
                             meta = _parse_skill_file(skill_file)
-                            if meta:
+                            if meta and meta.name not in self.disabled_skills:
                                 skills_by_name[meta.name] = meta
                     elif entry.is_file() and entry.name.endswith(".md"):
                         # Support standalone <name>.md in skills directory
                         meta = _parse_skill_file(entry.path)
-                        if meta:
+                        if meta and meta.name not in self.disabled_skills:
                             skills_by_name[meta.name] = meta
             except Exception:
                 continue

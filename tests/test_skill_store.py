@@ -110,6 +110,22 @@ Do work.
         self.assertIn("code-review", names)
         self.assertIn("extra-skill", names)
 
+    def test_enable_global_skills_toggle(self):
+        store_disabled = SkillStore(global_dir=self.global_skills, enable_global_skills=False)
+        skills = store_disabled.get_skills(cwd=self.proj_dir)
+        names = {s.name for s in skills}
+
+        self.assertNotIn("code-review", names)
+        self.assertIn("deploy-app", names)
+
+    def test_individual_disabled_skills(self):
+        store = SkillStore(global_dir=self.global_skills, disabled_skills=["code-review"])
+        skills = store.get_skills(cwd=self.proj_dir)
+        names = {s.name for s in skills}
+
+        self.assertNotIn("code-review", names)
+        self.assertIn("deploy-app", names)
+
 
 if __name__ == "__main__":
     unittest.main()
