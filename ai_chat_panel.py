@@ -3780,6 +3780,14 @@ class AIChatPanel(Gtk.Box):
         self._ai_summary = ""
         self._ai_summary_generating = False
         
+        # 重置 Bash 工作目录为初始根目录，避免旧项目路径污染新对话的 Skill 发现
+        try:
+            import os
+            import tool_registry
+            tool_registry.set_bash_cwd(os.getcwd())
+        except Exception:
+            pass
+
         self._ai_input_area.set_no_show_all(False)
         self._ai_input_area.show_all()
         

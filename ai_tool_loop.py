@@ -171,6 +171,19 @@ def run_llm_react_loop(
         iteration = 0
         max_iter = _get_max_tool_iterations()
 
+        # 在首轮注入当前工作区可用的 Skills 摘要
+        try:
+            from skill_store import SkillStore
+            cwd = tool_registry.get_bash_cwd()
+            skills_prompt = SkillStore().get_skills_prompt_summary(cwd=cwd)
+            if skills_prompt:
+                messages.append({
+                    "role": "system",
+                    "content": skills_prompt
+                })
+        except Exception as e:
+            logger.warning("Failed to inject skills summary: %s", e)
+
         while iteration < max_iter:
             if ctx.cancel_event and ctx.cancel_event.is_set():
                 GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)

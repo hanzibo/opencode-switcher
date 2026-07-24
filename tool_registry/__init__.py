@@ -22,6 +22,7 @@ from . import subagent
 
 from . import code_analysis as _code_analysis
 from . import memory as _memory
+from . import skill as _skill
 
 
 # ── Public constants ────────────────────────────────────────────────
@@ -41,10 +42,11 @@ _MODULE_NAMES: Dict[str, str] = {
     search: "search", web: "web", bash: "bash",
     notification: "notification", mail: "mail", display: "display",
     subagent: "subagent", _code_analysis: "code_analysis", _memory: "memory",
+    _skill: "skill",
 }
 for _mod in [common, todo, filesystem, search, web, bash,
              notification, mail, display, subagent, _code_analysis,
-             _memory]:
+             _memory, _skill]:
     _mod_name = _MODULE_NAMES[_mod]
     for _schema in getattr(_mod, "TOOL_SCHEMAS", []):
         TOOL_DEFINITIONS.append(_schema)
@@ -73,7 +75,6 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     # web
     "web_search": web.execute_web_search,
     "web_fetch": web.execute_web_fetch,
-    # bash
     "bash": bash.execute_bash,
     "bash_get_session_info": bash.execute_bash_get_session_info,
     # notification
@@ -91,6 +92,8 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "memory_save": _memory.execute_memory_save,
     "memory_list": _memory.execute_memory_list,
     "memory_recall": _memory.execute_memory_recall,
+    # skill
+    "read_skill": _skill.execute_read_skill,
 }
 
 
