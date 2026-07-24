@@ -1099,6 +1099,10 @@ class ClipboardPanel(Gtk.Box):
 
             item_type = getattr(item, "type", "text")
             if item_type == "image":
+                zoom_item = Gtk.MenuItem.new_with_label("🔍 放大")
+                zoom_item.connect("activate", lambda *_: self._zoom_image(item))
+                menu.append(zoom_item)
+
                 send_ai_item = Gtk.MenuItem.new_with_label("🖼️ 发送到 AI 看盘")
                 send_ai_item.connect("activate", lambda *_: self._send_image_to_ai(item))
                 menu.append(send_ai_item)
@@ -1250,6 +1254,20 @@ class ClipboardPanel(Gtk.Box):
             self._open_google_search(final_query)
             if self.on_hide_request:
                 self.on_hide_request()
+
+    def _zoom_image(self, item: ClipboardItem):
+        image_path = getattr(item, "image_path", None)
+        if not image_path or not os.path.isfile(image_path):
+            return
+
+        from image_preview_dialog import show_image_preview_dialog
+        parent_win = self.get_toplevel()
+        show_image_preview_dialog(
+            image_path=image_path,
+            parent_window=parent_win if isinstance(parent_win, Gtk.Window) else None,
+            on_dialog_shown=self.on_dialog_shown,
+            on_dialog_hidden=self.on_dialog_hidden,
+        )
 
     def _send_image_to_ai(self, item: ClipboardItem):
         image_path = getattr(item, "image_path", None)

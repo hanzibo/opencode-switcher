@@ -126,13 +126,14 @@ const KATEX_DELIMITERS = [
 
                         window.addEventListener('mousemove', function(e) {
                             if (!isDragging) return;
-                            currentX = e.clientX - startX;
-                            currentY = e.clientY - startY;
-                            dragDistance += Math.abs(currentX - translateX) + Math.abs(currentY - translateY);
-                            
-                            if (!rafId) {
-                                rafId = requestAnimationFrame(updateTransform);
-                            }
+                            const nextX = e.clientX - startX;
+                            const nextY = e.clientY - startY;
+                            dragDistance += Math.abs(nextX - translateX) + Math.abs(nextY - translateY);
+                            currentX = nextX;
+                            currentY = nextY;
+                            translateX = nextX;
+                            translateY = nextY;
+                            img.style.transform = `translate(${translateX}px, ${translateY}px) scale(${lightboxScale})`;
                         });
 
                         window.addEventListener('mouseup', function(e) {

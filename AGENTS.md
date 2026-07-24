@@ -55,6 +55,7 @@ systemd/.desktop → run.sh → main.py (flock lock)
 | `render_pipeline.py` | 222 | Render pipeline for AI chat responses and markdown processing |
 | `session_store.py` | 204 | SQLite reader + live-session detection via `/proc` |
 | `memory_manager_dialog.py` | 193 | Semantic memory CRUD and search dialog |
+| `image_preview_dialog.py` | 165 | Standalone clipboard image Lightbox preview dialog |
 | `ai_html_template.py` | 159 | WebKit WebView HTML structure loader (delegates JS/CSS to `html_templates/`) |
 | `event_types.py` | 142 | Central event type constants and dataclasses |
 | `prompt_dialog.py` | 77 | Prompt create/edit dialog |
