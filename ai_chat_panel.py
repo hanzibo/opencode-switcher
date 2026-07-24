@@ -54,7 +54,7 @@ _MPS_CONSERVATIVE = 0.2
 _MPS_STRICT = 0.4
 
 
-from ai_html_template import get_html_template, _get_pygments_css
+from ai_html_template import get_html_template, _get_pygments_css, get_shared_web_context
 from dynamic_copy_dialog import show_dynamic_copy_dialog
 from sort_dialog import show_sort_dialog
 from recycle_bin_dialog import show_recycle_bin_dialog
@@ -294,16 +294,11 @@ class AIChatPanel(Gtk.Box):
         ai_scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         ai_scrolled.set_vexpand(True)
 
-        if AIChatPanel._MPS is None:
-            _mps = WebKit2.MemoryPressureSettings.new()
-            _mps.set_memory_limit(_MPS_MEMORY_LIMIT)
-            _mps.set_poll_interval(_MPS_POLL_INTERVAL)
-            _mps.set_conservative_threshold(_MPS_CONSERVATIVE)
-            _mps.set_strict_threshold(_MPS_STRICT)
-            AIChatPanel._MPS = _mps
-            self._ai_web_context = WebKit2.WebContext(memory_pressure_settings=AIChatPanel._MPS)
-            self._ai_web_context.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
+        self._ai_web_context = get_shared_web_context()
+        if self._ai_web_context:
             self._ai_webview = WebKit2.WebView.new_with_context(self._ai_web_context)
+        else:
+            self._ai_webview = WebKit2.WebView.new()
         self._ai_webview.set_name("aiWebView")
 
         # Minimize WebKit resource footprint

@@ -88,12 +88,41 @@ def _load_resource(filename: str) -> str:
         return ""
 
 
-# 在模块导入时加载
 _CHAT_CSS = _load_resource("chat.css")
 _CHAT_JS = _load_resource("chat.js")
 
+_SHARED_WEB_CONTEXT = None
+_MPS = None
 
-# ── HTML template ─────────────────────────────────────────────────────────────
+
+def get_shared_web_context():
+    """Return singleton WebKit2.WebContext shared across WebViews to avoid duplicate WebKitNet processes."""
+    global _SHARED_WEB_CONTEXT, _MPS
+    if _SHARED_WEB_CONTEXT is not None:
+        return _SHARED_WEB_CONTEXT
+    try:
+        import gi
+        try:
+            gi.require_version("WebKit2", "4.1")
+        except ValueError:
+            try:
+                gi.require_version("WebKit2", "4.0")
+            except ValueError:
+                pass
+        from gi.repository import WebKit2
+        _mps = WebKit2.MemoryPressureSettings.new()
+        _mps.set_memory_limit(300)
+        _mps.set_poll_interval(5)
+        _mps.set_conservative_threshold(0.2)
+        _mps.set_strict_threshold(0.4)
+        _MPS = _mps
+        ctx = WebKit2.WebContext.new_with_context(_MPS) if hasattr(WebKit2.WebContext, "new_with_context") else WebKit2.WebContext.new()
+        ctx.set_cache_model(WebKit2.CacheModel.DOCUMENT_VIEWER)
+        _SHARED_WEB_CONTEXT = ctx
+        return _SHARED_WEB_CONTEXT
+    except Exception as e:
+        print(f"Warning: failed to initialize shared WebContext: {e}", flush=True)
+        return None
 
 def get_html_template(theme_name: str, initial_html: str = "",
                       pygments_css: str = "") -> str:

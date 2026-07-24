@@ -24,7 +24,7 @@ except ImportError:
     WebKit2 = None
 
 from ai_text_utils import _image_to_data_uri
-from ai_html_template import _CHAT_CSS, _CHAT_JS
+from ai_html_template import _CHAT_CSS, _CHAT_JS, get_shared_web_context
 
 
 def show_image_preview_dialog(
@@ -82,7 +82,8 @@ def show_image_preview_dialog(
         dialog.show_all()
         return
 
-    webview = WebKit2.WebView.new()
+    web_context = get_shared_web_context()
+    webview = WebKit2.WebView.new_with_context(web_context) if web_context else WebKit2.WebView.new()
     settings = webview.get_settings()
     settings.enable_webgl = False
     settings.enable_html5_database = False
