@@ -84,6 +84,34 @@ class SettingsDialog:
     def build_ui(self):
         dialog = Gtk.Window.new(Gtk.WindowType.TOPLEVEL)
         dialog.get_style_context().add_class("custom-dialog")
+        provider = Gtk.CssProvider.new()
+        provider.load_from_data(b"""
+            .custom-dialog notebook,
+            .custom-dialog notebook > stack,
+            .custom-dialog notebook > header,
+            .custom-dialog notebook tabs,
+            .custom-dialog notebook tab,
+            .custom-dialog scrolledwindow,
+            .custom-dialog viewport,
+            .custom-dialog viewport.frame,
+            .custom-dialog scrolledwindow.frame,
+            .custom-dialog scrolledwindow > border,
+            .custom-dialog viewport > border,
+            .custom-dialog scrolledwindow box,
+            .custom-dialog viewport box,
+            .custom-dialog notebook box,
+            .custom-dialog notebook stack box,
+            viewport,
+            viewport.frame {
+                background-color: transparent;
+                border: none;
+                outline: none;
+                box-shadow: none;
+            }
+        """)
+        dialog.get_style_context().add_provider(
+            provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
         dialog.set_title("Settings")
         dialog.set_modal(True)
         dialog.set_default_size(600, 400)
@@ -143,6 +171,18 @@ class SettingsDialog:
 
         dialog.show_all()
 
+    @staticmethod
+    def _make_tab_scrolled_window(vbox: Gtk.Box) -> Gtk.ScrolledWindow:
+        sw = Gtk.ScrolledWindow.new()
+        sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sw.set_vexpand(True)
+        sw.set_shadow_type(Gtk.ShadowType.NONE)
+        sw.add(vbox)
+        child = sw.get_child()
+        if isinstance(child, Gtk.Viewport):
+            child.set_shadow_type(Gtk.ShadowType.NONE)
+        return sw
+
     # ── Tab: QQ Mail ─────────────────────────────────────────────────────
 
     def _build_qq_mail_tab(self):
@@ -150,17 +190,11 @@ class SettingsDialog:
 
         Returns a Gtk.ScrolledWindow ready for notebook.append_page().
         """
-        outer_sw = Gtk.ScrolledWindow.new()
-        outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        outer_sw.set_vexpand(True)
-        outer_sw.set_shadow_type(Gtk.ShadowType.NONE)
-
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
         vbox.set_margin_start(16)
         vbox.set_margin_end(16)
         vbox.set_margin_top(12)
         vbox.set_margin_bottom(12)
-        outer_sw.add(vbox)
 
         # ── Email field ──
         email_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
@@ -233,7 +267,7 @@ class SettingsDialog:
         spacer.set_vexpand(True)
         vbox.pack_start(spacer, True, True, 0)
 
-        return outer_sw
+        return self._make_tab_scrolled_window(vbox)
 
     # ── Tab: AI 对话 ───────────────────────────────────────────────────
 
@@ -242,17 +276,11 @@ class SettingsDialog:
 
         Returns a Gtk.ScrolledWindow ready for notebook.append_page().
         """
-        outer_sw = Gtk.ScrolledWindow.new()
-        outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        outer_sw.set_vexpand(True)
-        outer_sw.set_shadow_type(Gtk.ShadowType.NONE)
-
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
         vbox.set_margin_start(16)
         vbox.set_margin_end(16)
         vbox.set_margin_top(12)
         vbox.set_margin_bottom(12)
-        outer_sw.add(vbox)
 
         # ── Soft limit (triggering threshold) ──
         soft_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
@@ -418,7 +446,7 @@ class SettingsDialog:
         spacer.set_vexpand(True)
         vbox.pack_start(spacer, True, True, 0)
 
-        return outer_sw
+        return self._make_tab_scrolled_window(vbox)
 
     def _build_tool_toggle_section(self, parent_vbox):
         """Build the built-in tool enable/disable toggle section.
@@ -597,17 +625,11 @@ class SettingsDialog:
         Dropdown for streaming mode (off/text_only/full),
         checkbox for incremental tool cards (v3).
         """
-        outer_sw = Gtk.ScrolledWindow.new()
-        outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        outer_sw.set_vexpand(True)
-        outer_sw.set_shadow_type(Gtk.ShadowType.NONE)
-
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
         vbox.set_margin_start(16)
         vbox.set_margin_end(16)
         vbox.set_margin_top(12)
         vbox.set_margin_bottom(12)
-        outer_sw.add(vbox)
 
         # ── Streaming mode info ──
         mode_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
@@ -684,7 +706,7 @@ class SettingsDialog:
         spacer.set_vexpand(True)
         vbox.pack_start(spacer, True, True, 0)
 
-        return outer_sw
+        return self._make_tab_scrolled_window(vbox)
 
     # ── Tab: 主题 ──────────────────────────────────────────────────────
 
@@ -694,17 +716,11 @@ class SettingsDialog:
         Allows switching between Dark and Light themes.
         The change is applied on Save via the ``on_theme_changed`` callback.
         """
-        outer_sw = Gtk.ScrolledWindow.new()
-        outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        outer_sw.set_vexpand(True)
-        outer_sw.set_shadow_type(Gtk.ShadowType.NONE)
-
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
         vbox.set_margin_start(16)
         vbox.set_margin_end(16)
         vbox.set_margin_top(12)
         vbox.set_margin_bottom(12)
-        outer_sw.add(vbox)
 
         # ── Dark / Light radio buttons ──
         theme_lbl = Gtk.Label.new()
@@ -742,7 +758,7 @@ class SettingsDialog:
         spacer.set_vexpand(True)
         vbox.pack_start(spacer, True, True, 0)
 
-        return outer_sw
+        return self._make_tab_scrolled_window(vbox)
 
     # ── Tab: 常量配置 ──────────────────────────────────────────────────
 
@@ -754,17 +770,11 @@ class SettingsDialog:
 
         Returns a Gtk.ScrolledWindow ready for notebook.append_page().
         """
-        outer_sw = Gtk.ScrolledWindow.new()
-        outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        outer_sw.set_vexpand(True)
-        outer_sw.set_shadow_type(Gtk.ShadowType.NONE)
-
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
         vbox.set_margin_start(16)
         vbox.set_margin_end(16)
         vbox.set_margin_top(12)
         vbox.set_margin_bottom(12)
-        outer_sw.add(vbox)
 
         # ── Clipboard max history ──
         clip_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
@@ -825,7 +835,7 @@ class SettingsDialog:
         spacer.set_vexpand(True)
         vbox.pack_start(spacer, True, True, 0)
 
-        return outer_sw
+        return self._make_tab_scrolled_window(vbox)
 
     # ── Tab: MCP 服务器 ─────────────────────────────────────────────────
 
@@ -835,17 +845,11 @@ class SettingsDialog:
         支持 stdio（本地子进程）和 http（远程 Streamable HTTP）两种模式。
         数据存储在 AISettingsStore.mcp_servers (list[dict]) 中。
         """
-        outer_sw = Gtk.ScrolledWindow.new()
-        outer_sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        outer_sw.set_vexpand(True)
-        outer_sw.set_shadow_type(Gtk.ShadowType.NONE)
-
         vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
         vbox.set_margin_start(16)
         vbox.set_margin_end(16)
         vbox.set_margin_top(12)
         vbox.set_margin_bottom(12)
-        outer_sw.add(vbox)
 
         # ── 说明文字 ──
         hint = Gtk.Label.new()
@@ -890,7 +894,7 @@ class SettingsDialog:
         spacer.set_vexpand(True)
         vbox.pack_start(spacer, True, True, 0)
 
-        return outer_sw
+        return self._make_tab_scrolled_window(vbox)
 
     def _add_mcp_server_card(self, data: Optional[dict] = None):
         """添加一个 MCP 服务器配置卡片，支持 stdio 和 http 两种模式。"""
