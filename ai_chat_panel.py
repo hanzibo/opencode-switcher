@@ -90,6 +90,7 @@ class AIChatPanel(Gtk.Box):
         ("/model", "切换模型"),
         ("/cd", "切换 bash 工作路径"),
         ("/summary", "压缩上下文（/summary keep=N，保留最近N条，默认50）"),
+        ("/skill", "查看与手动触发 AI Skill"),
     ]
     _SUSPEND_DELAY_SECONDS = 5
     # ── Streaming: Token batching ──
@@ -2136,6 +2137,11 @@ class AIChatPanel(Gtk.Box):
             buf.set_text("")
             conv_id = self._ai_conversation_id
             if conv_id:
+                try:
+                    from tool_registry.bash import close_bash_session
+                    close_bash_session(conv_id)
+                except Exception:
+                    pass
                 self._conversation_store.delete_conversation(conv_id)
                 self._ai_html_cache.pop(conv_id, None)
             self._reset_ai_panel_silent()
@@ -2192,6 +2198,10 @@ class AIChatPanel(Gtk.Box):
         if text == "/summary" or text.startswith("/summary "):
             buf.set_text("")
             self._handle_summary_command(text)
+            return
+        if text == "/skill" or text.startswith("/skill:") or text.startswith("/skill ") or text.startswith("skill:"):
+            buf.set_text("")
+            self._handle_skill_command(text)
             return
         # Handle selected sub-agent blocks: build notification text and send
         if self._ai_selected_subagents:
@@ -2961,6 +2971,70 @@ class AIChatPanel(Gtk.Box):
                         context.finish(True, False, time)
                         return
         context.finish(False, False, time)
+
+    def _handle_skill_command(self, text: str):
+        """处理 /skill、/skill:<name>、/skill <name> 手动检索与触发。"""
+        raw_arg = text.strip()
+        skill_name = ""
+        if raw_arg.startswith("/skill:"):
+            skill_name = raw_arg[len("/skill:"):].strip()
+        elif raw_arg.startswith("/skill "):
+            skill_name = raw_arg[len("/skill "):].strip()
+        elif raw_arg.startswith("skill:"):
+            skill_name = raw_arg[len("skill:"):].strip()
+
+        from skill_store import SkillStore
+        from tool_registry import get_bash_cwd
+        cwd = get_bash_cwd(session_key=self._ai_conversation_id)
+        store = SkillStore()
+
+        if not skill_name or skill_name == "/skill":
+            skills = store.get_skills(cwd=cwd)
+            if not skills:
+                info_html = (
+                    '<div class="chat-status-notice">'
+                    '🔍 当前未发现可用的 Skill。<br/>'
+                    '<span size="small" foreground="#888888">'
+                    '全局目录: ~/.config/opencode-switcher/skills/<br/>'
+                    '项目目录: .opencode/skills/'
+                    '</span></div>'
+                )
+            else:
+                items_html = "".join([
+                    f'<li><strong>skill:{html.escape(sk.name)}</strong> — {html.escape(sk.description)}</li>'
+                    for sk in skills
+                ])
+                info_html = (
+                    f'<div class="chat-model-info">'
+                    f'🛠️ <strong>当前可用 Skill 列表 ({len(skills)} 个):</strong>'
+                    f'<ul style="margin: 6px 0 0 16px; padding: 0;">{items_html}</ul>'
+                    f'<span style="font-size: small; color: #888888;">提示：输入 /skill:&lt;name&gt; 可手动触发特定 Skill</span>'
+                    f'</div>'
+                )
+            self.append_html_to_webview(info_html)
+            return
+
+        content = store.get_skill_content(skill_name, cwd=cwd)
+        if not content:
+            available = store.get_skills(cwd=cwd)
+            names = [s.name for s in available]
+            self.append_html_to_webview(
+                f'<div class="chat-system-error">❌ 找不到名为「{html.escape(skill_name)}」的 Skill。'
+                f'当前可用: {html.escape(str(names))}</div>'
+            )
+            return
+
+        notice_html = (
+            f'<div class="chat-status-notice">'
+            f'📖 <strong>已手动调取并激活 Skill：「{html.escape(skill_name)}」</strong>'
+            f'</div>'
+        )
+        self.append_html_to_webview(notice_html)
+
+        prompt_payload = f"[手动触发 Skill: {skill_name}]\n\n{content}\n\n请严格按上述 Skill 指导完成任务。"
+        buf = self._ai_entry.get_buffer()
+        buf.set_text(prompt_payload)
+        self._on_ai_send_clicked()
 
     def _on_ai_entry_changed(self):
         buf = self._ai_entry.get_buffer()
@@ -3761,7 +3835,6 @@ class AIChatPanel(Gtk.Box):
         self._ai_entry.placeholder_text = ""
         self._last_rendered_html = ""
         self._ai_messages = []
-        self._ai_conversation_id = uuid4().hex[:12]
         self._clear_subagent_bar_instantly()
         self._refresh_subagent_bar()
         self._ai_assistant_buffer = ""
@@ -3780,13 +3853,14 @@ class AIChatPanel(Gtk.Box):
         self._ai_summary = ""
         self._ai_summary_generating = False
         
-        # 重置 Bash 工作目录为初始根目录，避免旧项目路径污染新对话的 Skill 发现
+        # 继承上一个会话的 Bash 工作路径，显式绑定至新生成的会话 ID
         try:
-            import os
             import tool_registry
-            tool_registry.set_bash_cwd(os.getcwd())
+            prev_cwd = tool_registry.get_bash_cwd(session_key=getattr(self, "_ai_conversation_id", None))
+            self._ai_conversation_id = uuid4().hex[:12]
+            tool_registry.set_bash_cwd(prev_cwd, session_key=self._ai_conversation_id)
         except Exception:
-            pass
+            self._ai_conversation_id = uuid4().hex[:12]
 
         self._ai_input_area.set_no_show_all(False)
         self._ai_input_area.show_all()

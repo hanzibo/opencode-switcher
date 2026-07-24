@@ -4,10 +4,11 @@ from typing import Optional, Callable, Set, List, Dict, Tuple, Any
 from ai_text_utils import _clean_history_title
 
 class AICommandPopover(Gtk.Popover):
-    def __init__(self, relative_to_entry, command_list: List[Tuple[str, str]]):
+    def __init__(self, relative_to_entry, command_list: List[Tuple[str, str]], conversation_id_fn: Optional[Callable[[], Optional[str]]] = None):
         super().__init__(relative_to=relative_to_entry)
         self.entry = relative_to_entry
         self.command_list = command_list
+        self.conversation_id_fn = conversation_id_fn
         self.get_style_context().add_class("command-autocomplete-popover")
         self.set_position(Gtk.PositionType.TOP)
 
@@ -57,10 +58,34 @@ class AICommandPopover(Gtk.Popover):
         if self._ai_cmd_suppress_rebuild:
             return
         search = prefix.lstrip("/")
-        matches = [
-            (cmd, desc) for cmd, desc in self.command_list
-            if cmd.startswith("/" + search)
-        ]
+        matches: List[Tuple[str, str]] = []
+
+        # 动态技能补全支持
+        if search.startswith("skill"):
+            try:
+                from skill_store import SkillStore
+                import tool_registry
+                conv_id = self.conversation_id_fn() if self.conversation_id_fn else None
+                cwd = tool_registry.get_bash_cwd(session_key=conv_id)
+                skills = SkillStore().get_skills(cwd=cwd)
+                filter_term = ""
+                if ":" in search:
+                    filter_term = search.split(":", 1)[1].strip()
+                elif len(search) > 5 and (search.startswith("skill ") or search.startswith("skill:")):
+                    filter_term = search[5:].strip()
+
+                for sk in skills:
+                    if not filter_term or filter_term.lower() in sk.name.lower() or filter_term.lower() in sk.description.lower():
+                        matches.append((f"skill:{sk.name}", f"[u] {sk.description}"))
+            except Exception:
+                pass
+
+        if not matches:
+            matches = [
+                (cmd, desc) for cmd, desc in self.command_list
+                if cmd.startswith("/" + search)
+            ]
+
         if not matches:
             self.dismiss()
             return
@@ -71,13 +96,26 @@ class AICommandPopover(Gtk.Popover):
 
         for cmd, desc in matches:
             row = Gtk.ListBoxRow.new()
-            lbl = Gtk.Label.new(f"{cmd}  —  {desc}")
-            lbl.set_xalign(0)
-            lbl.set_margin_start(8)
-            lbl.set_margin_end(8)
-            lbl.set_margin_top(6)
-            lbl.set_margin_bottom(6)
-            row.add(lbl)
+            hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 12)
+            
+            lbl_cmd = Gtk.Label.new(cmd)
+            lbl_cmd.set_xalign(0)
+            lbl_cmd.set_margin_start(8)
+            lbl_cmd.set_margin_top(6)
+            lbl_cmd.set_margin_bottom(6)
+
+            lbl_desc = Gtk.Label.new(desc)
+            lbl_desc.set_xalign(0)
+            lbl_desc.set_hexpand(True)
+            lbl_desc.set_ellipsize(Pango.EllipsizeMode.END)
+            lbl_desc.set_opacity(0.65)
+            lbl_desc.set_margin_end(8)
+            lbl_desc.set_margin_top(6)
+            lbl_desc.set_margin_bottom(6)
+
+            hbox.pack_start(lbl_cmd, False, False, 0)
+            hbox.pack_start(lbl_desc, True, True, 0)
+            row.add(hbox)
             row._cmd_command = cmd
             self.listbox.add(row)
 
@@ -188,6 +226,9 @@ class AICommandPopover(Gtk.Popover):
             command = raw.split("  ")[0].strip()
         if not command:
             return
+
+        if not command.startswith("/"):
+            command = "/" + command
 
         self._ai_cmd_suppress_rebuild = True
         buf = self.entry.get_buffer()

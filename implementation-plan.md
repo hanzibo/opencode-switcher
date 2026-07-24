@@ -1,134 +1,93 @@
-# Skill 特性（方案 A：标准 SKILL.md 渐进式注入）实施计划
+# 多会话隔离与 Skill 手动触发（/skill）重构实施计划
 
 ## 一、 改动点梳理
 
-根据确认的 **方案 A（标准 SKILL.md 渐进式注入）**，整体架构分为：
-1. `SKILL.md` 目录发现与 YAML Frontmatter 解析（`skill_store.py`）
-2. 内置 `read_skill` AI 工具注册（`tool_registry/skill.py` + `tool_registry/__init__.py`）
-3. System Prompt 动态注入 `<available_skills>` 摘要（`ai_tool_loop.py`）
-4. UI 工具卡片渲染映射（`ai_text_utils/render.py`）
-5. 单元测试全覆盖（`tests/test_skill_store.py`）
+结合当前系统的多会话并发 Bash 隔离设计，解决先前 `session_key` 隐式退回 `"default"` 导致的状态错位问题，实现：
+1. **显式会话 Context 绑定**：前端 UI（Popovers、`/skill`、`/cd`）统一显式向 `get_bash_cwd()` 传递当前激活的 `conversation_id`。
+2. **新会话 CWD 继承**：开启新对话时，新会话自动继承当前活跃会话的 CWD 路径，避免重复 `/cd`。
+3. **会话生命周期闭环**：删除对话时显式清理并终止对应的 `_BashSession` 子进程。
+4. **`/skill` 自动补全与手动触发**：实现两列显示格式（`skill:<name>` + `[u] <description>`）及发送 `/skill:<name>` 自动载入执行。
 
-本次改动涉及 **6 个代码文件**：
+### 涉及文件清单：
 
-| 序号 | 文件路径 | 文件类型 | 核心修改内容 | 依赖与影响范围 |
+| 序号 | 文件路径 | 修改类型 | 需修改函数/类/方法 | 具体修改内容 |
 |---|---|---|---|---|
-| 1 | `skill_store.py` | 新增文件 | 实现 `SkillMetadata` 数据结构、`SkillStore` 目录扫描解析器与 Prompt 格式化 | 依赖标准库 `os`, `pathlib`, `re`, `yaml`/轻量正则解析；无破坏性影响 |
-| 2 | `tool_registry/skill.py` | 新增文件 | 定义 `read_skill` 工具 Schema 及 `execute_read_skill` 执行逻辑 | 依赖 `skill_store.py` |
-| 3 | `tool_registry/__init__.py` | 修改文件 | 导入 `skill` 模块并打包 `TOOL_DEFINITIONS` 与 `TOOL_EXECUTORS` | 注册新工具 `read_skill`，无破坏性影响 |
-| 4 | `ai_tool_loop.py` | 修改文件 | 在循环开始前调用 `SkillStore` 动态将技能元数据摘要注入 System Prompt | 增强 LLM 上下文，无破坏性影响 |
-| 5 | `ai_text_utils/render.py` | 修改文件 | 在 `_TOOL_DISPLAY_FIELD` 映射中增加 `"read_skill": "skill_name"` | 优化 WebView 中工具步的摘要展示 |
-| 6 | `tests/test_skill_store.py` | 新增文件 | 针对 YAML 解析、路径发现、Prompt 拼接及工具调用的单测 | 保证测试覆盖率与稳定性 |
+| 1 | `ai_popovers.py` | 修改 | `AICommandPopover` 类 | 增加 `conversation_id` 属性支持；在 `rebuild()` 中显式向 `get_bash_cwd()` 传递会话 ID |
+| 2 | `ai_chat_panel.py` | 修改 | `AIChatPanel` 类 | 1. 传递 `self._ai_conversation_id` 给 `AICommandPopover`<br/>2. `_start_new_conversation()` 中继承上个会话的 CWD<br/>3. 删除对话时调用 `close_bash_session(conv_id)` |
+| 3 | `tool_registry/_state.py` | 修改 | `_BashState.get_cwd()` | 优先从 `/proc/{pid}/cwd` 动态读取实时物理路径，未匹配到 key 时继承上一有效 CWD |
+| 4 | `tool_registry/bash.py` | 修改 | `get_bash_cwd()` | 确保正确路由显式传入的 `session_key` |
+| 5 | `tests/test_bash_isolation.py` | 新增 | 测试用例类 | 增加多会话 Bash 隔离、CWD 继承、生命周期释放及 `/skill` 补全的单测 |
 
 ---
 
 ## 二、 详细实施计划
 
-### 步骤 1：创建 Skill 存储与解析器 `skill_store.py`
-- **目标**：实现 `~/.config/opencode-switcher/skills/` 与 `.opencode/skills/`（或当前 bash cwd）目录中 `SKILL.md` 的扫描、YAML Frontmatter 解析及 Prompt 摘要生成。
-- **改动文件**：`skill_store.py`（新增）
-- **核心逻辑**：
+### 步骤 1：重构 `tool_registry/_state.py` 与 `bash.py` 路径路由
+- **目标**：保证 CWD 的存取精确归属于传入的 `session_key`，且支持从 Linux `/proc/{pid}/cwd` 实时感知物理路径。
+- **具体改动**：
   ```python
-  @dataclass
-  class SkillMetadata:
-      name: str
-      description: str
-      path: str
-      allowed_tools: List[str] = field(default_factory=list)
-
-  class SkillStore:
-      def get_skills(self, cwd: Optional[str] = None) -> List[SkillMetadata]:
-          # 扫描 ~/.config/opencode-switcher/skills/ 及 cwd 下的 .opencode/skills/
-          ...
-
-      def get_skills_prompt_summary(self, cwd: Optional[str] = None) -> str:
-          # 生成 <available_skills> XML 结构摘要注入 System Prompt
-          ...
-
-      def get_skill_content(self, skill_name: str, cwd: Optional[str] = None) -> Optional[str]:
-          # 读取特定 SKILL.md 的完整 Markdown 内容
-          ...
+  # tool_registry/_state.py
+  def get_cwd(self, key: str) -> str:
+      session = self._sessions.get(key)
+      if session and hasattr(session, "process") and session.process and session.process.poll() is None:
+          try:
+              real_cwd = os.readlink(f"/proc/{session.process.pid}/cwd")
+              if os.path.isdir(real_cwd):
+                  self._cwds[key] = real_cwd
+                  self.cwd = real_cwd
+                  return real_cwd
+          except Exception:
+              pass
+      return self._cwds.get(key, self.cwd)
   ```
-- **预估行数**：~120 行
 
 ---
 
-### 步骤 2：新增 `read_skill` 工具与注册 `tool_registry/`
-- **目标**：为 AI Assistant 提供调取技能详细指南的内置 Tool `read_skill`。
-- **改动文件**：
-  - `tool_registry/skill.py`（新增，~40 行）
-  - `tool_registry/__init__.py`（修改，~10 行）
+### 步骤 2：重构 `ai_popovers.py` 关联 `conversation_id`
+- **目标**：在输入 `/skill` 弹出自动补全弹窗时，准确使用当前对话关联的 CWD 扫描可用 Skills。
 - **具体改动**：
-  1. 在 `tool_registry/skill.py` 中声明 `TOOL_SCHEMAS`：
+  ```python
+  # ai_popovers.py
+  class AICommandPopover(Gtk.Popover):
+      def __init__(self, relative_to_entry, command_list, conversation_id_fn=None):
+          ...
+          self.conversation_id_fn = conversation_id_fn
+
+      def rebuild(self, prefix: str):
+          ...
+          conv_id = self.conversation_id_fn() if self.conversation_id_fn else None
+          cwd = tool_registry.get_bash_cwd(session_key=conv_id)
+          skills = SkillStore().get_skills(cwd=cwd)
+  ```
+
+---
+
+### 步骤 3：在 `ai_chat_panel.py` 中强化 CWD 继承与生命周期
+- **目标**：解决会话切换、新建及删除时的 CWD 状态错位与子进程泄露。
+- **具体改动**：
+  1. 初始化 `AICommandPopover` 时传入 `conversation_id_fn=lambda: self._ai_conversation_id`。
+  2. 在 `start_new_conversation()` 中：
      ```python
-     TOOL_SCHEMAS = [{
-         "type": "function",
-         "function": {
-             "name": "read_skill",
-             "description": "按名称读取特定技能（Skill）的完整指导文档和步骤说明。",
-             "parameters": {
-                 "type": "object",
-                 "properties": {
-                     "skill_name": {
-                         "type": "string",
-                         "description": "技能名称（匹配 available_skills 列表中指定的名称）"
-                     }
-                 },
-                 "required": ["skill_name"]
-             }
-         }
-     }]
+     prev_cwd = tool_registry.get_bash_cwd(session_key=self._ai_conversation_id)
+     self._reset_ai_panel_silent()
+     tool_registry.set_bash_cwd(prev_cwd, session_key=self._ai_conversation_id)
      ```
-  2. 实现 `execute_read_skill(skill_name: str, cancel_event=None)` 函数。
-  3. 在 `tool_registry/__init__.py` 中引入 `from . import skill`，并在 `TOOL_DEFINITIONS` 与 `TOOL_EXECUTORS` 中注册 `read_skill`。
+  3. 在删除对话时（`/delete` 或 `delete_conversation`）：
+     ```python
+     tool_registry.close_bash_session(conv_id)
+     ```
 
 ---
 
-### 步骤 3：在 ReAct 循环中注入 Skill 提示词 `ai_tool_loop.py`
-- **目标**：在发起多轮 LLM 调用前，将当前工作区下可用的 Skills 摘要嵌入 System Prompt。
-- **改动文件**：`ai_tool_loop.py`（修改，~15 行）
-- **改动位置**：`run_llm_react_loop()` 函数启动处（约 L175-185）。
-- **具体逻辑**：
-  ```python
-  from skill_store import SkillStore
-
-  # 动态注入 Skill 摘要
-  current_cwd = tool_registry.get_bash_cwd()
-  skill_summary = SkillStore().get_skills_prompt_summary(cwd=current_cwd)
-  if skill_summary:
-      messages.append({
-          "role": "system",
-          "content": skill_summary
-      })
-  ```
-
----
-
-### 步骤 4：增强 UI 渲染支持 `ai_text_utils/render.py`
-- **目标**：在 AI 对话 WebView 界面中，使 `read_skill` 工具调用的摘要行清晰显示技能名称。
-- **改动文件**：`ai_text_utils/render.py`（修改，~2 行）
-- **具体改动**：
-  在 `_TOOL_DISPLAY_FIELD` 字典中添加：
-  ```python
-  _TOOL_DISPLAY_FIELD = {
-      ...
-      "read_skill": "skill_name",
-  }
-  ```
-
----
-
-### 步骤 5：单元测试验证 `tests/test_skill_store.py`
-- **目标**：编写完备的自动化测试，确保 YAML Frontmatter 解析正确、多路径覆盖无误以及工具调用的正常运行。
-- **改动文件**：`tests/test_skill_store.py`（新增，~90 行）
+### 步骤 4：编写自动化单元测试 `tests/test_bash_isolation.py`
+- **目标**：确保多会话路径隔离、CWD 继承、物理路径同步及 `/skill` 补全完全稳定。
 - **测试覆盖**：
-  - 测试标准 `SKILL.md` 的 YAML 头部解析（`name`, `description`）。
-  - 测试全局与项目本地 Skills 的覆盖与合并逻辑。
-  - 测试 `get_skills_prompt_summary()` 输出的 XML 格式正确性。
-  - 测试 `read_skill` 工具调用的执行结果。
+  - 测试 `conv_A` 与 `conv_B` 拥有独立 CWD 及 Bash 进程。
+  - 测试创建新会话时 CWD 自动继承。
+  - 测试删除会话时 Bash 进程释放。
 
 ---
 
 ## 三、 风险与回退策略
-1. **YAML 解析兼容性风险**：优先使用标准 Python 简易 Frontmatter 解析逻辑（截取 `---` 包含块），不依赖外部复杂 C 扩展，如解析失败降级为使用文件名作为 `name`，确保主线程不崩溃。
-2. **回退策略**：所有修改均为增量式扩展，若有异常可一键还原 `tool_registry/__init__.py` 与 `ai_tool_loop.py` 的注册调用。
+1. **进程释放风险**：关闭 Session 时使用 `try-except` 包裹 `close_bash_session`，防止异常导致 UI 卡死。
+2. **回退策略**：本次改动集中在 `ai_popovers.py` 与 `ai_chat_panel.py` 的 CWD 传参，若需回退可轻松切换回简单单例调用。
