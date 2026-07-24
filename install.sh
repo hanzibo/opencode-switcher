@@ -157,6 +157,7 @@ install_files() {
     cp "$SCRIPT_DIR/sort_dialog.py"              "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/recycle_bin_dialog.py"       "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/sort_cats_dialog.py"         "$INSTALL_DIR/"
+    cp "$SCRIPT_DIR/image_preview_dialog.py"     "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/llm_client.py"               "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/prompt_dialog.py"            "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/memory_manager_dialog.py"     "$INSTALL_DIR/"
