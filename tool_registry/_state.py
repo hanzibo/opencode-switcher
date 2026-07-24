@@ -38,7 +38,7 @@ class _BashState:
                     self._cwds[key] = real_cwd
                     self.cwd = real_cwd
                     return real_cwd
-            except Exception:
+            except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
                 pass
         return self._cwds.get(key, self.cwd)
 

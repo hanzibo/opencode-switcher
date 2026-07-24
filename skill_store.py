@@ -69,8 +69,8 @@ def _parse_skill_file(file_path: str) -> Optional[SkillMetadata]:
         name = meta.get("name", default_name)
         description = meta.get("description", f"Skill instruction for {name}")
 
-        allowed_tools_str = meta.get("allowed-tools", meta.get("allowed_tools", ""))
-        allowed_tools = [t.strip() for t in allowed_tools_str.split(",") if t.strip()]
+        allowed_tools_str = meta.get("allowed-tools", meta.get("allowed_tools", "")).strip("[] ")
+        allowed_tools = [t.strip().strip("\"'") for t in allowed_tools_str.split(",") if t.strip()]
 
         return SkillMetadata(
             name=name,
@@ -84,6 +84,9 @@ def _parse_skill_file(file_path: str) -> Optional[SkillMetadata]:
 
 class SkillStore:
     """Discovers and provides access to standard agent skills."""
+
+    _cache: Dict[str, tuple] = {}
+    _TTL_SECONDS: float = 2.0
 
     def __init__(self, global_dir: Optional[str] = None):
         if global_dir:
@@ -102,7 +105,17 @@ class SkillStore:
         """Scan global and project-local directories for SKILL.md files.
 
         Project-local skills override global skills with the same name.
+        Uses a 2-second TTL cache per cwd to avoid excessive disk scans.
         """
+        import time
+        cache_key = f"{self.global_dir}:{cwd or ''}"
+        now = time.time()
+
+        if cache_key in self._cache:
+            ts, cached_skills = self._cache[cache_key]
+            if now - ts < self._TTL_SECONDS:
+                return cached_skills
+
         skills_by_name: Dict[str, SkillMetadata] = {}
 
         for base_dir in self._get_skill_directories(cwd):
@@ -126,7 +139,9 @@ class SkillStore:
             except Exception:
                 continue
 
-        return list(skills_by_name.values())
+        result = list(skills_by_name.values())
+        self._cache[cache_key] = (now, result)
+        return result
 
     def get_skills_prompt_summary(self, cwd: Optional[str] = None) -> str:
         """Format discovered skills into XML structure for System Prompt injection."""

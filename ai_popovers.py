@@ -1,7 +1,10 @@
+import logging
 import re
 from gi.repository import Gtk, Gdk, GLib, Pango
 from typing import Optional, Callable, Set, List, Dict, Tuple, Any
 from ai_text_utils import _clean_history_title
+
+logger = logging.getLogger(__name__)
 
 class AICommandPopover(Gtk.Popover):
     def __init__(self, relative_to_entry, command_list: List[Tuple[str, str]], conversation_id_fn: Optional[Callable[[], Optional[str]]] = None):
@@ -77,8 +80,8 @@ class AICommandPopover(Gtk.Popover):
                 for sk in skills:
                     if not filter_term or filter_term.lower() in sk.name.lower() or filter_term.lower() in sk.description.lower():
                         matches.append((f"skill:{sk.name}", f"[u] {sk.description}"))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Skill autocomplete rebuild error: {e}")
 
         if not matches:
             matches = [

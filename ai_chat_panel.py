@@ -3024,6 +3024,10 @@ class AIChatPanel(Gtk.Box):
             )
             return
 
+        _MAX_SKILL_PAYLOAD_LEN = 30000
+        if len(content) > _MAX_SKILL_PAYLOAD_LEN:
+            content = content[:_MAX_SKILL_PAYLOAD_LEN] + "\n\n...[内容过长已自动截断]"
+
         notice_html = (
             f'<div class="chat-status-notice">'
             f'📖 <strong>已手动调取并激活 Skill：「{html.escape(skill_name)}」</strong>'
