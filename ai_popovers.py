@@ -130,15 +130,15 @@ class AICommandPopover(Gtk.Popover):
             self.listbox.select_row(first)
         self.listbox.handler_unblock_by_func(self._on_cmd_row_activated)
 
-        if not self._ai_cmd_popover_visible:
-            child = self.get_child()
-            if child:
-                entry_width = self.entry.get_allocated_width()
-                min_width = 180
-                child.set_size_request(max(entry_width, min_width), -1)
-                child.show_all()
-            self.popup()
-            self._ai_cmd_popover_visible = True
+        child = self.get_child()
+        if child:
+            entry_width = self.entry.get_allocated_width()
+            min_width = 180
+            child.set_size_request(max(entry_width, min_width), -1)
+            child.show_all()
+        self.popup()
+        self.show_all()
+        self._ai_cmd_popover_visible = True
 
     def _on_cmd_popover_key_press(self, _popover, event):
         keyname = Gdk.keyval_name(event.keyval)
@@ -237,12 +237,13 @@ class AICommandPopover(Gtk.Popover):
 
         buf = self.entry.get_buffer()
         if command == "/skill":
-            # 补全 /skill 时，自动追加 ':' 并且保持 Popover 打开列出可用 Skill 列表
+            # 补全 /skill 时，自动追加 ':' 并由 GLib.idle_add 延迟重新构建，确保 GTK 事件处理完毕后 Popover 稳定开启
+            self._ai_cmd_suppress_rebuild = False
+            self._ai_cmd_popover_visible = False
             buf.set_text("/skill:")
             end = buf.get_end_iter()
             buf.place_cursor(end)
-            self._ai_cmd_suppress_rebuild = False
-            self.rebuild("/skill:")
+            GLib.idle_add(self.rebuild, "/skill:")
             return
 
         self._ai_cmd_suppress_rebuild = True
