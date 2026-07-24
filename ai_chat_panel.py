@@ -3044,9 +3044,12 @@ class AIChatPanel(Gtk.Box):
         buf = self._ai_entry.get_buffer()
         start = buf.get_start_iter()
         end = buf.get_end_iter()
-        text = buf.get_text(start, end, True).strip()
+        raw_text = buf.get_text(start, end, True)
+        text = raw_text.strip()
 
-        if text.startswith("/") and " " not in text:
+        if text.startswith("/") and (" " not in text or text.startswith("/skill")):
+            self._ai_cmd_popover.rebuild(text)
+        elif text.startswith("skill:"):
             self._ai_cmd_popover.rebuild(text)
         else:
             self._ai_cmd_popover.dismiss()

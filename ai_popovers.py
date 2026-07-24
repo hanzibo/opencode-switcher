@@ -64,7 +64,7 @@ class AICommandPopover(Gtk.Popover):
         matches: List[Tuple[str, str]] = []
 
         # 动态技能补全支持
-        if search.startswith("skill"):
+        if search == "skill" or search.startswith("skill") or search.startswith("skill:") or search.startswith("skill "):
             try:
                 from skill_store import SkillStore
                 import tool_registry
@@ -72,10 +72,12 @@ class AICommandPopover(Gtk.Popover):
                 cwd = tool_registry.get_bash_cwd(session_key=conv_id)
                 skills = SkillStore().get_skills(cwd=cwd)
                 filter_term = ""
-                if ":" in search:
+                if search in ("skill", "skill ", "skill:"):
+                    filter_term = ""
+                elif ":" in search:
                     filter_term = search.split(":", 1)[1].strip()
-                elif len(search) > 5 and (search.startswith("skill ") or search.startswith("skill:")):
-                    filter_term = search[5:].strip()
+                elif search.startswith("skill "):
+                    filter_term = search[6:].strip()
 
                 for sk in skills:
                     if not filter_term or filter_term.lower() in sk.name.lower() or filter_term.lower() in sk.description.lower():
@@ -233,8 +235,17 @@ class AICommandPopover(Gtk.Popover):
         if not command.startswith("/"):
             command = "/" + command
 
-        self._ai_cmd_suppress_rebuild = True
         buf = self.entry.get_buffer()
+        if command == "/skill":
+            # 补全 /skill 时，自动追加 ':' 并且保持 Popover 打开列出可用 Skill 列表
+            buf.set_text("/skill:")
+            end = buf.get_end_iter()
+            buf.place_cursor(end)
+            self._ai_cmd_suppress_rebuild = False
+            self.rebuild("/skill:")
+            return
+
+        self._ai_cmd_suppress_rebuild = True
         buf.set_text(command + " ")
         end = buf.get_end_iter()
         buf.place_cursor(end)
