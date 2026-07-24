@@ -37,6 +37,7 @@ _TOOL_DISPLAY_FIELD = {
     "glob_find": "path",
     "web_search": "query",
     "web_fetch": "url",
+    "read_skill": "skill_name",
 }
 
 

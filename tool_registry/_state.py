@@ -30,7 +30,17 @@ class _BashState:
 
     def get_cwd(self, key: str) -> str:
         """Return the working directory for a given session key."""
-        return self._cwds.get(key, self.default_cwd)
+        session = self._sessions.get(key)
+        if session and hasattr(session, "process") and session.process and session.process.poll() is None:
+            try:
+                real_cwd = os.readlink(f"/proc/{session.process.pid}/cwd")
+                if os.path.isdir(real_cwd):
+                    self._cwds[key] = real_cwd
+                    self.cwd = real_cwd
+                    return real_cwd
+            except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+                pass
+        return self._cwds.get(key, self.cwd)
 
     def set_cwd(self, key: str, path: str):
         """Set the working directory for a given session key."""
