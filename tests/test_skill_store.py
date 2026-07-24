@@ -98,6 +98,18 @@ Do work.
         content = store.get_skill_content("deploy-app", cwd=self.proj_dir)
         self.assertIn("Deploy App Skill", content)
 
+    def test_multiple_global_directories(self):
+        global_2 = os.path.join(self.tmp_dir, "global_skills_2")
+        os.makedirs(os.path.join(global_2, "extra-skill"), exist_ok=True)
+        with open(os.path.join(global_2, "extra-skill", "SKILL.md"), "w", encoding="utf-8") as f:
+            f.write("---\nname: extra-skill\ndescription: Extra skill\n---\n")
+
+        store = SkillStore(global_dir=[self.global_skills, global_2])
+        skills = store.get_skills()
+        names = {s.name for s in skills}
+        self.assertIn("code-review", names)
+        self.assertIn("extra-skill", names)
+
 
 if __name__ == "__main__":
     unittest.main()

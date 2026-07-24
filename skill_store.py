@@ -88,14 +88,24 @@ class SkillStore:
     _cache: Dict[str, tuple] = {}
     _TTL_SECONDS: float = 2.0
 
-    def __init__(self, global_dir: Optional[str] = None):
-        if global_dir:
-            self.global_dir = global_dir
+    def __init__(self, global_dir: Optional[Any] = None):
+        if isinstance(global_dir, str):
+            self.global_dirs = [global_dir]
+        elif isinstance(global_dir, list):
+            self.global_dirs = global_dir
         else:
-            self.global_dir = os.path.expanduser("~/.config/opencode-switcher/skills")
+            self.global_dirs = [
+                os.path.expanduser("~/.config/opencode-switcher/skills"),
+                os.path.expanduser("~/.agents/skills"),
+                os.path.expanduser("~/.config/opencode/skills"),
+            ]
+
+    @property
+    def global_dir(self) -> str:
+        return self.global_dirs[0] if self.global_dirs else ""
 
     def _get_skill_directories(self, cwd: Optional[str] = None) -> List[str]:
-        dirs = [self.global_dir]
+        dirs = list(self.global_dirs)
         if cwd:
             dirs.append(os.path.join(cwd, ".opencode", "skills"))
             dirs.append(os.path.join(cwd, ".gemini", "skills"))
@@ -108,7 +118,7 @@ class SkillStore:
         Uses a 2-second TTL cache per cwd to avoid excessive disk scans.
         """
         import time
-        cache_key = f"{self.global_dir}:{cwd or ''}"
+        cache_key = f"{','.join(self.global_dirs)}:{cwd or ''}"
         now = time.time()
 
         if cache_key in self._cache:
