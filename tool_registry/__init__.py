@@ -17,6 +17,7 @@ from . import web
 from . import bash
 from . import notification
 from . import mail
+from . import gmail
 from . import display
 from . import subagent
 
@@ -40,12 +41,12 @@ TOOL_MODULE_MAP: Dict[str, str] = {}
 _MODULE_NAMES: Dict[str, str] = {
     common: "common", todo: "todo", filesystem: "filesystem",
     search: "search", web: "web", bash: "bash",
-    notification: "notification", mail: "mail", display: "display",
+    notification: "notification", mail: "mail", gmail: "mail", display: "display",
     subagent: "subagent", _code_analysis: "code_analysis", _memory: "memory",
     _skill: "skill",
 }
 for _mod in [common, todo, filesystem, search, web, bash,
-             notification, mail, display, subagent, _code_analysis,
+             notification, mail, gmail, display, subagent, _code_analysis,
              _memory, _skill]:
     _mod_name = _MODULE_NAMES[_mod]
     for _schema in getattr(_mod, "TOOL_SCHEMAS", []):
@@ -81,6 +82,7 @@ TOOL_EXECUTORS: Dict[str, Callable] = {
     "send_notification": notification.execute_send_notification,
     # mail
     "read_qq_mail": mail.execute_read_qq_mail,
+    "read_gmail_mail": gmail.execute_read_gmail_mail,
     # subagent
     "sub_agent": subagent.execute_sub_agent,
     "get_subagent_status": subagent.execute_get_subagent_status,

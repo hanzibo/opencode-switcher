@@ -1079,6 +1079,71 @@ class QQMailCredentialsStore:
             print(f"Error saving QQ mail credentials: {e}", flush=True)
 
 
+# ── Gmail OAuth 2.0 Credentials ────────────────────────────────────────────
+
+GMAIL_CREDENTIALS_DIR = os.path.join(CONFIG_DIR, "gmail_credentials")
+
+
+class GmailOAuthStore:
+    """管理 Gmail OAuth 2.0 凭据的存储路径和授权状态。
+
+    职责：
+    - 管理 credentials.json（用户从 Google Cloud 下载的 OAuth 客户端 ID）
+    - 管理 token.json（OAuth 授权后自动生成/刷新）
+    - 提供授权状态检查供设置 UI 使用
+    """
+
+    def __init__(self):
+        self.email: str = ""
+        self.is_authorized: bool = False
+        self._load()
+
+    @property
+    def credentials_json_path(self) -> str:
+        return os.path.join(GMAIL_CREDENTIALS_DIR, "credentials.json")
+
+    @property
+    def token_json_path(self) -> str:
+        return os.path.join(GMAIL_CREDENTIALS_DIR, "token.json")
+
+    def _load(self):
+        """读取 token.json 获取授权状态和邮箱地址。"""
+        if not os.path.isfile(self.token_json_path):
+            return
+        try:
+            with open(self.token_json_path) as f:
+                data = json.load(f)
+            self.is_authorized = True
+            self.email = data.get("email", "")
+        except Exception:
+            pass
+
+    def save_token(self, token_dict: dict, email: str = ""):
+        """保存 OAuth token 到磁盘（权限 0o600）。"""
+        os.makedirs(GMAIL_CREDENTIALS_DIR, exist_ok=True)
+        if email:
+            token_dict["email"] = email
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        try:
+            fd = os.open(self.token_json_path, flags, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump(token_dict, f, indent=2)
+        except Exception as e:
+            print(f"Error saving Gmail token: {e}", flush=True)
+        self.is_authorized = True
+        if email:
+            self.email = email
+
+    def revoke(self):
+        """撤销授权，删除 token 文件。"""
+        try:
+            if os.path.exists(self.token_json_path):
+                os.remove(self.token_json_path)
+        except Exception as e:
+            print(f"Error revoking Gmail token: {e}", flush=True)
+        self.is_authorized = False
+        self.email = ""
+
 
 # ── AI Conversation Truncation Settings ─────────────────────────────────────
 

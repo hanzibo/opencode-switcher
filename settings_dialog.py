@@ -10,6 +10,8 @@ Pattern references:
 """
 
 import html
+import json
+import os
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
@@ -17,7 +19,9 @@ from gi.repository import Gtk, Gdk, GLib, Pango
 
 from typing import Optional, Callable
 
-from clipboard_store import QQMailCredentialsStore, AISettingsStore
+import threading
+
+from clipboard_store import QQMailCredentialsStore, GmailOAuthStore, AISettingsStore
 from ai_text_utils import set_code_highlight
 from mcp_integration import MCPServerConfig, MCPClientManager
 
@@ -68,6 +72,7 @@ class SettingsDialog:
         # ── Tab registry: extend here for future tabs ──
         self._tabs = [
             ("QQ邮箱", self._build_qq_mail_tab),
+            ("Gmail", self._build_gmail_tab),
             ("AI 对话", self._build_ai_settings_tab),
             ("流式输出", self._build_streaming_tab),
             ("MCP 服务器", self._build_mcp_tab),
@@ -76,6 +81,7 @@ class SettingsDialog:
         ]
 
         self._qq_store = QQMailCredentialsStore()
+        self._gmail_store = GmailOAuthStore()
         self._ai_settings_store = ai_settings_store or AISettingsStore()
         self._dialog = None
         self.build_ui()
@@ -284,6 +290,195 @@ class SettingsDialog:
         vbox.pack_start(spacer, True, True, 0)
 
         return self._make_tab_scrolled_window(vbox)
+
+    # ── Tab: Gmail ─────────────────────────────────────────────────────
+
+    def _build_gmail_tab(self):
+        """Build the Gmail OAuth 2.0 authorization tab page.
+
+        Returns a Gtk.ScrolledWindow ready for notebook.append_page().
+        """
+        vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+        vbox.set_margin_start(16)
+        vbox.set_margin_end(16)
+        vbox.set_margin_top(12)
+        vbox.set_margin_bottom(12)
+
+        # ── Status display ──
+        status_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        status_lbl = Gtk.Label.new()
+        status_lbl.set_markup("<b>授权状态</b>")
+        status_lbl.set_size_request(90, -1)
+        status_lbl.set_xalign(0)
+
+        self._gmail_status_label = Gtk.Label.new()
+        self._gmail_status_label.set_xalign(0)
+        self._gmail_status_label.set_hexpand(True)
+        self._update_gmail_status_ui()
+
+        status_hbox.pack_start(status_lbl, False, False, 0)
+        status_hbox.pack_start(self._gmail_status_label, True, True, 0)
+        vbox.pack_start(status_hbox, False, False, 0)
+
+        # ── Action buttons ──
+        btn_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        btn_hbox.set_margin_top(12)
+
+        self._gmail_auth_btn = Gtk.Button.new_with_label("📡 登录 Google 账号进行授权")
+        self._gmail_auth_btn.connect("clicked", self._on_gmail_authorize)
+        btn_hbox.pack_start(self._gmail_auth_btn, False, False, 0)
+
+        self._gmail_revoke_btn = Gtk.Button.new_with_label("🗑️ 撤销授权")
+        self._gmail_revoke_btn.connect("clicked", self._on_gmail_revoke)
+        btn_hbox.pack_start(self._gmail_revoke_btn, False, False, 0)
+        self._gmail_revoke_btn.set_sensitive(self._gmail_store.is_authorized)
+
+        vbox.pack_start(btn_hbox, False, False, 0)
+
+        # ── Body truncation length ──
+        chars_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        chars_hbox.set_margin_top(16)
+        chars_lbl = Gtk.Label.new("正文截断长度:")
+        chars_lbl.set_size_request(90, -1)
+        chars_lbl.set_xalign(0)
+        self._gmail_body_chars_spin = Gtk.SpinButton.new_with_range(100, 10000, 100)
+        self._gmail_body_chars_spin.set_value(500)
+        chars_hint = Gtk.Label.new("字符")
+        chars_hint.set_opacity(0.6)
+        chars_hbox.pack_start(chars_lbl, False, False, 0)
+        chars_hbox.pack_start(self._gmail_body_chars_spin, False, False, 0)
+        chars_hbox.pack_start(chars_hint, False, False, 0)
+        vbox.pack_start(chars_hbox, False, False, 0)
+
+        # ── Help instructions ──
+        help_frame = Gtk.Frame.new()
+        help_frame.set_margin_top(20)
+
+        help_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 4)
+        help_vbox.set_margin_start(10)
+        help_vbox.set_margin_end(10)
+        help_vbox.set_margin_top(10)
+        help_vbox.set_margin_bottom(10)
+
+        help_title = Gtk.Label.new()
+        help_title.set_markup("<b>📖 首次使用说明</b>")
+        help_title.set_xalign(0)
+        help_vbox.pack_start(help_title, False, False, 0)
+
+        creds_path = os.path.expanduser(
+            "~/.config/opencode-switcher/gmail_credentials/credentials.json"
+        )
+        for line in [
+            "Gmail 工具使用 Google 官方 API + OAuth 2.0 认证，首次使用前需完成以下步骤：",
+            "",
+            "1. 访问 https://console.cloud.google.com/",
+            "2. 新建项目（或选择已有项目）",
+            "3. 导航到「API 和服务」→「库」，搜索并启用「Gmail API」",
+            "4. 导航到「API 和服务」→「OAuth 同意屏幕」",
+            "   - User Type 选择「External」（即使内部使用）",
+            "   - 填写 App name、用户支持邮箱",
+            "   - 在「范围 (Scopes)」页面添加 Gmail API → /auth/gmail.readonly",
+            "   - 在「测试用户」页面添加你自己的 Gmail 地址",
+            "5. 导航到「API 和服务」→「凭据」→「创建凭据」→「OAuth 客户端 ID」",
+            "   - 应用类型选「桌面应用」",
+            "   - 下载 JSON 文件",
+            f"6. 将下载的 JSON 文件重命名为 credentials.json 放入：",
+            f"   {creds_path}",
+            "7. 回到本页面，点击上方「登录 Google 账号进行授权」按钮",
+            "8. 浏览器弹出授权页面 → 登录你的 Gmail 账号 → 点击「允许」",
+            "9. 授权完成后，状态将显示「已授权 xxx@gmail.com」",
+            "",
+            "授权后 token 会自动缓存，后续调用无需再次授权。",
+            "如 token 过期，工具会自动刷新（无需手动操作）。",
+        ]:
+            lbl = Gtk.Label.new(line)
+            lbl.set_xalign(0)
+            lbl.set_margin_start(4)
+            help_vbox.pack_start(lbl, False, False, 0)
+
+        help_frame.add(help_vbox)
+        vbox.pack_start(help_frame, False, False, 0)
+
+        # ── Spacer ──
+        spacer = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        spacer.set_vexpand(True)
+        vbox.pack_start(spacer, True, True, 0)
+
+        return self._make_tab_scrolled_window(vbox)
+
+    def _update_gmail_status_ui(self):
+        """Refresh the Gmail authorization status label."""
+        if self._gmail_store.is_authorized and self._gmail_store.email:
+            self._gmail_status_label.set_markup(
+                f"<span foreground='green'>✅ 已授权</span> {self._gmail_store.email}"
+            )
+        elif self._gmail_store.is_authorized:
+            self._gmail_status_label.set_markup(
+                "<span foreground='green'>✅ 已授权</span>"
+            )
+        else:
+            self._gmail_status_label.set_markup(
+                "<span foreground='red'>❌ 未授权</span> — "
+                "请先完成下方首次使用说明中的步骤 1-6，然后点击上方按钮授权。"
+            )
+
+    def _on_gmail_authorize(self, button):
+        """Start the OAuth 2.0 authorization flow in a background thread."""
+        button.set_sensitive(False)
+        button.set_label("授权中...")
+
+        def _do_auth():
+            try:
+                from tool_registry.gmail import _get_credentials
+                creds = _get_credentials()
+                email = ""
+                try:
+                    if hasattr(creds, 'token_info') and creds.token_info:
+                        email = creds.token_info.get('email', '')
+                except Exception:
+                    pass
+                GLib.idle_add(lambda: self._on_gmail_auth_done(creds, email))
+            except Exception as e:
+                GLib.idle_add(lambda: self._on_gmail_auth_error(str(e)))
+
+        threading.Thread(target=_do_auth, daemon=True).start()
+
+    def _on_gmail_auth_done(self, creds, email: str):
+        """Handle successful OAuth authorization."""
+        if email:
+            self._gmail_store.save_token(
+                json.loads(creds.to_json()), email=email
+            )
+        else:
+            self._gmail_store.is_authorized = True
+        self._update_gmail_status_ui()
+        self._gmail_auth_btn.set_sensitive(True)
+        self._gmail_auth_btn.set_label("📡 登录 Google 账号进行授权")
+        self._gmail_revoke_btn.set_sensitive(True)
+
+    def _on_gmail_auth_error(self, error: str):
+        """Handle OAuth authorization error."""
+        self._gmail_store.is_authorized = False
+        self._update_gmail_status_ui()
+        self._gmail_auth_btn.set_sensitive(True)
+        self._gmail_auth_btn.set_label("📡 登录 Google 账号进行授权")
+        # Show error dialog
+        dialog = Gtk.MessageDialog(
+            transient_for=self._dialog,
+            modal=True,
+            message_type=Gtk.MessageType.ERROR,
+            buttons=Gtk.ButtonsType.OK,
+            text="Gmail 授权失败",
+        )
+        dialog.format_secondary_text(str(error))
+        dialog.connect("response", lambda dlg, _: dlg.destroy())
+        dialog.show_all()
+
+    def _on_gmail_revoke(self, button):
+        """Revoke Gmail authorization."""
+        self._gmail_store.revoke()
+        self._update_gmail_status_ui()
+        self._gmail_revoke_btn.set_sensitive(False)
 
     # ── Tab: AI 对话 ───────────────────────────────────────────────────
 
@@ -580,7 +775,7 @@ class SettingsDialog:
             "bash": "high", "write_file": "high", "edit_file": "high", "sub_agent": "high",
             "read_file": "medium", "grep_search": "medium",
             "web_search": "medium", "web_fetch": "medium",
-            "read_qq_mail": "medium", "memory_save": "medium",
+            "read_qq_mail": "medium", "read_gmail_mail": "medium", "memory_save": "medium",
         }
 
         for s in TOOL_DEFINITIONS:

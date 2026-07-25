@@ -9,3 +9,6 @@ jieba>=0.42
 tiktoken>=0.7
 mcp>=1.0.0
 aiohttp>=3.14
+google-api-python-client>=2.120
+google-auth-oauthlib>=1.2
+google-auth-httplib2>=0.2
