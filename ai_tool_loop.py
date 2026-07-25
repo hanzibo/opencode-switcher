@@ -171,16 +171,21 @@ def run_llm_react_loop(
         iteration = 0
         max_iter = _get_max_tool_iterations()
 
-        # 在首轮注入当前工作区可用的 Skills 摘要
+        # 在首轮注入当前工作区可用的 Skills 摘要（进行排重检查，避免重复追加）
         try:
             from skill_store import SkillStore
             cwd = tool_registry.get_bash_cwd()
             skills_prompt = SkillStore().get_skills_prompt_summary(cwd=cwd)
             if skills_prompt:
-                messages.append({
-                    "role": "system",
-                    "content": skills_prompt
-                })
+                has_skills_msg = any(
+                    isinstance(m, dict) and m.get("role") == "system" and "<available_skills>" in str(m.get("content", ""))
+                    for m in messages
+                )
+                if not has_skills_msg:
+                    messages.append({
+                        "role": "system",
+                        "content": skills_prompt
+                    })
         except Exception as e:
             logger.warning("Failed to inject skills summary: %s", e)
 

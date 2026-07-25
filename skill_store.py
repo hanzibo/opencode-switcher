@@ -173,7 +173,7 @@ class SkillStore:
         return result
 
     def get_skills_prompt_summary(self, cwd: Optional[str] = None) -> str:
-        """Format discovered skills into XML structure for System Prompt injection."""
+        """Format discovered skills into an optimized XML structure for System Prompt injection."""
         skills = self.get_skills(cwd)
         if not skills:
             return ""
@@ -181,12 +181,22 @@ class SkillStore:
         lines = [
             "<available_skills>",
             "Below is a list of specialized skills available for this system.",
-            "If the user's task matches a skill's description, call the 'read_skill' tool with the skill_name to view full instructions.",
+            "<instructions>",
+            "When a user request matches a skill's description:",
+            "1. Prioritize calling the 'read_skill' tool with the target skill_name BEFORE taking direct action.",
+            "2. Strictly follow the retrieved skill instructions.",
+            "</instructions>",
         ]
         for sk in skills:
+            is_global = any(sk.path.startswith(g) for g in self.global_dirs if g)
+            loc = "global" if is_global else "project"
+            tools_str = ", ".join(sk.allowed_tools) if sk.allowed_tools else "all"
+
             lines.append("  <skill>")
             lines.append(f"    <name>{sk.name}</name>")
             lines.append(f"    <description>{sk.description}</description>")
+            lines.append(f"    <location>{loc}</location>")
+            lines.append(f"    <allowed_tools>{tools_str}</allowed_tools>")
             lines.append("  </skill>")
         lines.append("</available_skills>")
 

@@ -82,8 +82,12 @@ Do work.
         summary = store.get_skills_prompt_summary(cwd=self.proj_dir)
 
         self.assertIn("<available_skills>", summary)
+        self.assertIn("<instructions>", summary)
         self.assertIn("<name>code-review</name>", summary)
+        self.assertIn("<location>global</location>", summary)
+        self.assertIn("<allowed_tools>", summary)
         self.assertIn("<name>deploy-app</name>", summary)
+        self.assertIn("<location>project</location>", summary)
 
     def test_get_skill_content(self):
         store = SkillStore(global_dir=self.global_skills)
