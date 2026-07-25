@@ -62,6 +62,7 @@ def execute_read_qq_mail(max_results: int = 5, folder: str = "INBOX",
     max_results = max(1, min(20, max_results))
 
     store = QQMailCredentialsStore()
+    max_body_chars = store.max_body_chars
     email_addr = store.email
     auth_code = store.auth_code
     if not email_addr:
@@ -140,8 +141,8 @@ def execute_read_qq_mail(max_results: int = 5, folder: str = "INBOX",
                 if include_body:
                     body_text = _extract_email_body(msg)
                     if body_text:
-                        if len(body_text) > 500:
-                            body_text = body_text[:500] + (
+                        if len(body_text) > max_body_chars:
+                            body_text = body_text[:max_body_chars] + (
                                 f"\n...（全文共 {len(body_text)} 字符，已截断）")
                         result_parts.append(f"📋 内容:\n{body_text}")
 

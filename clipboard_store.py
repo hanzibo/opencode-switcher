@@ -1048,6 +1048,7 @@ class QQMailCredentialsStore:
     def __init__(self):
         self.email = ""
         self.auth_code = ""
+        self.max_body_chars: int = 500
         self._load()
 
     def _load(self):
@@ -1058,6 +1059,7 @@ class QQMailCredentialsStore:
                 data = json.load(f)
             self.email = data.get("email", "")
             self.auth_code = data.get("auth_code", "")
+            self.max_body_chars = data.get("max_body_chars", 500)
         except Exception:
             pass
 
@@ -1068,9 +1070,10 @@ class QQMailCredentialsStore:
             fd = os.open(QQ_MAIL_CREDENTIALS_PATH, flags, 0o600)
             with os.fdopen(fd, "w") as f:
                 json.dump({
-                    "version": 1,
+                    "version": 2,
                     "email": self.email,
                     "auth_code": self.auth_code,
+                    "max_body_chars": self.max_body_chars,
                 }, f, indent=2)
         except Exception as e:
             print(f"Error saving QQ mail credentials: {e}", flush=True)

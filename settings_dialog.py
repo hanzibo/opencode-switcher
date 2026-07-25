@@ -234,6 +234,21 @@ class SettingsDialog:
         self._email_entry.set_text(self._qq_store.email)
         self._auth_entry.set_text(self._qq_store.auth_code)
 
+        # ── Max body chars ──
+        chars_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
+        chars_hbox.set_margin_top(12)
+        chars_lbl = Gtk.Label.new("正文截断长度:")
+        chars_lbl.set_size_request(90, -1)
+        chars_lbl.set_xalign(0)
+        self._body_chars_spin = Gtk.SpinButton.new_with_range(100, 10000, 100)
+        self._body_chars_spin.set_value(self._qq_store.max_body_chars)
+        chars_hint = Gtk.Label.new("字符")
+        chars_hint.set_opacity(0.6)
+        chars_hbox.pack_start(chars_lbl, False, False, 0)
+        chars_hbox.pack_start(self._body_chars_spin, False, False, 0)
+        chars_hbox.pack_start(chars_hint, False, False, 0)
+        vbox.pack_start(chars_hbox, False, False, 0)
+
         # ── Help hint ──
         help_frame = Gtk.Frame.new()
         help_frame.set_margin_top(16)
@@ -1279,6 +1294,7 @@ class SettingsDialog:
         # QQ Mail credentials
         self._qq_store.email = self._email_entry.get_text().strip()
         self._qq_store.auth_code = self._auth_entry.get_text().strip()
+        self._qq_store.max_body_chars = int(self._body_chars_spin.get_value())
         self._qq_store.save()
 
         # AI 对话设置
