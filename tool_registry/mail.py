@@ -122,9 +122,12 @@ def execute_read_qq_mail(max_results: int = 5, folder: str = "INBOX",
 
         for eid in sorted_ids:
             try:
-                _, fetch_data = mail.fetch(eid, "(RFC822)")
-                raw_email = fetch_data[0][1]
-                msg = email.message_from_bytes(raw_email)
+                if include_body:
+                    _, fetch_data = mail.fetch(eid, "(RFC822)")
+                else:
+                    _, fetch_data = mail.fetch(eid, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])")
+                raw_data = fetch_data[0][1]
+                msg = email.message_from_bytes(raw_data)
 
                 subject = _decode_email_header(msg["Subject"])
                 from_ = str(msg.get("From", "(未知发件人)"))
