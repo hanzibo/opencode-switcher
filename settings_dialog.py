@@ -770,14 +770,15 @@ class SettingsDialog:
 
         # 组排序（按重要性）
         group_order = ["common", "todo", "filesystem", "search", "web", "bash",
-                       "notification", "mail", "subagent", "code_analysis", "memory"]
+                       "notification", "mail", "subagent", "code_analysis",
+                       "memory", "skill"]
         group_labels = {
             "common": "🟢 通用", "todo": "🟢 任务管理",
             "filesystem": "🔴 文件系统", "search": "🟡 搜索",
             "web": "🟡 网页", "bash": "🔴 Shell",
             "notification": "🟢 通知", "mail": "🟡 邮件",
             "subagent": "🔴 子代理", "code_analysis": "🟢 代码分析",
-            "memory": "🟡 记忆",
+            "memory": "🟡 记忆", "skill": "🟡 技能",
         }
 
         # 存储所有 checkbutton 以便保存时读取
