@@ -236,13 +236,13 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_qq_mail",
-            "description": "读取 QQ 邮箱中的邮件。通过 IMAP over SSL 连接 QQ 邮箱，支持指定文件夹和搜索条件，返回邮件的发件人、主题、时间和正文。仅用于读取 QQ 邮箱。不适用于发送邮件、管理邮箱设置或其他邮件服务。",
+            "description": "读取 QQ 邮箱中的邮件（IMAP over SSL）。注意：QQ 邮箱 IMAP 的 TEXT/FROM/SINCE/SUBJECT 搜索条件均存在服务端缺陷，无法按关键词或日期过滤邮件。请使用默认的 search_criteria='ALL' 获取最新邮件后人工筛选。返回发件人、主题、时间和正文（可选截断）。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "max_results": {
                         "type": "integer",
-                        "description": "返回的最大邮件数量（1-20，默认 5）",
+                        "description": "返回的最大邮件数量（1-20，默认 5）。最大 20 封，按时间倒序排列，昨日邮件必然在最新 20 封中。",
                         "default": 5
                     },
                     "folder": {
@@ -252,12 +252,12 @@ TOOL_SCHEMAS = [
                     },
                     "search_criteria": {
                         "type": "string",
-                        "description": "IMAP 搜索条件，如 ALL、FROM someone、SUBJECT hello、SINCE 1-Jan-2024 等",
+                        "description": "IMAP 搜索条件。⚠️ QQ 邮箱仅 ALL 可靠（TEXT/FROM/SUBJECT/SINCE/BEFORE 均存在服务端缺陷，无法过滤），建议保持默认 'ALL'，获取后在返回结果中按发件人地址和时间手动筛选。",
                         "default": "ALL"
                     },
                     "include_body": {
                         "type": "boolean",
-                        "description": "是否包含邮件正文",
+                        "description": "是否包含邮件正文。True=完整下载（约 101 KB/封），False=仅返回头部信息（约 231 字节/封，快 438 倍）。如只需发件人/主题/时间来筛选邮件，建议设为 False。",
                         "default": True
                     }
                 }
