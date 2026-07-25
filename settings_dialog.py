@@ -10,7 +10,6 @@ Pattern references:
 """
 
 import html
-import json
 import os
 import gi
 gi.require_version("Gtk", "3.0")
@@ -335,21 +334,6 @@ class SettingsDialog:
 
         vbox.pack_start(btn_hbox, False, False, 0)
 
-        # ── Body truncation length ──
-        chars_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
-        chars_hbox.set_margin_top(16)
-        chars_lbl = Gtk.Label.new("正文截断长度:")
-        chars_lbl.set_size_request(90, -1)
-        chars_lbl.set_xalign(0)
-        self._gmail_body_chars_spin = Gtk.SpinButton.new_with_range(100, 10000, 100)
-        self._gmail_body_chars_spin.set_value(500)
-        chars_hint = Gtk.Label.new("字符")
-        chars_hint.set_opacity(0.6)
-        chars_hbox.pack_start(chars_lbl, False, False, 0)
-        chars_hbox.pack_start(self._gmail_body_chars_spin, False, False, 0)
-        chars_hbox.pack_start(chars_hint, False, False, 0)
-        vbox.pack_start(chars_hbox, False, False, 0)
-
         # ── Help instructions ──
         help_frame = Gtk.Frame.new()
         help_frame.set_margin_top(20)
@@ -444,13 +428,14 @@ class SettingsDialog:
         threading.Thread(target=_do_auth, daemon=True).start()
 
     def _on_gmail_auth_done(self, creds, email: str):
-        """Handle successful OAuth authorization."""
-        if email:
-            self._gmail_store.save_token(
-                json.loads(creds.to_json()), email=email
-            )
-        else:
-            self._gmail_store.is_authorized = True
+        """Handle successful OAuth authorization.
+
+        Token is already saved by _get_credentials()/_save_token()
+        in gmail.py. Here we just reload store state and update UI.
+        """
+        self._gmail_store._load()
+        if email and not self._gmail_store.email:
+            self._gmail_store.email = email
         self._update_gmail_status_ui()
         self._gmail_auth_btn.set_sensitive(True)
         self._gmail_auth_btn.set_label("📡 登录 Google 账号进行授权")

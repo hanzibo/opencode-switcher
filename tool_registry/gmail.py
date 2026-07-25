@@ -6,6 +6,7 @@ Token is auto-refreshed and cached in token.json.
 """
 
 import base64
+import html as html_mod
 import json
 import os
 import re
@@ -15,19 +16,16 @@ from typing import Optional
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build, Resource
+from googleapiclient.discovery import build
 
-from clipboard_store import GmailOAuthStore
+from clipboard_store import GMAIL_CREDENTIALS_DIR
 
 # ── Constants ────────────────────────────────────────────────────────
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
-_CREDENTIALS_DIR = os.path.join(
-    os.path.expanduser("~/.config/opencode-switcher"), "gmail_credentials"
-)
-_CREDENTIALS_JSON = os.path.join(_CREDENTIALS_DIR, "credentials.json")
-_TOKEN_JSON = os.path.join(_CREDENTIALS_DIR, "token.json")
+_CREDENTIALS_JSON = os.path.join(GMAIL_CREDENTIALS_DIR, "credentials.json")
+_TOKEN_JSON = os.path.join(GMAIL_CREDENTIALS_DIR, "token.json")
 
 _MAX_RESULTS = 20
 _MAX_BODY_CHARS = 10000
@@ -90,7 +88,7 @@ def _get_credentials() -> Credentials:
 
 def _save_token(creds: Credentials):
     """Persist OAuth token to token.json with secure permissions."""
-    os.makedirs(_CREDENTIALS_DIR, exist_ok=True)
+    os.makedirs(GMAIL_CREDENTIALS_DIR, exist_ok=True)
     token_dict = json.loads(creds.to_json())
 
     # Try to extract email from the token info
@@ -112,6 +110,7 @@ def _save_token(creds: Credentials):
 
     # Also sync store for settings UI
     try:
+        from clipboard_store import GmailOAuthStore
         store = GmailOAuthStore()
         store.save_token(token_dict, email=token_dict.get("email", ""))
     except Exception:
@@ -120,15 +119,18 @@ def _save_token(creds: Credentials):
 
 # ── Gmail API helpers ────────────────────────────────────────────────
 
-def _get_service() -> Resource:
+def _get_service() -> "Resource":
     """Get authenticated Gmail API service instance."""
     creds = _get_credentials()
     return build("gmail", "v1", credentials=creds)
 
 
-def _decode_header(header_value: str) -> str:
-    """Decode email header (RFC 2047 already handled by Gmail API)."""
-    return header_value or "(无主题)"
+def _get_header_value(headers: list, name: str) -> str:
+    """Get a header value by name, or fallback for missing Subject."""
+    value = _get_header(headers, name)
+    if name.lower() == "subject" and not value:
+        return "(无主题)"
+    return value
 
 
 def _format_date(date_str: str) -> str:
@@ -150,8 +152,6 @@ def _extract_body(payload: dict, max_chars: int = _MAX_BODY_CHARS) -> str:
     - payload['parts'] → multipart, recurse
     - payload['body']['data'] → base64url encoded content
     """
-    import html as html_mod
-
     mime_type = payload.get("mimeType", "")
     body_data = payload.get("body", {}).get("data", "")
 
@@ -183,10 +183,16 @@ def _extract_body(payload: dict, max_chars: int = _MAX_BODY_CHARS) -> str:
 
     for part in parts:
         body = _extract_body(part, max_chars)
-        if part.get("mimeType") == "text/plain" and body:
+        if not body:
+            continue
+        mime = part.get("mimeType", "")
+        if mime == "text/plain":
             plain_texts.append(body)
-        elif part.get("mimeType") == "text/html" and body:
+        elif mime == "text/html":
             html_texts.append(body)
+        elif mime.startswith("multipart/"):
+            # Nested multipart — content already extracted by recursion
+            plain_texts.append(body)
 
     if plain_texts:
         return "\n".join(plain_texts).strip()
@@ -268,10 +274,10 @@ def execute_read_gmail_mail(
                 )
 
                 headers = msg.get("payload", {}).get("headers", [])
-                subject = _decode_header(_get_header(headers, "Subject"))
-                from_ = _decode_header(_get_header(headers, "From"))
+                subject = _get_header_value(headers, "Subject")
+                from_ = _get_header_value(headers, "From")
                 date_str = _format_date(_get_header(headers, "Date"))
-                to_ = _decode_header(_get_header(headers, "To"))
+                to_ = _get_header_value(headers, "To")
                 snippet = msg.get("snippet", "")
                 labels = msg.get("labelIds", [])
 

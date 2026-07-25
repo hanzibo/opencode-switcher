@@ -431,6 +431,9 @@ cmd_status() {
                 "Pygments") import_name="pygments" ;;
                 "rank-bm25") import_name="rank_bm25" ;;
                 "pymdown-extensions") import_name="pymdownx" ;;
+                "google-api-python-client") import_name="googleapiclient" ;;
+                "google-auth-oauthlib") import_name="google_auth_oauthlib" ;;
+                "google-auth-httplib2") import_name="google_auth_httplib2" ;;
             esac
             if "$PYTHON_BIN" -c "import $import_name" 2>/dev/null; then
                 echo -e "    ${GREEN}✔${NC} $pkg_name"
