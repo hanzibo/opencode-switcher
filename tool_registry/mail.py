@@ -257,7 +257,7 @@ TOOL_SCHEMAS = [
                     },
                     "include_body": {
                         "type": "boolean",
-                        "description": "是否包含邮件正文。True=完整下载（约 101 KB/封），False=仅返回头部信息（约 231 字节/封，快 438 倍）。如只需发件人/主题/时间来筛选邮件，建议设为 False。",
+                        "description": "是否包含邮件正文。除非用户明确要求读取邮件全文，否则请设为 False（仅返回头部，约 231 字节/封，快 438 倍）。True 会完整下载整封邮件（约 101 KB/封），仅在用户要求查看邮件详细内容时使用。",
                         "default": True
                     }
                 }
