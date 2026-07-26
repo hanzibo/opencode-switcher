@@ -4,6 +4,7 @@ import os
 import re
 import select
 import shlex
+import signal
 import subprocess
 import tempfile
 import time
@@ -125,6 +126,38 @@ def _check_interactive(command: str) -> Optional[str]:
     return None
 
 
+# ── Stdin idle detection ────────────────────────────────────────────
+_STDIN_IDLE_THRESHOLD: Final[float] = 15.0
+"""If no new output for this many seconds, suspect stdin blocking."""
+
+_UNBLOCK_EOF_WAIT: Final[float] = 3.0
+"""Seconds to wait after sending EOF before declaring it didn't help."""
+
+_UNBLOCK_SIGINT_WAIT: Final[float] = 3.0
+"""Seconds to wait after sending SIGINT before declaring it didn't help."""
+
+# Interactive prompt patterns detected in output tail.
+# Each entry: (compiled_regex, label, suggestion)
+_PROMPT_PATTERNS: Final[list] = [
+    (re.compile(r'[Pp]assword\s*[:：]\s*$', re.MULTILINE), "密码输入提示",
+     "命令正在请求密码，请使用非交互方式（如通过环境变量或参数传递）"),
+    (re.compile(r'[Yy]es\s*[/:：]?\s*[Nn]o\s*[:：]?\s*$'), "Yes/No 确认",
+     "请添加 -y/--yes 等自动确认参数"),
+    (re.compile(r'[Ee]nter\s+(your\s+)?[Cc]hoice'), "选择提示",
+     "请通过参数直接指定选项"),
+    (re.compile(r'(?<![\w])[?]\s*$', re.MULTILINE), "问号提示符",
+     "命令正在等待选择确认"),
+    (re.compile(r'[Ss]elect\s+an\s+option'), "选项选择",
+     "请通过参数直接指定选项"),
+    (re.compile(r'继续[?？)）]?\s*$', re.MULTILINE), "中文确认提示",
+     "请添加 -y/--yes 等自动确认参数"),
+    (re.compile(r'确认[?？)）]?\s*$', re.MULTILINE), "中文确认提示",
+     "请添加 -y/--yes 等自动确认参数"),
+    (re.compile(r'请输入'), "中文输入提示",
+     "请通过参数直接提供输入"),
+]
+
+
 _HARDENED_ENV: Final[dict] = {
     # Disable pagers — prevents `less`/`more` from hanging on TTY-less pipe
     "PAGER": "cat",
@@ -166,6 +199,49 @@ def _check_session_breaker(command: str) -> Optional[str]:
         if re.search(pattern, command):
             return f"⚠️ 检测到可能中断会话的命令：{msg}"
     return None
+
+
+# ── Stdin prompt detection ──────────────────────────────────────────
+
+def _detect_prompt_pattern(output: str) -> Optional[str]:
+    """Scan the tail of output for interactive prompt patterns.
+
+    Returns a user-facing warning string if a pattern is found, or None.
+    """
+    if not output:
+        return None
+    tail = output[-500:]  # only check last 500 chars
+    for pattern, label, suggestion in _PROMPT_PATTERNS:
+        if pattern.search(tail):
+            return (f"⚠️ 检测到交互提示（{label}）。\n"
+                    f"   💡 {suggestion}")
+    return None
+
+
+def _format_stdin_stuck_message(command: str, *,
+                                tried_eof: bool = False,
+                                tried_sigint: bool = False,
+                                prompt_hint: Optional[str] = None) -> str:
+    """Generate a standardized error message for stdin-blocked commands."""
+    parts = [
+        "⚠️ 命令被 stdin 阻塞（无新输出超过 15 秒）：",
+        f"   命令: {command[:200]}",
+    ]
+    if prompt_hint:
+        parts.append("")
+        parts.append(prompt_hint)
+    parts.append("")
+    parts.append("💡 可能的原因和解决方案：")
+    parts.append("   1. heredoc 未正确终止 → 确保结束标记独占一行且前后无空格")
+    parts.append('   2. 命令在等待 stdin 输入 → 使用 echo/printf 通过管道传递输入')
+    parts.append("   3. 命令在等待交互确认 → 添加 -y/--yes 等自动确认参数")
+    parts.append("   4. 命令在请求密码 → 通过环境变量或 --password-file 参数传递")
+    parts.append("")
+    if tried_sigint:
+        parts.append("🔄 已发送 SIGINT (Ctrl+C) 尝试恢复，请重新以非交互方式执行命令")
+    elif tried_eof:
+        parts.append("🔄 已发送 EOF (Ctrl+D) 尝试恢复，请重新以非交互方式执行命令")
+    return "\n".join(parts)
 
 
 def _save_truncated_output(output: str, command: str) -> str:
@@ -213,6 +289,9 @@ class _BashSession:
         self._timed_out = False
         self._started = False
         self._auto_recover_count = 0
+        # Stdin unblocking state (per-command, reset at start of each execute)
+        self._eof_sent: bool = False
+        self._sigint_sent: bool = False
 
     def start(self, cwd: Optional[str] = None):
         """Spawn a new persistent bash subprocess (binary pipe mode)."""
@@ -233,6 +312,10 @@ class _BashSession:
 
     def execute(self, command: str, timeout: int = _BASH_TIMEOUT_DEFAULT,
                 cancel_event=None) -> dict:
+        # Reset per-command unblocking state
+        self._eof_sent = False
+        self._sigint_sent = False
+
         if self._timed_out:
             raise RuntimeError("Bash session has timed out and must be restarted (restart=True).")
         if not self._started or self.process is None:
@@ -273,6 +356,9 @@ class _BashSession:
         poll.register(fd, select.POLLIN)
         deadline = time.monotonic() + timeout if timeout > 0 else float("inf")
 
+        last_output_time = time.monotonic()
+        loop_start = time.monotonic()
+
         while time.monotonic() < deadline:
             if cancel_event and cancel_event.is_set():
                 self._kill_process_group()
@@ -292,6 +378,32 @@ class _BashSession:
 
             events = poll.poll(50)
             if not events:
+                # ── No new data — check for stdin stall ──
+                now = time.monotonic()
+                idle_duration = now - last_output_time
+
+                if idle_duration > _STDIN_IDLE_THRESHOLD and not self._eof_sent:
+                    # Step 1: Send EOF by closing stdin pipe
+                    self._eof_sent = True
+                    try:
+                        process.stdin.close()
+                    except (BrokenPipeError, OSError):
+                        pass
+                    last_output_time = now
+                    continue
+
+                if (idle_duration > _STDIN_IDLE_THRESHOLD
+                        and self._eof_sent and not self._sigint_sent):
+                    # Step 2: Send SIGINT
+                    self._sigint_sent = True
+                    try:
+                        process.send_signal(signal.SIGINT)
+                    except (ProcessLookupError, OSError):
+                        pass
+                    last_output_time = now
+                    continue
+
+                # Step 3: Fall through — will hit deadline and get killed
                 continue
 
             chunk = os.read(fd, 65536)
@@ -299,6 +411,7 @@ class _BashSession:
                 break
 
             output_buf.extend(chunk)
+            last_output_time = time.monotonic()  # reset idle timer on new data
 
             sidx = output_buf.find(sentinel_start)
             if sidx != -1:
@@ -315,6 +428,28 @@ class _BashSession:
                 break
 
         if not sentinel_found:
+            # ── One last read — EOF or SIGINT might have just finished the cmd ──
+            try:
+                remaining = os.read(fd, 65536)
+                if remaining:
+                    output_buf.extend(remaining)
+                    sidx = output_buf.find(sentinel_start)
+                    if sidx != -1:
+                        sentinel_found = True
+                        after = output_buf[sidx:]
+                        eidx = after.find(sentinel_end)
+                        if eidx != -1:
+                            code_bytes = after[len(sentinel_start):eidx]
+                            try:
+                                exit_code = int(code_bytes.decode("ascii"))
+                            except (ValueError, UnicodeDecodeError):
+                                exit_code = -1
+                        output_buf = output_buf[:sidx]
+            except OSError:
+                pass
+
+        if not sentinel_found:
+            # ── Real timeout — kill the process group ──
             self._timed_out = True
             self._kill_process_group()
             output = output_buf.decode("utf-8", errors="replace").strip()
@@ -324,11 +459,13 @@ class _BashSession:
                 saved_msg = _save_truncated_output(output, command)
                 output = truncated + f"\n...（输出已截断，共 {full_len} 字符）{saved_msg}"
             return {
-                "output": f"命令执行超时（{timeout}秒），session 已终止。\n{output}",
+                "output": output,
                 "exit_code": -1,
                 "timed_out": True,
+                "stdin_stuck": self._eof_sent or self._sigint_sent,
             }
 
+        # ── Command completed (possibly after stdin unblock) ──
         output = output_buf.decode("utf-8", errors="replace").strip()
         full_len = len(output)
         if len(output) > _MAX_BASH_OUTPUT_CHARS:
@@ -336,7 +473,41 @@ class _BashSession:
             saved_msg = _save_truncated_output(output, command)
             output = truncated + f"\n...（输出已截断，共 {full_len} 字符）{saved_msg}"
 
+        # Append stdin-unblock notice if we had to intervene
+        if self._eof_sent or self._sigint_sent:
+            prompt_hint = _detect_prompt_pattern(output)
+            note_parts = []
+            if prompt_hint:
+                note_parts.append(f"\n{prompt_hint}")
+            note_parts.append(
+                "\n⚠️ 检测到命令被 stdin 阻塞"
+            )
+            if self._eof_sent and not self._sigint_sent:
+                note_parts.append("，已通过 EOF (Ctrl+D) 解阻塞。")
+            elif self._sigint_sent:
+                note_parts.append("，已通过 SIGINT (Ctrl+C) 中断后恢复。")
+            note_parts.append(
+                "\n💡 请避免使用交互式命令，或通过参数直接提供输入。"
+            )
+            output += "".join(note_parts)
+
         return {"output": output, "exit_code": exit_code, "timed_out": False}
+
+    def send_eof(self):
+        """Send EOF to the process by closing the stdin pipe."""
+        if self.process is not None and self.process.stdin:
+            try:
+                self.process.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+
+    def send_sigint(self):
+        """Send SIGINT to the process."""
+        if self.process is not None and self.process.pid:
+            try:
+                self.process.send_signal(signal.SIGINT)
+            except (ProcessLookupError, OSError):
+                pass
 
     def _kill_process_group(self):
         if self.process is not None and self.process.pid is not None:
@@ -488,12 +659,26 @@ def execute_bash(command: str, restart: bool = False,
         output = output[:max_chars] + f"\n\n...（输出已截断，共 {len(output)} 字符）"
 
     if timed_out:
-        close_bash_session(session_key)
-        parts = ["⚠️ 命令执行超时，已自动重启 bash session"]
-        if output:
-            parts.append("")
-            parts.append(output)
-        return "\n".join(parts)
+        stdin_stuck = result.get("stdin_stuck", False)
+        if stdin_stuck:
+            prompt_hint = _detect_prompt_pattern(output)
+            msg = _format_stdin_stuck_message(
+                command,
+                tried_eof=True,
+                tried_sigint=True,
+                prompt_hint=prompt_hint,
+            )
+            close_bash_session(session_key)
+            if output:
+                return msg + "\n\n" + output
+            return msg
+        else:
+            close_bash_session(session_key)
+            parts = ["⚠️ 命令执行超时，已自动重启 bash session"]
+            if output:
+                parts.append("")
+                parts.append(output)
+            return "\n".join(parts)
 
     exit_str = f"（退出码：{exit_code}）"
     if exit_code == 0:
@@ -542,7 +727,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "bash",
-            "description": "执行 shell 命令。使用持久化 bash 会话，命令之间的工作目录和上下文不重置。自动检测并阻止交互式命令（编辑器、REPL、数据库客户端、网络工具等），环境已预硬化（禁用翻页器/交互提示）。超时会自动重启会话。不适用于仅查询会话状态（应使用 bash_get_session_info）。",
+            "description": "执行 shell 命令。使用持久化 bash 会话，命令之间的工作目录和上下文不重置。自动检测并阻止交互式命令（编辑器、REPL、数据库客户端、网络工具等），环境已预硬化（禁用翻页器/交互提示）。自动检测 stdin 阻塞（如未终止的 heredoc、input() 等）并尝试 EOF/SIGINT 解阻塞。超时会自动重启会话。不适用于仅查询会话状态（应使用 bash_get_session_info）。",
             "parameters": {
                 "type": "object",
                 "properties": {
