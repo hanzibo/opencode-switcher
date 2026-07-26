@@ -6,7 +6,6 @@ import os
 import re
 from email.header import decode_header
 from email.utils import parsedate_to_datetime, parsedate_tz, mktime_tz
-from typing import List
 
 
 _QQMAIL_IMAP_SERVER = "imap.qq.com"
@@ -49,6 +48,35 @@ def _sort_uids_by_internaldate(mail, max_results):
     date_pool.sort(key=lambda x: x[0], reverse=True)
     n = min(max_results, len(date_pool))
     return [str(uid).encode() for _, uid in date_pool[:n]]
+
+
+def _format_single_email(msg, uid, include_body, max_body_chars):
+    """Parse one email message into formatted output lines.
+
+    Returns a list of strings (one per line), without the trailing separator.
+    Consolidates the output format in one place, shared by both
+    the precision (email_ids) and regular (search+sort) code paths.
+    """
+    subject = _decode_email_header(msg["Subject"])
+    from_ = str(msg.get("From", "(未知发件人)"))
+    date_str = _format_email_date(msg.get("Date", ""))
+
+    parts = [
+        f"📩 发件人: {from_}",
+        f"📎 主题: {subject}",
+        f"🕐 时间: {date_str}",
+        f"🆔 邮件ID: {uid}",
+    ]
+
+    if include_body:
+        body_text = _extract_email_body(msg)
+        if body_text:
+            if len(body_text) > max_body_chars:
+                body_text = body_text[:max_body_chars] + (
+                    f"\n...（全文共 {len(body_text)} 字符，已截断）")
+            parts.append(f"📋 内容:\n{body_text}")
+
+    return parts
 
 
 def execute_read_qq_mail(max_results: int = 5, folder: str = "INBOX",
@@ -109,9 +137,11 @@ def execute_read_qq_mail(max_results: int = 5, folder: str = "INBOX",
 
         result_parts = []
 
-        if email_ids:
+        if email_ids is not None:
             # ── 精准模式：按 UID 直接获取指定邮件 ──
             email_ids = list(dict.fromkeys(email_ids))  # 去重保序
+            if not email_ids:
+                return "📭 email_ids 为空，未读取任何邮件"
             result_parts.append(f"📧 按ID读取 {len(email_ids)} 封邮件\n")
 
             for uid in email_ids:
@@ -125,26 +155,8 @@ def execute_read_qq_mail(max_results: int = 5, folder: str = "INBOX",
                         result_parts.append(f"⚠️ 邮件ID {uid} 未找到（可能已被删除或 ID 不正确）")
                         result_parts.append("─" * 40)
                         continue
-                    raw_data = fetch_data[0][1]
-                    msg = email.message_from_bytes(raw_data)
-
-                    subject = _decode_email_header(msg["Subject"])
-                    from_ = str(msg.get("From", "(未知发件人)"))
-                    date_str = _format_email_date(msg.get("Date", ""))
-
-                    result_parts.append(f"📩 发件人: {from_}")
-                    result_parts.append(f"📎 主题: {subject}")
-                    result_parts.append(f"🕐 时间: {date_str}")
-                    result_parts.append(f"🆔 邮件ID: {uid}")
-
-                    if include_body:
-                        body_text = _extract_email_body(msg)
-                        if body_text:
-                            if len(body_text) > max_body_chars:
-                                body_text = body_text[:max_body_chars] + (
-                                    f"\n...（全文共 {len(body_text)} 字符，已截断）")
-                            result_parts.append(f"📋 内容:\n{body_text}")
-
+                    msg = email.message_from_bytes(fetch_data[0][1])
+                    result_parts.extend(_format_single_email(msg, uid, include_body, max_body_chars))
                     result_parts.append("─" * 40)
 
                 except Exception as e:
@@ -176,27 +188,9 @@ def execute_read_qq_mail(max_results: int = 5, folder: str = "INBOX",
                         _, fetch_data = mail.uid('FETCH', uid_bytes, "(RFC822)")
                     else:
                         _, fetch_data = mail.uid('FETCH', uid_bytes, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])")
-                    raw_data = fetch_data[0][1]
-                    msg = email.message_from_bytes(raw_data)
-
-                    subject = _decode_email_header(msg["Subject"])
-                    from_ = str(msg.get("From", "(未知发件人)"))
-                    date_str = _format_email_date(msg.get("Date", ""))
+                    msg = email.message_from_bytes(fetch_data[0][1])
                     uid_num = int(uid_bytes)
-
-                    result_parts.append(f"📩 发件人: {from_}")
-                    result_parts.append(f"📎 主题: {subject}")
-                    result_parts.append(f"🕐 时间: {date_str}")
-                    result_parts.append(f"🆔 邮件ID: {uid_num}")
-
-                    if include_body:
-                        body_text = _extract_email_body(msg)
-                        if body_text:
-                            if len(body_text) > max_body_chars:
-                                body_text = body_text[:max_body_chars] + (
-                                    f"\n...（全文共 {len(body_text)} 字符，已截断）")
-                            result_parts.append(f"📋 内容:\n{body_text}")
-
+                    result_parts.extend(_format_single_email(msg, uid_num, include_body, max_body_chars))
                     result_parts.append("─" * 40)
 
                 except Exception as e:
