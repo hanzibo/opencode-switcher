@@ -164,15 +164,23 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
                 + _make_collapsible_preview(cmd, cmd_label, max_chars=300, use_pre=True)
             )
         elif name == "read_qq_mail":
-            count = args.get("max_results", 5)
-            folder = args.get("folder", "INBOX")
-            criteria = args.get("search_criteria", "ALL")
-            safe_folder = html.escape(folder)
-            safe_criteria = html.escape(criteria)
-            parts.append(
-                f'<div class="tool-call-info">📧 <b>读取QQ邮件：</b>'
-                f'{count} 封，文件夹: {safe_folder}，条件: {safe_criteria}</div>'
-            )
+            email_ids = args.get("email_ids", None)
+            if email_ids:
+                id_str = ", ".join(str(i) for i in email_ids)
+                parts.append(
+                    f'<div class="tool-call-info">📧 <b>读取QQ邮件：</b>'
+                    f'按ID精准读取 {len(email_ids)} 封 [ID: {html.escape(id_str)}]</div>'
+                )
+            else:
+                count = args.get("max_results", 5)
+                folder = args.get("folder", "INBOX")
+                criteria = args.get("search_criteria", "ALL")
+                safe_folder = html.escape(folder)
+                safe_criteria = html.escape(criteria)
+                parts.append(
+                    f'<div class="tool-call-info">📧 <b>读取QQ邮件：</b>'
+                    f'{count} 封，文件夹: {safe_folder}，条件: {safe_criteria}</div>'
+                )
         elif name == "parse_file_ast":
             fpath = args.get("path", "")
             lang = args.get("language", "auto")

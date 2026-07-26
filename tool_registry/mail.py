@@ -13,14 +13,15 @@ _QQMAIL_IMAP_SERVER = "imap.qq.com"
 _QQMAIL_IMAP_PORT = 993
 
 
-def _sort_ids_by_internaldate(mail, total, max_results):
-    """Fetch INTERNALDATE for all messages and return the newest N IDs.
+def _sort_uids_by_internaldate(mail, max_results):
+    """Fetch INTERNALDATE for all messages via UID FETCH and return the newest N UIDs.
 
     QQ Mail's IMAP sequence numbers are NOT in chronological order, so
     sorting by sequence number is unreliable.  INTERNALDATE is the server-
     side arrival timestamp — a lightweight metadata fetch without body data.
+    Using UID FETCH ensures stable identifiers that persist across sessions.
     """
-    status, idata = mail.fetch(f'1:{total}', '(INTERNALDATE)')
+    status, idata = mail.uid('FETCH', '1:*', '(INTERNALDATE)')
     if status != 'OK':
         return None
 
@@ -28,10 +29,11 @@ def _sort_ids_by_internaldate(mail, total, max_results):
     for token in idata:
         if not isinstance(token, bytes):
             continue
-        m = re.search(rb'(\d+)\s+\(INTERNALDATE\s+"([^"]+)"\)', token)
+        # UID FETCH response format: b'* N FETCH (UID XXX INTERNALDATE "...")'
+        m = re.search(rb'UID\s+(\d+)\s+INTERNALDATE\s+"([^"]+)"', token, re.IGNORECASE)
         if not m:
             continue
-        eid = int(m.group(1))
+        uid = int(m.group(1))
         date_str = m.group(2).decode()
         try:
             dt = parsedate_tz(date_str)
@@ -39,19 +41,20 @@ def _sort_ids_by_internaldate(mail, total, max_results):
             continue
         if dt:
             ts = mktime_tz(dt)
-            date_pool.append((ts, eid))
+            date_pool.append((ts, uid))
 
     if not date_pool:
         return None
 
     date_pool.sort(key=lambda x: x[0], reverse=True)
     n = min(max_results, len(date_pool))
-    return [str(eid).encode() for _, eid in date_pool[:n]]
+    return [str(uid).encode() for _, uid in date_pool[:n]]
 
 
 def execute_read_qq_mail(max_results: int = 5, folder: str = "INBOX",
                          search_criteria: str = "ALL",
-                         include_body: bool = True) -> str:
+                         include_body: bool = True,
+                         email_ids: list[int] | None = None) -> str:
     """Read emails from QQ mailbox via IMAP over SSL.
 
     Requires QQ mail IMAP authorization code configured in
@@ -104,53 +107,101 @@ def execute_read_qq_mail(max_results: int = 5, folder: str = "INBOX",
         except imaplib.IMAP4.error:
             return f"❌ 文件夹「{folder}」不存在。"
 
-        try:
-            result, data = mail.search(None, search_criteria)
-            if result != "OK" or not data[0]:
-                return f"📭 收件箱无匹配邮件（条件：{search_criteria}）"
-        except imaplib.IMAP4.error:
-            return f"❌ 搜索条件无效：{search_criteria}"
+        result_parts = []
 
-        all_ids = data[0].split()
-        total = len(all_ids)
-        fetch_count = min(max_results, total)
+        if email_ids:
+            # ── 精准模式：按 UID 直接获取指定邮件 ──
+            email_ids = list(dict.fromkeys(email_ids))  # 去重保序
+            result_parts.append(f"📧 按ID读取 {len(email_ids)} 封邮件\n")
 
-        sorted_ids = _sort_ids_by_internaldate(mail, total, fetch_count)
-        if sorted_ids is None:
-            return f"❌ 无法获取邮件时间信息，共 {total} 封"
+            for uid in email_ids:
+                try:
+                    uid_bytes = str(uid).encode()
+                    if include_body:
+                        _, fetch_data = mail.uid('FETCH', uid_bytes, "(RFC822)")
+                    else:
+                        _, fetch_data = mail.uid('FETCH', uid_bytes, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])")
+                    if not fetch_data or not fetch_data[0]:
+                        result_parts.append(f"⚠️ 邮件ID {uid} 未找到（可能已被删除或 ID 不正确）")
+                        result_parts.append("─" * 40)
+                        continue
+                    raw_data = fetch_data[0][1]
+                    msg = email.message_from_bytes(raw_data)
 
-        result_parts = [f"📧 共 {total} 封匹配邮件，显示最新 {fetch_count} 封\n"]
+                    subject = _decode_email_header(msg["Subject"])
+                    from_ = str(msg.get("From", "(未知发件人)"))
+                    date_str = _format_email_date(msg.get("Date", ""))
 
-        for eid in sorted_ids:
+                    result_parts.append(f"📩 发件人: {from_}")
+                    result_parts.append(f"📎 主题: {subject}")
+                    result_parts.append(f"🕐 时间: {date_str}")
+                    result_parts.append(f"🆔 邮件ID: {uid}")
+
+                    if include_body:
+                        body_text = _extract_email_body(msg)
+                        if body_text:
+                            if len(body_text) > max_body_chars:
+                                body_text = body_text[:max_body_chars] + (
+                                    f"\n...（全文共 {len(body_text)} 字符，已截断）")
+                            result_parts.append(f"📋 内容:\n{body_text}")
+
+                    result_parts.append("─" * 40)
+
+                except Exception as e:
+                    result_parts.append(f"⚠️ 邮件ID {uid} 读取失败：{e}")
+                    result_parts.append("─" * 40)
+
+        else:
+            # ── 常规模式：搜索 → 排序 → 取 Top N ──
             try:
-                if include_body:
-                    _, fetch_data = mail.fetch(eid, "(RFC822)")
-                else:
-                    _, fetch_data = mail.fetch(eid, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])")
-                raw_data = fetch_data[0][1]
-                msg = email.message_from_bytes(raw_data)
+                result, data = mail.uid('SEARCH', None, search_criteria)
+                if result != "OK" or not data[0]:
+                    return f"📭 收件箱无匹配邮件（条件：{search_criteria}）"
+            except imaplib.IMAP4.error:
+                return f"❌ 搜索条件无效：{search_criteria}"
 
-                subject = _decode_email_header(msg["Subject"])
-                from_ = str(msg.get("From", "(未知发件人)"))
-                date_str = _format_email_date(msg.get("Date", ""))
+            all_uids = data[0].split()
+            total = len(all_uids)
+            fetch_count = min(max_results, total)
 
-                result_parts.append(f"📩 发件人: {from_}")
-                result_parts.append(f"📎 主题: {subject}")
-                result_parts.append(f"🕐 时间: {date_str}")
+            sorted_uids = _sort_uids_by_internaldate(mail, fetch_count)
+            if sorted_uids is None:
+                return f"❌ 无法获取邮件时间信息，共 {total} 封"
 
-                if include_body:
-                    body_text = _extract_email_body(msg)
-                    if body_text:
-                        if len(body_text) > max_body_chars:
-                            body_text = body_text[:max_body_chars] + (
-                                f"\n...（全文共 {len(body_text)} 字符，已截断）")
-                        result_parts.append(f"📋 内容:\n{body_text}")
+            result_parts.append(f"📧 共 {total} 封匹配邮件，显示最新 {fetch_count} 封\n")
 
-                result_parts.append("─" * 40)
+            for uid_bytes in sorted_uids:
+                try:
+                    if include_body:
+                        _, fetch_data = mail.uid('FETCH', uid_bytes, "(RFC822)")
+                    else:
+                        _, fetch_data = mail.uid('FETCH', uid_bytes, "(BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])")
+                    raw_data = fetch_data[0][1]
+                    msg = email.message_from_bytes(raw_data)
 
-            except Exception as e:
-                result_parts.append(f"⚠️ 读取邮件时出错：{e}")
-                result_parts.append("─" * 40)
+                    subject = _decode_email_header(msg["Subject"])
+                    from_ = str(msg.get("From", "(未知发件人)"))
+                    date_str = _format_email_date(msg.get("Date", ""))
+                    uid_num = int(uid_bytes)
+
+                    result_parts.append(f"📩 发件人: {from_}")
+                    result_parts.append(f"📎 主题: {subject}")
+                    result_parts.append(f"🕐 时间: {date_str}")
+                    result_parts.append(f"🆔 邮件ID: {uid_num}")
+
+                    if include_body:
+                        body_text = _extract_email_body(msg)
+                        if body_text:
+                            if len(body_text) > max_body_chars:
+                                body_text = body_text[:max_body_chars] + (
+                                    f"\n...（全文共 {len(body_text)} 字符，已截断）")
+                            result_parts.append(f"📋 内容:\n{body_text}")
+
+                    result_parts.append("─" * 40)
+
+                except Exception as e:
+                    result_parts.append(f"⚠️ 读取邮件时出错：{e}")
+                    result_parts.append("─" * 40)
 
         return "\n".join(result_parts).strip()
 
@@ -236,13 +287,13 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "read_qq_mail",
-            "description": "读取 QQ 邮箱中的邮件（IMAP over SSL）。注意：QQ 邮箱 IMAP 的 TEXT/FROM/SINCE/SUBJECT 搜索条件均存在服务端缺陷，无法按关键词或日期过滤邮件。请使用默认的 search_criteria='ALL' 获取最新邮件后人工筛选。返回发件人、主题、时间和正文（可选截断）。",
+            "description": "读取 QQ 邮箱中的邮件（IMAP over SSL）。注意：QQ 邮箱 IMAP 的 TEXT/FROM/SINCE/SUBJECT 搜索条件均存在服务端缺陷，无法按关键词或日期过滤邮件。建议使用默认 search_criteria='ALL' 获取最新邮件后人工筛选，或使用 email_ids 参数按邮件ID精准获取。返回发件人、主题、时间和正文（可选截断），每封邮件均附带 🆔 邮件ID 供后续精准读取。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "max_results": {
                         "type": "integer",
-                        "description": "返回的最大邮件数量（1-20，默认 5）。最大 20 封，按时间倒序排列，昨日邮件必然在最新 20 封中。",
+                        "description": "返回的最大邮件数量（1-20，默认 5）。最大 20 封，按时间倒序排列，昨日邮件必然在最新 20 封中。设置 email_ids 时此参数忽略。",
                         "default": 5
                     },
                     "folder": {
@@ -252,13 +303,18 @@ TOOL_SCHEMAS = [
                     },
                     "search_criteria": {
                         "type": "string",
-                        "description": "IMAP 搜索条件。⚠️ QQ 邮箱仅 ALL 可靠（TEXT/FROM/SUBJECT/SINCE/BEFORE 均存在服务端缺陷，无法过滤），建议保持默认 'ALL'，获取后在返回结果中按发件人地址和时间手动筛选。",
+                        "description": "IMAP 搜索条件。⚠️ QQ 邮箱仅 ALL 可靠（TEXT/FROM/SUBJECT/SINCE/BEFORE 均存在服务端缺陷，无法过滤），建议保持默认 'ALL'。设置 email_ids 时此参数忽略。",
                         "default": "ALL"
                     },
                     "include_body": {
                         "type": "boolean",
                         "description": "是否包含邮件正文。除非用户明确要求读取邮件全文，否则请设为 False（仅返回头部，约 231 字节/封，快 438 倍）。True 会完整下载整封邮件（约 101 KB/封），仅在用户要求查看邮件详细内容时使用。",
                         "default": True
+                    },
+                    "email_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "按邮件ID精准获取指定邮件（支持批量）。ID 来自前一次调用返回的「🆔 邮件ID」字段。设置此参数后，max_results 和 search_criteria 将被忽略。示例：[868, 871]",
                     }
                 }
             }
