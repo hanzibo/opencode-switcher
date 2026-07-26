@@ -201,6 +201,36 @@ def _check_session_breaker(command: str) -> Optional[str]:
     return None
 
 
+# ── Heredoc pre-check ───────────────────────────────────────────────
+
+def _check_heredoc(command: str) -> Optional[str]:
+    """Check heredoc completeness before execution.
+
+    Scans for << or <<- heredoc syntax and verifies the closing delimiter
+    appears on its own line later in the command. Catches missing or
+    malformed heredoc terminators that would cause stdin blocking.
+    """
+    if not command or not command.strip():
+        return None
+    for match in re.finditer(r'<<-?\s*(\w+)', command):
+        delimiter = match.group(1)
+        rest = command[match.end():]
+        # <<- (with dash) allows leading tabs before the closing delimiter
+        if match.group(0).startswith('<<-'):
+            delim_pattern = rf'^[ \t]*{re.escape(delimiter)}\s*$'
+        else:
+            delim_pattern = rf'^{re.escape(delimiter)}\s*$'
+        if not re.search(delim_pattern, rest, re.MULTILINE):
+            return (
+                f"⚠️ 检测到不完整的 heredoc：结束标记「{delimiter}」未找到。\n"
+                f"   💡 结束标记必须独占一行且前后无空格：\n"
+                f"      command << {delimiter}\n"
+                f"      ...内容...\n"
+                f"      {delimiter}"
+            )
+    return None
+
+
 # ── Stdin prompt detection ──────────────────────────────────────────
 
 def _detect_prompt_pattern(output: str) -> Optional[str]:
@@ -337,7 +367,7 @@ class _BashSession:
 
         sentinel_cmd_b = (
             b"{ " + command.encode("utf-8", errors="replace")
-            + b"; } 2>&1; echo "
+            + b"\n} 2>&1; echo "
             + sentinel_start + b"$?" + sentinel_end + b"\n"
         )
 
@@ -627,6 +657,10 @@ def execute_bash(command: str, restart: bool = False,
     if breaker_err is not None:
         return breaker_err
 
+    heredoc_err = _check_heredoc(command)
+    if heredoc_err is not None:
+        return heredoc_err
+
     session_key = _resolve_session_key()
 
     if restart:
@@ -727,11 +761,11 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "bash",
-            "description": "执行 shell 命令。使用持久化 bash 会话，命令之间的工作目录和上下文不重置。自动检测并阻止交互式命令（编辑器、REPL、数据库客户端、网络工具等），环境已预硬化（禁用翻页器/交互提示）。自动检测 stdin 阻塞（如未终止的 heredoc、input() 等）并尝试 EOF/SIGINT 解阻塞。超时会自动重启会话。不适用于仅查询会话状态（应使用 bash_get_session_info）。",
+            "description": "执行 shell 命令。使用持久化 bash 会话，命令之间的工作目录和上下文不重置。自动检测并阻止交互式命令（编辑器、REPL、数据库客户端、网络工具等），环境已预硬化（禁用翻页器/交互提示）。执行前预检 heredoc 完整性。自动检测 stdin 阻塞（如未终止的 heredoc、input() 等）并尝试 EOF/SIGINT 解阻塞。超时会自动重启会话。不适用于仅查询会话状态（应使用 bash_get_session_info）。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "command": {"type": "string", "description": "要执行的 shell 命令"},
+                    "command": {"type": "string", "description": "要执行的 shell 命令。如需传递多行输入请使用 echo/printf 通过管道传递，不要使用需要交互式 stdin 的命令。"},
                     "purpose": {"type": "string", "description": "简短描述命令的目的（10-40字），用于向用户解释执行此命令的原因。例如：安装系统依赖、查看 nginx 日志、编译前端项目"},
                     "restart": {"type": "boolean", "description": "是否重启 bash 会话后再执行", "default": False},
                     "timeout": {"type": "integer", "description": "命令超时秒数（1-120，默认 120）", "default": 120},

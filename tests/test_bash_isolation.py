@@ -11,6 +11,7 @@ from tool_registry.bash import (
     _format_stdin_stuck_message,
     _BashSession,
     _STDIN_IDLE_THRESHOLD,
+    _check_heredoc,
 )
 from skill_store import SkillStore
 
@@ -120,25 +121,24 @@ class TestBashIsolation(unittest.TestCase):
             session.stop()
 
     def test_eof_unblocks_hung_heredoc(self):
-        """EOF 能够解阻塞卡在 heredoc 的命令（无需等待完整超时）。"""
-        # 构造一个有问题的 heredoc（缺少结束标记）
-        # 由于 close stdin 后 bash 会收到 EOF，应该很快结束
+        """不完整 heredoc 被预检直接拦截，无需等到执行阶段。"""
         result = execute_bash(
             'cat << EOF\ntest line\necho "should not reach here"',
             timeout=60,
         )
-        # 应该返回（而不是等到 60s 超时），且包含阻塞提示
-        self.assertNotIn("命令执行超时", result)
-        self.assertIn("stdin 阻塞", result)
+        # 预检立即拦截，不等到 idle 检测
+        self.assertIn("不完整的 heredoc", result)
+        self.assertNotIn("stdin 阻塞", result)
 
     def test_session_reusable_after_stdin_unblock(self):
-        """session 在 stdin 解阻塞后仍可正常使用。"""
-        # 先执行一个卡 stdin 的命令
+        """被预检拦截后 session 仍可正常使用。"""
+        # 预检拦截不完整的 heredoc，不涉及 session 操作
         result1 = execute_bash(
             'cat << UNMATCHED\ndata',
             timeout=60,
         )
-        # 再执行一个正常命令
+        self.assertIn("不完整的 heredoc", result1)
+        # 再执行一个正常命令，session 应正常工作
         result2 = execute_bash('echo "still alive"')
         self.assertIn("still alive", result2)
 
@@ -152,6 +152,51 @@ class TestBashIsolation(unittest.TestCase):
         """短命令正常完成，不被 idle 检测干扰。"""
         result = execute_bash('sleep 2 && echo "done"', timeout=30)
         self.assertIn("done", result)
+        self.assertNotIn("stdin 阻塞", result)
+
+    # ── Heredoc pre-check tests ────────────────────────────────────
+
+    def test_heredoc_complete(self):
+        """完整 heredoc 不应报错。"""
+        self.assertIsNone(_check_heredoc("cat << EOF\nhello\nEOF"))
+        self.assertIsNone(_check_heredoc("cat << 'EOF'\nhello\nEOF"))
+        self.assertIsNone(_check_heredoc("cat <<- EOF\n\thello\n\tEOF"))
+
+    def test_heredoc_incomplete(self):
+        """不完整 heredoc 应检测并报错。"""
+        err = _check_heredoc("cat << EOF\nhello")
+        self.assertIsNotNone(err)
+        self.assertIn("EOF", err)
+
+    def test_heredoc_multiple_complete(self):
+        """多个 heredoc 全部完整不应报错。"""
+        cmd = (
+            "cat << EOF\nhello\nEOF\n"
+            "cat << END\nworld\nEND"
+        )
+        self.assertIsNone(_check_heredoc(cmd))
+
+    def test_heredoc_multiple_incomplete(self):
+        """多个 heredoc 中有一个不完整应报错。"""
+        cmd = (
+            "cat << EOF\nhello\nEOF\n"
+            "cat << END\nworld"
+        )
+        err = _check_heredoc(cmd)
+        self.assertIsNotNone(err)
+        self.assertIn("END", err)
+
+    def test_heredoc_no_heredoc(self):
+        """没有 heredoc 的命令不应误报。"""
+        self.assertIsNone(_check_heredoc("echo hello"))
+        self.assertIsNone(_check_heredoc("ls -la | grep foo"))
+        self.assertIsNone(_check_heredoc("python3 -c 'print(1)'"))
+
+    def test_heredoc_precheck_blocks_early(self):
+        """execute_bash 应通过 heredoc 预检直接拦截，无需等待 idle 超时。"""
+        result = execute_bash('cat << EOF\nhello\n', timeout=60)
+        # 预检应立即返回错误，而非等 15s idle 检测
+        self.assertIn("不完整的 heredoc", result)
         self.assertNotIn("stdin 阻塞", result)
 
 
