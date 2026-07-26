@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from typing import Final, Optional
+from typing import Final, NamedTuple, Optional
 
 from ._state import bash as _bash_state
 
@@ -130,30 +130,39 @@ def _check_interactive(command: str) -> Optional[str]:
 _STDIN_IDLE_THRESHOLD: Final[float] = 15.0
 """If no new output for this many seconds, suspect stdin blocking."""
 
-_UNBLOCK_EOF_WAIT: Final[float] = 3.0
-"""Seconds to wait after sending EOF before declaring it didn't help."""
-
-_UNBLOCK_SIGINT_WAIT: Final[float] = 3.0
-"""Seconds to wait after sending SIGINT before declaring it didn't help."""
+# Magic number constants
+_PROMPT_SCAN_TAIL_CHARS: Final[int] = 500
+"""Number of trailing characters to scan for prompt patterns."""
+_POLL_INTERVAL_MS: Final[int] = 50
+"""Poll interval in milliseconds for the output reading loop."""
+_READ_CHUNK_SIZE: Final[int] = 65536
+"""Buffer size in bytes for reading from the process stdout pipe."""
+_CMD_TRUNCATE_LEN: Final[int] = 200
+"""Max length of command string shown in error messages."""
 
 # Interactive prompt patterns detected in output tail.
-# Each entry: (compiled_regex, label, suggestion)
-_PROMPT_PATTERNS: Final[list] = [
-    (re.compile(r'[Pp]assword\s*[:：]\s*$', re.MULTILINE), "密码输入提示",
+class _PromptPattern(NamedTuple):
+    """A prompt pattern to detect in command output."""
+    pattern: re.Pattern
+    label: str
+    suggestion: str
+
+_PROMPT_PATTERNS: Final[list[_PromptPattern]] = [
+    _PromptPattern(re.compile(r'[Pp]assword\s*[:：]\s*$', re.MULTILINE), "密码输入提示",
      "命令正在请求密码，请使用非交互方式（如通过环境变量或参数传递）"),
-    (re.compile(r'[Yy]es\s*[/:：]?\s*[Nn]o\s*[:：]?\s*$'), "Yes/No 确认",
+    _PromptPattern(re.compile(r'[Yy]es\s*[/:：]?\s*[Nn]o\s*[:：]?\s*$'), "Yes/No 确认",
      "请添加 -y/--yes 等自动确认参数"),
-    (re.compile(r'[Ee]nter\s+(your\s+)?[Cc]hoice'), "选择提示",
+    _PromptPattern(re.compile(r'[Ee]nter\s+(your\s+)?[Cc]hoice'), "选择提示",
      "请通过参数直接指定选项"),
-    (re.compile(r'(?<![\w])[?]\s*$', re.MULTILINE), "问号提示符",
+    _PromptPattern(re.compile(r'(?<![\w])[?]\s*$', re.MULTILINE), "问号提示符",
      "命令正在等待选择确认"),
-    (re.compile(r'[Ss]elect\s+an\s+option'), "选项选择",
+    _PromptPattern(re.compile(r'[Ss]elect\s+an\s+option'), "选项选择",
      "请通过参数直接指定选项"),
-    (re.compile(r'继续[?？)）]?\s*$', re.MULTILINE), "中文确认提示",
+    _PromptPattern(re.compile(r'继续[?？)）]?\s*$', re.MULTILINE), "中文确认提示",
      "请添加 -y/--yes 等自动确认参数"),
-    (re.compile(r'确认[?？)）]?\s*$', re.MULTILINE), "中文确认提示",
+    _PromptPattern(re.compile(r'确认[?？)）]?\s*$', re.MULTILINE), "中文确认提示",
      "请添加 -y/--yes 等自动确认参数"),
-    (re.compile(r'请输入'), "中文输入提示",
+    _PromptPattern(re.compile(r'请输入'), "中文输入提示",
      "请通过参数直接提供输入"),
 ]
 
@@ -212,8 +221,8 @@ def _check_heredoc(command: str) -> Optional[str]:
     """
     if not command or not command.strip():
         return None
-    for match in re.finditer(r'<<-?\s*(\w+)', command):
-        delimiter = match.group(1)
+    for match in re.finditer(r"""<<-?\s*(?:'(\w+)'|"(\w+)"|(\w+))""", command):
+        delimiter = next(g for g in match.groups() if g)
         rest = command[match.end():]
         # <<- (with dash) allows leading tabs before the closing delimiter
         if match.group(0).startswith('<<-'):
@@ -240,7 +249,7 @@ def _detect_prompt_pattern(output: str) -> Optional[str]:
     """
     if not output:
         return None
-    tail = output[-500:]  # only check last 500 chars
+    tail = output[-_PROMPT_SCAN_TAIL_CHARS:]  # only check last N chars
     for pattern, label, suggestion in _PROMPT_PATTERNS:
         if pattern.search(tail):
             return (f"⚠️ 检测到交互提示（{label}）。\n"
@@ -255,7 +264,7 @@ def _format_stdin_stuck_message(command: str, *,
     """Generate a standardized error message for stdin-blocked commands."""
     parts = [
         "⚠️ 命令被 stdin 阻塞（无新输出超过 15 秒）：",
-        f"   命令: {command[:200]}",
+        f"   命令: {command[:_CMD_TRUNCATE_LEN]}",
     ]
     if prompt_hint:
         parts.append("")
@@ -323,6 +332,32 @@ class _BashSession:
         self._eof_sent: bool = False
         self._sigint_sent: bool = False
 
+    @staticmethod
+    def _parse_sentinel(output_buf: bytearray,
+                        sentinel_start: bytes,
+                        sentinel_end: bytes
+                        ) -> tuple[bool, int, bytearray]:
+        """查找 sentinel 标记并解析退出码。
+
+        Returns:
+            (found, exit_code, cleaned_buf)
+            found: sentinel 是否找到
+            exit_code: 解析的退出码
+            cleaned_buf: 移除 sentinel 标记后的输出缓冲区
+        """
+        sidx = output_buf.find(sentinel_start)
+        if sidx == -1:
+            return False, -1, output_buf
+        after = output_buf[sidx:]
+        eidx = after.find(sentinel_end)
+        code = -1
+        if eidx != -1:
+            try:
+                code = int(after[len(sentinel_start):eidx].decode("ascii"))
+            except (ValueError, UnicodeDecodeError):
+                code = -1
+        return True, code, output_buf[:sidx]
+
     def start(self, cwd: Optional[str] = None):
         """Spawn a new persistent bash subprocess (binary pipe mode)."""
         merged_env = {**os.environ, **_HARDENED_ENV}
@@ -387,7 +422,6 @@ class _BashSession:
         deadline = time.monotonic() + timeout if timeout > 0 else float("inf")
 
         last_output_time = time.monotonic()
-        loop_start = time.monotonic()
 
         while time.monotonic() < deadline:
             if cancel_event and cancel_event.is_set():
@@ -401,12 +435,12 @@ class _BashSession:
                 return {"output": output, "exit_code": -1, "timed_out": False}
 
             if process.poll() is not None and not sentinel_found:
-                remaining = os.read(fd, 65536)
+                remaining = os.read(fd, _READ_CHUNK_SIZE)
                 if remaining:
                     output_buf.extend(remaining)
                 break
 
-            events = poll.poll(50)
+            events = poll.poll(_POLL_INTERVAL_MS)
             if not events:
                 # ── No new data — check for stdin stall ──
                 now = time.monotonic()
@@ -436,45 +470,28 @@ class _BashSession:
                 # Step 3: Fall through — will hit deadline and get killed
                 continue
 
-            chunk = os.read(fd, 65536)
+            chunk = os.read(fd, _READ_CHUNK_SIZE)
             if not chunk:
                 break
 
             output_buf.extend(chunk)
             last_output_time = time.monotonic()  # reset idle timer on new data
 
-            sidx = output_buf.find(sentinel_start)
-            if sidx != -1:
-                sentinel_found = True
-                after = output_buf[sidx:]
-                eidx = after.find(sentinel_end)
-                if eidx != -1:
-                    code_bytes = after[len(sentinel_start):eidx]
-                    try:
-                        exit_code = int(code_bytes.decode("ascii"))
-                    except (ValueError, UnicodeDecodeError):
-                        exit_code = -1
-                output_buf = output_buf[:sidx]
+            sentinel_found, exit_code, output_buf = self._parse_sentinel(
+                output_buf, sentinel_start, sentinel_end,
+            )
+            if sentinel_found:
                 break
 
         if not sentinel_found:
             # ── One last read — EOF or SIGINT might have just finished the cmd ──
             try:
-                remaining = os.read(fd, 65536)
+                remaining = os.read(fd, _READ_CHUNK_SIZE)
                 if remaining:
                     output_buf.extend(remaining)
-                    sidx = output_buf.find(sentinel_start)
-                    if sidx != -1:
-                        sentinel_found = True
-                        after = output_buf[sidx:]
-                        eidx = after.find(sentinel_end)
-                        if eidx != -1:
-                            code_bytes = after[len(sentinel_start):eidx]
-                            try:
-                                exit_code = int(code_bytes.decode("ascii"))
-                            except (ValueError, UnicodeDecodeError):
-                                exit_code = -1
-                        output_buf = output_buf[:sidx]
+                    sentinel_found, exit_code, output_buf = self._parse_sentinel(
+                        output_buf, sentinel_start, sentinel_end,
+                    )
             except OSError:
                 pass
 
