@@ -104,6 +104,9 @@ Do work.
         path, body, sk = detail
         self.assertTrue(path.endswith("SKILL.md"))
         self.assertIn("Deploy App Skill", body)
+        self.assertEqual(sk.name, "deploy-app")
+        self.assertEqual(sk.description, "Deployment workflow for app.")
+        self.assertTrue(sk.path.endswith("SKILL.md"))
 
     def test_frontmatter_extended_fields(self):
         skill_dir = os.path.join(self.tmp_dir, "ext_skill")

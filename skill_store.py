@@ -24,6 +24,12 @@ class SkillMetadata:
     resources: Dict[str, List[str]] = field(default_factory=dict)
 
 
+_IGNORED_WALK_DIRS = {
+    "__pycache__", ".git", ".svn", "node_modules",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".hypothesis"
+}
+
+
 def _scan_skill_resources(skill_file_path: str) -> Dict[str, List[str]]:
     """Scan subdirectories (scripts/, references/, assets/) relative to a SKILL.md file."""
     resources: Dict[str, List[str]] = {}
@@ -34,7 +40,8 @@ def _scan_skill_resources(skill_file_path: str) -> Dict[str, List[str]]:
         if os.path.isdir(sub_dir):
             try:
                 found_files = []
-                for root, _, files in os.walk(sub_dir):
+                for root, dirs, files in os.walk(sub_dir):
+                    dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _IGNORED_WALK_DIRS]
                     for f in files:
                         if not f.startswith("."):
                             full_path = os.path.join(root, f)
