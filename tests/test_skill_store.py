@@ -101,9 +101,54 @@ Do work.
         detail = store.get_skill_detail("deploy-app", cwd=self.proj_dir)
 
         self.assertIsNotNone(detail)
-        path, body = detail
+        path, body, sk = detail
         self.assertTrue(path.endswith("SKILL.md"))
         self.assertIn("Deploy App Skill", body)
+        self.assertEqual(sk.name, "deploy-app")
+        self.assertEqual(sk.description, "Deployment workflow for app.")
+        self.assertTrue(sk.path.endswith("SKILL.md"))
+
+    def test_frontmatter_extended_fields(self):
+        skill_dir = os.path.join(self.tmp_dir, "ext_skill")
+        os.makedirs(skill_dir, exist_ok=True)
+        skill_file = os.path.join(skill_dir, "SKILL.md")
+        with open(skill_file, "w", encoding="utf-8") as f:
+            f.write(
+                "---\n"
+                "name: ext-skill\n"
+                "description: Extended skill\n"
+                "license: MIT\n"
+                "compatibility: python >= 3.10\n"
+                "custom_key: custom_val\n"
+                "---\n"
+                "# Extended Skill\n"
+            )
+        store = SkillStore(global_dir=skill_dir)
+        skills = store.get_skills()
+        self.assertEqual(len(skills), 1)
+        sk = skills[0]
+        self.assertEqual(sk.license, "MIT")
+        self.assertEqual(sk.compatibility, "python >= 3.10")
+        self.assertEqual(sk.metadata.get("custom_key"), "custom_val")
+
+    def test_skill_subdirectory_resources(self):
+        skill_dir = os.path.join(self.tmp_dir, "res_skill")
+        os.makedirs(os.path.join(skill_dir, "scripts"), exist_ok=True)
+        os.makedirs(os.path.join(skill_dir, "references"), exist_ok=True)
+        with open(os.path.join(skill_dir, "SKILL.md"), "w", encoding="utf-8") as f:
+            f.write("---\nname: res-skill\ndescription: Resource skill\n---\n")
+        with open(os.path.join(skill_dir, "scripts", "check.py"), "w", encoding="utf-8") as f:
+            f.write("print('hello')\n")
+        with open(os.path.join(skill_dir, "references", "guide.md"), "w", encoding="utf-8") as f:
+            f.write("# Guide\n")
+
+        store = SkillStore(global_dir=skill_dir)
+        skills = store.get_skills()
+        sk = skills[0]
+        self.assertIn("scripts", sk.resources)
+        self.assertIn("scripts/check.py", sk.resources["scripts"])
+        self.assertIn("references", sk.resources)
+        self.assertIn("references/guide.md", sk.resources["references"])
 
     def test_multiple_global_directories(self):
         global_2 = os.path.join(self.tmp_dir, "global_skills_2")

@@ -18,6 +18,41 @@ class SkillMetadata:
     description: str
     path: str
     allowed_tools: List[str] = field(default_factory=list)
+    license: str = ""
+    compatibility: str = ""
+    metadata: Dict[str, str] = field(default_factory=dict)
+    resources: Dict[str, List[str]] = field(default_factory=dict)
+
+
+_IGNORED_WALK_DIRS = {
+    "__pycache__", ".git", ".svn", "node_modules",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".hypothesis"
+}
+_RESOURCE_SUBDIRS = ("scripts", "references", "assets")
+
+
+def _scan_skill_resources(skill_file_path: str) -> Dict[str, List[str]]:
+    """Scan subdirectories (scripts/, references/, assets/) relative to a SKILL.md file."""
+    resources: Dict[str, List[str]] = {}
+    parent_dir = os.path.dirname(os.path.abspath(skill_file_path))
+
+    for sub in _RESOURCE_SUBDIRS:
+        sub_dir = os.path.join(parent_dir, sub)
+        if os.path.isdir(sub_dir):
+            try:
+                found_files = []
+                for root, dirs, files in os.walk(sub_dir):
+                    dirs[:] = [d for d in dirs if not d.startswith(".") and d not in _IGNORED_WALK_DIRS]
+                    for f in files:
+                        if not f.startswith("."):
+                            full_path = os.path.join(root, f)
+                            rel_path = os.path.relpath(full_path, parent_dir)
+                            found_files.append(rel_path)
+                if found_files:
+                    resources[sub] = sorted(found_files)
+            except Exception:
+                pass
+    return resources
 
 
 def _parse_frontmatter(content: str) -> tuple[Dict[str, str], str]:
@@ -72,11 +107,26 @@ def _parse_skill_file(file_path: str) -> Optional[SkillMetadata]:
         allowed_tools_str = meta.get("allowed-tools", meta.get("allowed_tools", "")).strip("[] ")
         allowed_tools = [t.strip().strip("\"'") for t in allowed_tools_str.split(",") if t.strip()]
 
+        license_val = meta.get("license", "")
+        compatibility_val = meta.get("compatibility", "")
+
+        custom_metadata: Dict[str, str] = {}
+        standard_keys = {"name", "description", "allowed-tools", "allowed_tools", "license", "compatibility"}
+        for k, v in meta.items():
+            if k not in standard_keys:
+                custom_metadata[k] = v
+
+        resources = _scan_skill_resources(file_path)
+
         return SkillMetadata(
             name=name,
             description=description,
             path=os.path.abspath(file_path),
-            allowed_tools=allowed_tools
+            allowed_tools=allowed_tools,
+            license=license_val,
+            compatibility=compatibility_val,
+            metadata=custom_metadata,
+            resources=resources,
         )
     except Exception:
         return None
@@ -197,13 +247,21 @@ class SkillStore:
             lines.append(f"    <description>{sk.description}</description>")
             lines.append(f"    <location>{loc}</location>")
             lines.append(f"    <allowed_tools>{tools_str}</allowed_tools>")
+            if sk.compatibility:
+                lines.append(f"    <compatibility>{sk.compatibility}</compatibility>")
+            if sk.resources:
+                res_flat = []
+                for _, files in sk.resources.items():
+                    res_flat.extend(files)
+                if res_flat:
+                    lines.append(f"    <resources>{', '.join(res_flat)}</resources>")
             lines.append("  </skill>")
         lines.append("</available_skills>")
 
         return "\n".join(lines)
 
-    def get_skill_detail(self, skill_name: str, cwd: Optional[str] = None) -> Optional[Tuple[str, str]]:
-        """Read and return (absolute_path, markdown_body) of a skill by name."""
+    def get_skill_detail(self, skill_name: str, cwd: Optional[str] = None) -> Optional[Tuple[str, str, SkillMetadata]]:
+        """Read and return (absolute_path, markdown_body, metadata) of a skill by name."""
         skills = self.get_skills(cwd)
         for sk in skills:
             if sk.name == skill_name:
@@ -211,7 +269,7 @@ class SkillStore:
                     with open(sk.path, "r", encoding="utf-8") as f:
                         content = f.read()
                     _, body = _parse_frontmatter(content)
-                    return (sk.path, body)
+                    return (sk.path, body, sk)
                 except Exception:
                     return None
         return None
