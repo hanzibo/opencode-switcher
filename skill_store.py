@@ -28,6 +28,7 @@ _IGNORED_WALK_DIRS = {
     "__pycache__", ".git", ".svn", "node_modules",
     ".mypy_cache", ".pytest_cache", ".ruff_cache", ".hypothesis"
 }
+_RESOURCE_SUBDIRS = ("scripts", "references", "assets")
 
 
 def _scan_skill_resources(skill_file_path: str) -> Dict[str, List[str]]:
@@ -35,7 +36,7 @@ def _scan_skill_resources(skill_file_path: str) -> Dict[str, List[str]]:
     resources: Dict[str, List[str]] = {}
     parent_dir = os.path.dirname(os.path.abspath(skill_file_path))
 
-    for sub in ["scripts", "references", "assets"]:
+    for sub in _RESOURCE_SUBDIRS:
         sub_dir = os.path.join(parent_dir, sub)
         if os.path.isdir(sub_dir):
             try:
