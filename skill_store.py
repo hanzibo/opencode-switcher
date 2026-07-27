@@ -8,7 +8,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 
 @dataclass
@@ -202,8 +202,8 @@ class SkillStore:
 
         return "\n".join(lines)
 
-    def get_skill_content(self, skill_name: str, cwd: Optional[str] = None) -> Optional[str]:
-        """Read and return full Markdown instructions of a skill by name."""
+    def get_skill_detail(self, skill_name: str, cwd: Optional[str] = None) -> Optional[Tuple[str, str]]:
+        """Read and return (absolute_path, markdown_body) of a skill by name."""
         skills = self.get_skills(cwd)
         for sk in skills:
             if sk.name == skill_name:
@@ -211,7 +211,12 @@ class SkillStore:
                     with open(sk.path, "r", encoding="utf-8") as f:
                         content = f.read()
                     _, body = _parse_frontmatter(content)
-                    return body
-                except Exception as e:
-                    return f"Error reading skill '{skill_name}': {e}"
+                    return (sk.path, body)
+                except Exception:
+                    return None
         return None
+
+    def get_skill_content(self, skill_name: str, cwd: Optional[str] = None) -> Optional[str]:
+        """Read and return full Markdown instructions of a skill by name."""
+        detail = self.get_skill_detail(skill_name, cwd)
+        return detail[1] if detail else None

@@ -96,11 +96,14 @@ Do work.
         self.assertIsNotNone(content)
         self.assertIn("Check formatting", content)
 
-    def test_execute_read_skill(self):
-        # Temporarily mock global_dir via SkillStore
+    def test_get_skill_detail(self):
         store = SkillStore(global_dir=self.global_skills)
-        content = store.get_skill_content("deploy-app", cwd=self.proj_dir)
-        self.assertIn("Deploy App Skill", content)
+        detail = store.get_skill_detail("deploy-app", cwd=self.proj_dir)
+
+        self.assertIsNotNone(detail)
+        path, body = detail
+        self.assertTrue(path.endswith("SKILL.md"))
+        self.assertIn("Deploy App Skill", body)
 
     def test_multiple_global_directories(self):
         global_2 = os.path.join(self.tmp_dir, "global_skills_2")
