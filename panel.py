@@ -512,14 +512,19 @@ class SearchPanel:
         self._menu_active = False
         self._opened_by_ai_hotkey = False
 
+    _opaque_region_supported = True
+
     def _on_window_draw(self, widget, cr):
-        cr.set_source_rgba(
-            self._bg_color.red,
-            self._bg_color.green,
-            self._bg_color.blue,
-            self._bg_color.alpha,
-        )
-        cr.paint()
+        try:
+            cr.set_source_rgba(
+                self._bg_color.red,
+                self._bg_color.green,
+                self._bg_color.blue,
+                self._bg_color.alpha,
+            )
+            cr.paint()
+        except Exception:
+            pass
         return False
 
     def _on_window_realize(self, widget):
@@ -532,28 +537,41 @@ class SearchPanel:
 
     def _update_opaque_region(self, widget, alloc=None):
         """Update the opaque region to cover the entire window allocation."""
+        if not SearchPanel._opaque_region_supported:
+            return
         gdk_win = widget.get_window()
         if gdk_win is None:
             return
-        if alloc is None:
-            alloc = widget.get_allocation()
-        import cairo as _cairo
-        w = max(alloc.width, 1)
-        h = max(alloc.height, 1)
-        surface = _cairo.ImageSurface(_cairo.FORMAT_A1, w, h)
-        cr = _cairo.Context(surface)
-        cr.set_source_rgba(1, 1, 1, 1)
-        cr.paint()
-        del cr
-        region = Gdk.cairo_region_create_from_surface(surface)
-        surface.finish()
-        gdk_win.set_opaque_region(region)
+        try:
+            if alloc is None:
+                alloc = widget.get_allocation()
+            w = max(alloc.width, 1)
+            h = max(alloc.height, 1)
+            import cairo
+            try:
+                region = cairo.Region(cairo.RectangleInt(0, 0, w, h))
+            except Exception:
+                surface = cairo.ImageSurface(cairo.FORMAT_A1, w, h)
+                cr = cairo.Context(surface)
+                cr.set_source_rgba(1, 1, 1, 1)
+                cr.paint()
+                del cr
+                region = Gdk.cairo_region_create_from_surface(surface)
+                surface.finish()
+            gdk_win.set_opaque_region(region)
+        except Exception as e:
+            SearchPanel._opaque_region_supported = False
+            import logging
+            logging.getLogger(__name__).warning("Opaque region update not supported on this environment: %s", e)
 
     def _on_separator_draw(self, widget, cr):
-        alloc = widget.get_allocation()
-        cr.set_source_rgba(*self._separator_rgba)
-        cr.rectangle(alloc.x, alloc.y, alloc.width, alloc.height)
-        cr.fill()
+        try:
+            alloc = widget.get_allocation()
+            cr.set_source_rgba(*self._separator_rgba)
+            cr.rectangle(alloc.x, alloc.y, alloc.width, alloc.height)
+            cr.fill()
+        except Exception:
+            pass
         return True
 
     def _update_separator_focus(self, focused: bool):
@@ -822,16 +840,19 @@ class SearchPanel:
             dot_recent = self._dot_recent
             dot_closed = self._dot_closed
             def on_dot_draw(w, cr, st=status, dl=dot_live, dr=dot_recent, dc=dot_closed):
-                row = w.get_parent().get_parent()
-                is_sel = isinstance(row, Gtk.ListBoxRow) and bool(row.get_state_flags() & Gtk.StateFlags.SELECTED)
-                if st == "live":
-                    cr.set_source_rgba(dl[0], dl[1], dl[2], 1.0 if is_sel else dl[3])
-                elif st == "recent":
-                    cr.set_source_rgba(dr[0], dr[1], dr[2], 0.9 if is_sel else dr[3])
-                else:
-                    cr.set_source_rgba(dc[0], dc[1], dc[2], 0.6 if is_sel else dc[3])
-                cr.arc(6, 6, 5.25, 0, 6.2832)
-                cr.fill()
+                try:
+                    row = w.get_parent().get_parent()
+                    is_sel = isinstance(row, Gtk.ListBoxRow) and bool(row.get_state_flags() & Gtk.StateFlags.SELECTED)
+                    if st == "live":
+                        cr.set_source_rgba(dl[0], dl[1], dl[2], 1.0 if is_sel else dl[3])
+                    elif st == "recent":
+                        cr.set_source_rgba(dr[0], dr[1], dr[2], 0.9 if is_sel else dr[3])
+                    else:
+                        cr.set_source_rgba(dc[0], dc[1], dc[2], 0.6 if is_sel else dc[3])
+                    cr.arc(6, 6, 5.25, 0, 6.2832)
+                    cr.fill()
+                except Exception:
+                    pass
                 return True
             dot.connect("draw", on_dot_draw)
             hbox.pack_start(dot, False, False, 0)

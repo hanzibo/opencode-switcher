@@ -20,25 +20,28 @@ def _textview_draw_placeholder(widget, cr):
     Connect via: textview.connect_after("draw", _textview_draw_placeholder)
     Set placeholder via: textview.placeholder_text = "..."
     """
-    buf = widget.get_buffer()
-    if buf.get_char_count() == 0:
-        placeholder = getattr(widget, "placeholder_text", "")
-        if placeholder:
-            text_window = widget.get_window(Gtk.TextWindowType.TEXT)
-            if text_window and Gtk.cairo_should_draw_window(cr, text_window):
-                cr.save()
-                start_iter = buf.get_start_iter()
-                rect = widget.get_iter_location(start_iter)
-                left, top = widget.buffer_to_window_coords(Gtk.TextWindowType.TEXT, rect.x, rect.y)
-                cr.translate(left, top)
-                layout = widget.create_pango_layout(placeholder)
-                context = widget.get_style_context()
-                font_desc = context.get_property("font", Gtk.StateFlags.NORMAL)
-                layout.set_font_description(font_desc)
-                color = context.get_color(Gtk.StateFlags.NORMAL)
-                cr.set_source_rgba(color.red, color.green, color.blue, 0.45)
-                PangoCairo.show_layout(cr, layout)
-                cr.restore()
+    try:
+        buf = widget.get_buffer()
+        if buf.get_char_count() == 0:
+            placeholder = getattr(widget, "placeholder_text", "")
+            if placeholder:
+                text_window = widget.get_window(Gtk.TextWindowType.TEXT)
+                if text_window and Gtk.cairo_should_draw_window(cr, text_window):
+                    cr.save()
+                    start_iter = buf.get_start_iter()
+                    rect = widget.get_iter_location(start_iter)
+                    left, top = widget.buffer_to_window_coords(Gtk.TextWindowType.TEXT, rect.x, rect.y)
+                    cr.translate(left, top)
+                    layout = widget.create_pango_layout(placeholder)
+                    context = widget.get_style_context()
+                    font_desc = context.get_property("font", Gtk.StateFlags.NORMAL)
+                    layout.set_font_description(font_desc)
+                    color = context.get_color(Gtk.StateFlags.NORMAL)
+                    cr.set_source_rgba(color.red, color.green, color.blue, 0.45)
+                    PangoCairo.show_layout(cr, layout)
+                    cr.restore()
+    except Exception:
+        pass
     return False
 
 
