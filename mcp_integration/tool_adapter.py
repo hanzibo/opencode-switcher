@@ -9,6 +9,20 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 
+def _get_val(obj: Any, camel_key: str, snake_key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        if camel_key in obj:
+            return obj[camel_key]
+        if snake_key in obj:
+            return obj[snake_key]
+        return default
+    if hasattr(obj, camel_key):
+        return getattr(obj, camel_key)
+    if hasattr(obj, snake_key):
+        return getattr(obj, snake_key)
+    return default
+
+
 def mcp_tool_to_openai_schema(server_name: str, tool: Any) -> Dict[str, Any]:
     """将 MCP Tool 转换为 OpenAI-compatible function schema。
 
@@ -20,27 +34,30 @@ def mcp_tool_to_openai_schema(server_name: str, tool: Any) -> Dict[str, Any]:
     ----------
     server_name : str
         MCP Server 的唯一名称，用作命名空间前缀。
-    tool : Tool
-        MCP SDK 的 Tool 对象。
+    tool : Tool or dict
+        MCP SDK 的 Tool 对象或工具字典。
 
     Returns
     -------
     dict
         OpenAI function-calling schema，可混入 TOOL_DEFINITIONS 列表。
     """
-    from mcp import Tool  # lazy import
-    params = tool.inputSchema or {"type": "object", "properties": {}}
+    tool_name = _get_val(tool, "name", "name", "")
+    tool_desc = _get_val(tool, "description", "description", "")
+    params = _get_val(tool, "inputSchema", "input_schema", None)
+    if not params or not isinstance(params, dict):
+        params = {"type": "object", "properties": {}}
+
     # 移除 OpenAI 不支持的 JSON Schema 元字段
-    if isinstance(params, dict):
-        params = {
-            k: v for k, v in params.items()
-            if k not in ("$schema", "$id", "$ref", "definitions", "title")
-        }
+    params = {
+        k: v for k, v in params.items()
+        if k not in ("$schema", "$id", "$ref", "definitions", "title")
+    }
     return {
         "type": "function",
         "function": {
-            "name": f"{server_name}__{tool.name}",
-            "description": tool.description or "",
+            "name": f"{server_name}__{tool_name}",
+            "description": tool_desc or "",
             "parameters": params,
         },
     }

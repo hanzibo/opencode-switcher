@@ -172,7 +172,7 @@ install_files() {
     cp -r "$SCRIPT_DIR/html_templates"           "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/run.sh"                      "$INSTALL_DIR/"
     cp "$SCRIPT_DIR/opencode-switcher-toggle"    "$INSTALL_DIR/"
-    cp "$SCRIPT_DIR/opencode-switcher.png"       "$INSTALL_DIR/"
+    cp "$SCRIPT_DIR/deploy/opencode-switcher.png" "$INSTALL_DIR/"
     # Copy KaTeX resources (math rendering in AI panel)
     if [ -d "$SCRIPT_DIR/katex" ]; then
         cp -r "$SCRIPT_DIR/katex"                 "$INSTALL_DIR/"
@@ -183,13 +183,13 @@ install_files() {
 
     # Generate .desktop file with correct paths
     sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" \
-        "$SCRIPT_DIR/opencode-switcher.desktop" \
+        "$SCRIPT_DIR/deploy/opencode-switcher.desktop" \
         > "$APP_DIR/opencode-switcher.desktop"
     chmod 644 "$APP_DIR/opencode-switcher.desktop"
 
     # Generate systemd service with correct paths
     sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" \
-        "$SCRIPT_DIR/opencode-switcher.service" \
+        "$SCRIPT_DIR/deploy/opencode-switcher.service" \
         > "$SYSD_DIR/opencode-switcher.service"
 
     # Create wrapper scripts in PATH

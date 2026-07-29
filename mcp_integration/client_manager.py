@@ -331,11 +331,19 @@ class MCPClientManager:
     # ── 辅助 ────────────────────────────────────────────────────
 
     @staticmethod
-    def _tool_dict_to_obj(tool_dict: dict):
-        """将工具 dict 转为 MCP Tool 对象（用于 tool_adapter）。"""
-        from mcp import Tool
-        return Tool(
-            name=tool_dict.get("name", ""),
-            description=tool_dict.get("description", ""),
-            inputSchema=tool_dict.get("inputSchema", {"type": "object", "properties": {}}),
-        )
+    def _tool_dict_to_obj(tool_dict: Any) -> Any:
+        """将工具 dict/Tool 转为兼容对象（用于 tool_adapter）。"""
+        if isinstance(tool_dict, dict):
+            from mcp import Tool
+            schema = tool_dict.get("inputSchema")
+            if schema is None:
+                schema = tool_dict.get("input_schema", {"type": "object", "properties": {}})
+            try:
+                return Tool(
+                    name=tool_dict.get("name", ""),
+                    description=tool_dict.get("description", ""),
+                    inputSchema=schema,
+                )
+            except Exception:
+                return tool_dict
+        return tool_dict
