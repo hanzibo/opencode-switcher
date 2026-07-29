@@ -55,13 +55,13 @@ check_deps() {
 
     if [ ${#missing[@]} -gt 0 ]; then
         error "缺少系统依赖: ${missing[*]}"
-        echo "请安装: sudo apt install ${missing[*]} gir1.2-ayatanaappindicator3-0.1"
+        echo "请安装: sudo apt install ${missing[*]} gir1.2-ayatanaappindicator3-0.1 python3-gi-cairo"
         exit 1
     fi
 
     # Check Python packages
     local py_missing=()
-    for mod in gi; do
+    for mod in gi cairo; do
         if ! python3 -c "import $mod" 2>/dev/null; then
             py_missing+=("$mod")
         fi

@@ -16,7 +16,7 @@ Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipb
 | Status | `./install.sh status` | Checks install, desktop entry, service, opencode CLI, GNOME ext |
 | DB inspect | `venv/bin/python3 inspect_db.py` | Lists session table schema + latest rows |
 
-**System deps**: `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard gir1.2-webkit2-4.1` — webkit2gtk NOT in `install.sh` but required at runtime (AI panel crashes without it).
+**System deps**: `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-gi-cairo python3-pip python3-venv wl-clipboard gir1.2-webkit2-4.1` — webkit2gtk NOT in `install.sh` but required at runtime (AI panel crashes without it).
 
 **Commit convention**: `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `docs(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`, `tool-registry`, `clipboard`, `mcp`).
 
