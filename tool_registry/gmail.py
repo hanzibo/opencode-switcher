@@ -18,7 +18,7 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from clipboard_store import GMAIL_CREDENTIALS_DIR
+from stores.clipboard_store import GMAIL_CREDENTIALS_DIR
 
 # ── Constants ────────────────────────────────────────────────────────
 
@@ -110,7 +110,7 @@ def _save_token(creds: Credentials):
 
     # Also sync store for settings UI
     try:
-        from clipboard_store import GmailOAuthStore
+        from stores.clipboard_store import GmailOAuthStore
         store = GmailOAuthStore()
         store.save_token(token_dict, email=token_dict.get("email", ""))
     except Exception:

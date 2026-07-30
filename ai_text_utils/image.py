@@ -13,7 +13,7 @@ import base64
 import mimetypes
 from typing import Optional, List
 
-from clipboard_store import CONFIG_DIR
+from stores.clipboard_store import CONFIG_DIR
 from .cleanup import _close_unclosed_code_blocks
 
 

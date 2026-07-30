@@ -9,9 +9,12 @@ import time. Missing files produce a warning but do not crash the app.
 
 import os
 
-# ── KaTeX resource loading ────────────────────────────────────────────────────
+_PKG_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_PKG_DIR)
 
-_KATEX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "katex")
+_KATEX_DIR = os.path.join(_PROJECT_ROOT, "katex")
+if not os.path.isdir(_KATEX_DIR):
+    _KATEX_DIR = os.path.join(_PKG_DIR, "katex")
 
 # Pre-load and cache KaTeX CSS/JS contents for inline embedding in HTML template.
 # This avoids file:// subresource loading issues in WebKit2GTK.
@@ -68,7 +71,9 @@ def _get_pygments_css(theme: str, cache: dict) -> str:
 
 # ── CSS/JS resource loading from html_templates/ ──────────────────────────────
 
-_HTML_TEMPLATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "html_templates")
+_HTML_TEMPLATES_DIR = os.path.join(_PROJECT_ROOT, "html_templates")
+if not os.path.isdir(_HTML_TEMPLATES_DIR):
+    _HTML_TEMPLATES_DIR = os.path.join(_PKG_DIR, "html_templates")
 
 _CHAT_CSS: str = ""
 _CHAT_JS: str = ""
@@ -138,7 +143,7 @@ def get_html_template(theme_name: str, initial_html: str = "",
         Syntax-highlighting CSS from ``_get_pygments_css`` (caller-computed
         to allow caching). Pass empty string to omit highlighting.
     """
-    from theme_config import get_web_css_vars
+    from stores.theme_config import get_web_css_vars
     css_vars = get_web_css_vars(theme_name)
     css_content = _CHAT_CSS
     for key, value in css_vars.items():

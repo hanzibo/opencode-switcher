@@ -88,7 +88,7 @@ def execute_read_qq_mail(max_results: int = 5, folder: str = "INBOX",
     Requires QQ mail IMAP authorization code configured in
     qq_mail_credentials.json or QQ_MAIL_AUTH_CODE env var.
     Uses stdlib imaplib + email — zero external dependencies."""
-    from clipboard_store import QQMailCredentialsStore
+    from stores.clipboard_store import QQMailCredentialsStore
 
     max_results = max(1, min(20, max_results))
 

@@ -7,13 +7,13 @@ try:
 except ImportError:
     GdkX11 = None
 from typing import Optional, Callable, List, Dict
-from session_store import Session
-from clipboard_panel import ClipboardPanel
+from stores.session_store import Session
+from views.clipboard_panel import ClipboardPanel
 import difflib
 import os
 import time
-from utils import relative_time, request_window_focus, PANEL_WIDTH
-from theme_config import get_theme, get_panel_css_vals
+from system.utils import relative_time, request_window_focus, PANEL_WIDTH
+from stores.theme_config import get_theme, get_panel_css_vals
 
 
 def _get_active_monitor_geometry():

@@ -11,23 +11,23 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
 from gi.repository import Gtk, GLib, AyatanaAppIndicator3
 
-from hotkey import HotkeyManager
-from panel import SearchPanel
-from session_store import get_sessions, delete_session, rename_session
-from launcher import launch_session, launch_new_session, launch_session_pure
+from system.hotkey import HotkeyManager
+from views.panel import SearchPanel
+from stores.session_store import get_sessions, delete_session, rename_session
+from system.launcher import launch_session, launch_new_session, launch_session_pure
 # ponytail: removed PromptStore import
-from clipboard_store import ClipboardStore, CategoryStore
-from clipboard_panel import ClipboardPanel
-from memory_manager_dialog import show_memory_manager_dialog
+from stores.clipboard_store import ClipboardStore, CategoryStore
+from views.clipboard_panel import ClipboardPanel
+from dialogs.memory_manager_dialog import show_memory_manager_dialog
 
-from theme_config import load_theme_config
+from stores.theme_config import load_theme_config, save_theme_config, CONFIG_DIR
 
 
 class App:
     def __init__(self):
         self._theme = load_theme_config()
         try:
-            from migrate_history import run_migration
+            from system.migrate_history import run_migration
             run_migration()
         except Exception as e:
             print(f"Failed to run history migration: {e}")
@@ -102,7 +102,7 @@ class App:
     def _on_theme_changed(self, theme: str):
         self._theme = theme
         self._panel.set_theme(theme)
-        from theme_config import save_theme_config
+        from stores.theme_config import save_theme_config
         save_theme_config(theme)
 
     def _confirm_quit(self):
@@ -233,7 +233,7 @@ class App:
 
 if __name__ == "__main__":
     import traceback
-    from theme_config import CONFIG_DIR
+    from stores.theme_config import CONFIG_DIR
 
     # Single-instance lock
     LOCK_PATH = os.path.join(CONFIG_DIR, "lock")

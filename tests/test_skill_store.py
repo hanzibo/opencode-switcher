@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import unittest
 
-from skill_store import SkillStore, _parse_frontmatter, _parse_skill_file
+from stores.skill_store import SkillStore, _parse_frontmatter, _parse_skill_file
 from tool_registry.skill import execute_read_skill
 
 

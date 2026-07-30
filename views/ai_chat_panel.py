@@ -17,12 +17,12 @@ from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, Web
 from typing import Optional, Callable, List, Dict, Any, Tuple, Set
 from copy import deepcopy
 from uuid import uuid4
-from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, AISettingsStore, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P, CONFIG_DIR, _DEFAULT_SUMMARY_TEMPLATE
+from stores.clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, AISettingsStore, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P, CONFIG_DIR, _DEFAULT_SUMMARY_TEMPLATE
 import time
 import requests
 import json
 import base64
-from utils import relative_time, request_window_focus
+from system.utils import relative_time, request_window_focus
 from urllib.parse import urlparse, parse_qs
 from ai_text_utils import (
     _dict_to_chat_message, _extract_after_header, _escape_math,
@@ -37,8 +37,8 @@ from ai_text_utils import (
     set_code_highlight,
 )
 from ai_text_utils.render import _render_tool_card_standalone
-from render_pipeline import render_turn, TurnRenderInput, build_update_js
-from theme_config import get_ai_gtk_colors
+from ai_engine.render_pipeline import render_turn, TurnRenderInput, build_update_js
+from stores.theme_config import get_ai_gtk_colors
 
 # Regex to match placeholders: ${index[:prompt][=default]}
 # - Group 1: index (\d+)
@@ -54,24 +54,24 @@ _MPS_CONSERVATIVE = 0.2
 _MPS_STRICT = 0.4
 
 
-from ai_html_template import get_html_template, _get_pygments_css, get_shared_web_context
-from dynamic_copy_dialog import show_dynamic_copy_dialog
-from sort_dialog import show_sort_dialog
-from recycle_bin_dialog import show_recycle_bin_dialog
-from sort_cats_dialog import show_sort_cats_dialog
-from llm_client import _LLMHttpClient, _LLMHttpError, LLMRequestConfig
-from event_types import StreamEventType
-from prompt_dialog import show_prompt_dialog
-from prompts_config_dialog import show_prompts_config_dialog
-from ai_popovers import AICommandPopover, HistoryPopover
-from ai_tool_loop import run_llm_react_loop, ToolLoopContext
+from ai_engine.ai_html_template import get_html_template, _get_pygments_css, get_shared_web_context
+from dialogs.dynamic_copy_dialog import show_dynamic_copy_dialog
+from dialogs.sort_dialog import show_sort_dialog
+from dialogs.recycle_bin_dialog import show_recycle_bin_dialog
+from dialogs.sort_cats_dialog import show_sort_cats_dialog
+from ai_engine.llm_client import _LLMHttpClient, _LLMHttpError, LLMRequestConfig
+from system.event_types import StreamEventType
+from dialogs.prompt_dialog import show_prompt_dialog
+from dialogs.prompts_config_dialog import show_prompts_config_dialog
+from views.ai_popovers import AICommandPopover, HistoryPopover
+from ai_engine.ai_tool_loop import run_llm_react_loop, ToolLoopContext
 
 AI_BTN_LABEL_SEND = "发送"
 AI_BTN_LABEL_STOP = "暂停"
 
 
 def _to_chat_messages(msgs: List[Dict]) -> List[ChatMessage]:
-    from clipboard_store import ChatMessage
+    from stores.clipboard_store import ChatMessage
     return [ChatMessage(role=m["role"], content=m["content"], 
                         tool_call_id=m.get("tool_call_id"),
                         name=m.get("name"),
@@ -213,7 +213,7 @@ class AIChatPanel(Gtk.Box):
 
     def _build_ui(self):
         # Local import to avoid circular dependency (clipboard_panel imports AIChatPanel)
-        from clipboard_panel import _textview_draw_placeholder, _copy_to_clipboard
+        from views.clipboard_panel import _textview_draw_placeholder, _copy_to_clipboard
         self._copy_to_clipboard = _copy_to_clipboard  # 保存为实例变量供 _on_decide_policy 使用，避免模块级循环导入
 
         # Title / Header
@@ -2488,7 +2488,7 @@ class AIChatPanel(Gtk.Box):
         if self._ai_settings_store is not None:
             default_keep = self._ai_settings_store.trim_target
         else:
-            from clipboard_store import AISettingsStore
+            from stores.clipboard_store import AISettingsStore
             default_keep = AISettingsStore().trim_target
 
         # 2. Parse keep parameter
@@ -2850,7 +2850,7 @@ class AIChatPanel(Gtk.Box):
         return False
 
     def _do_capture_clipboard_image(self):
-        from clipboard_store import _capture_image
+        from stores.clipboard_store import _capture_image
         image_data = _capture_image()
         if not image_data:
             return
@@ -2983,7 +2983,7 @@ class AIChatPanel(Gtk.Box):
         elif raw_arg.startswith("skill:"):
             skill_name = raw_arg[len("skill:"):].strip()
 
-        from skill_store import SkillStore
+        from stores.skill_store import SkillStore
         from tool_registry import get_bash_cwd
         cwd = get_bash_cwd(session_key=self._ai_conversation_id)
         store = SkillStore()

@@ -13,7 +13,7 @@ import re
 import html
 from typing import Optional, List, Dict, Union
 
-from clipboard_store import ChatMessage
+from stores.clipboard_store import ChatMessage
 
 
 USER_AVATAR_HTML = (

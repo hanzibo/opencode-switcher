@@ -9,6 +9,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
 gi.require_version("WebKit2", "4.1")
+gi.require_version("PangoCairo", "1.0")
 import sys
 import hashlib
 import mimetypes
@@ -17,13 +18,13 @@ from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, Web
 from typing import Optional, Callable, List, Dict, Any, Tuple, Set
 from copy import deepcopy
 from uuid import uuid4
-from clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, AISettingsStore, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P, CONFIG_DIR
-from settings_dialog import show_settings_dialog
+from stores.clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, AISettingsStore, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P, CONFIG_DIR
+from dialogs.settings_dialog import show_settings_dialog
 import time
 import requests
 import json
 import base64
-from utils import relative_time, request_window_focus, PANEL_WIDTH
+from system.utils import relative_time, request_window_focus, PANEL_WIDTH
 from urllib.parse import urlparse, parse_qs
 from ai_text_utils import (
     _dict_to_chat_message, _extract_after_header, _escape_math,
@@ -43,16 +44,16 @@ TEMPLATE_REGEX = re.compile(r"\$\{(\d+)(?::((?:[^}=]|\\:|\\=)+))?(?<!\\)(?:=([^}
 PROMPT_PLACEHOLDER_RE = re.compile(r'\\\\|\\(\${&})|(\${&})')
 
 
-from ai_html_template import get_html_template, _get_pygments_css
-from dynamic_copy_dialog import show_dynamic_copy_dialog
-from sort_dialog import show_sort_dialog
-from recycle_bin_dialog import show_recycle_bin_dialog
-from sort_cats_dialog import show_sort_cats_dialog
-from prompt_dialog import show_prompt_dialog
-from prompts_config_dialog import show_prompts_config_dialog
-from ai_popovers import AICommandPopover, HistoryPopover
-from ai_tool_loop import run_llm_react_loop
-from ai_chat_panel import AIChatPanel
+from ai_engine.ai_html_template import get_html_template, _get_pygments_css
+from dialogs.dynamic_copy_dialog import show_dynamic_copy_dialog
+from dialogs.sort_dialog import show_sort_dialog
+from dialogs.recycle_bin_dialog import show_recycle_bin_dialog
+from dialogs.sort_cats_dialog import show_sort_cats_dialog
+from dialogs.prompt_dialog import show_prompt_dialog
+from dialogs.prompts_config_dialog import show_prompts_config_dialog
+from views.ai_popovers import AICommandPopover, HistoryPopover
+from ai_engine.ai_tool_loop import run_llm_react_loop
+from views.ai_chat_panel import AIChatPanel
 
 AI_BTN_LABEL_SEND = "发送"
 AI_BTN_LABEL_STOP = "暂停"
@@ -1270,7 +1271,7 @@ class ClipboardPanel(Gtk.Box):
         if not image_path or not os.path.isfile(image_path):
             return
 
-        from image_preview_dialog import show_image_preview_dialog
+        from dialogs.image_preview_dialog import show_image_preview_dialog
         parent_win = self.get_toplevel()
         show_image_preview_dialog(
             image_path=image_path,

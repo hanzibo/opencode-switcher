@@ -7,7 +7,7 @@ from copy import deepcopy
 from gi.repository import Gtk, Gdk
 from typing import Optional, Callable
 
-from clipboard_store import (
+from stores.clipboard_store import (
     CustomPrompt,
     CustomPromptsStore,
     LLMSettingsStore,

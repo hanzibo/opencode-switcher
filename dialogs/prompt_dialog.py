@@ -1,6 +1,6 @@
 from gi.repository import Gtk
 from typing import Optional, Callable
-from clipboard_store import CategoryItem, CategoryStore
+from stores.clipboard_store import CategoryItem, CategoryStore
 
 def show_prompt_dialog(parent_window, create: bool, existing: Optional[CategoryItem],
                        active_category_id: str, cat_store: CategoryStore,

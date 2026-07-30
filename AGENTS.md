@@ -42,11 +42,11 @@ systemd/.desktop → run.sh → main.py (flock lock)
 | Module | Lines | Role |
 |--------|-------|------|
 | `main.py` | 261 | Entrypoint: flock lock, App(), Gtk.main() |
-| `ai_chat_panel.py` | ~3940 | AI assistant — WebView, ReAct loops, background threads, subagent UI |
-| `clipboard_panel.py` | ~2145 | Clipboard panel — subcomponents + event routing |
-| `panel.py` | ~1372 | Search panel — tab switcher, slash cmds, CSS-in-code, session list |
-| `clipboard_store.py` | ~1310 | God module — clipboard, categories, conversations, memory, prompts |
-| `settings_dialog.py` | ~1260 | Settings dialog — LLM, MCP, and memory management tabs |
+| `views/` | ~7500 | Main UI views (`panel.py`, `clipboard_panel.py`, `ai_chat_panel.py`, `ai_popovers.py`) |
+| `dialogs/` | ~3000 | GTK dialogs (`settings_dialog.py`, `prompts_config_dialog.py`, `memory_manager_dialog.py`, etc.) |
+| `stores/` | ~1800 | Data persistence & state (`clipboard_store.py`, `session_store.py`, `skill_store.py`, `theme_config.py`) |
+| `ai_engine/` | ~1100 | AI LLM engine & rendering (`llm_client.py`, `ai_tool_loop.py`, `ai_html_template.py`, `render_pipeline.py`) |
+| `system/` | ~300 | System IPC & utilities (`hotkey.py`, `launcher.py`, `event_types.py`, `migrate_history.py`, `utils.py`) |
 | `mcp_integration/` | ~2140 | MCP protocol layer (JSON-RPC over stdio, GTK asyncio bridge) |
 | `tool_registry/` | 28 tools across 14 modules | AI tool executors (bash, web, filesystem, code analysis, subagent, search, etc.) |
 | `html_templates/` | ~1910 | Web assets (`chat.js`, `chat.css`) for WebKit WebView rendering |

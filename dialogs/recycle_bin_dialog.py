@@ -14,7 +14,7 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk
 
-from clipboard_store import CategoryItem, CustomCategory
+from stores.clipboard_store import CategoryItem, CustomCategory
 
 
 def show_recycle_bin_dialog(cat_store, parent_window, snippet_color,

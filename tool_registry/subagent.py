@@ -53,7 +53,7 @@ _SUBAGENT_TYPES = {
 
 def _get_llm_config():
     """Read the default LLM model config for sub-agent use."""
-    from clipboard_store import LLMSettingsStore, LLMModelConfig
+    from stores.clipboard_store import LLMSettingsStore, LLMModelConfig
     store = LLMSettingsStore()
     default = next((m for m in store.models if m.is_default), None)
     if default is None and store.models:
@@ -263,7 +263,7 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
         subagent_max_tokens = 4096
 
     try:
-        from llm_client import _LLMHttpClient, _LLMHttpError, LLMRequestConfig
+        from ai_engine.llm_client import _LLMHttpClient, _LLMHttpError, LLMRequestConfig
         llm = _LLMHttpClient()
         final_text = ""
 

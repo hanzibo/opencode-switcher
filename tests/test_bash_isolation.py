@@ -13,7 +13,7 @@ from tool_registry.bash import (
     _STDIN_IDLE_THRESHOLD,
     _check_heredoc,
 )
-from skill_store import SkillStore
+from stores.skill_store import SkillStore
 
 class TestBashIsolation(unittest.TestCase):
     def setUp(self):

@@ -66,7 +66,7 @@ class AICommandPopover(Gtk.Popover):
         # 动态技能补全支持
         if search == "skill" or search.startswith("skill") or search.startswith("skill:") or search.startswith("skill "):
             try:
-                from skill_store import SkillStore
+                from stores.skill_store import SkillStore
                 import tool_registry
                 conv_id = self.conversation_id_fn() if self.conversation_id_fn else None
                 cwd = tool_registry.get_bash_cwd(session_key=conv_id)

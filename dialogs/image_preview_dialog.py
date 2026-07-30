@@ -23,7 +23,7 @@ try:
 except ImportError:
     WebKit2 = None
 
-from ai_html_template import _CHAT_CSS, _CHAT_JS, get_shared_web_context
+from ai_engine.ai_html_template import _CHAT_CSS, _CHAT_JS, get_shared_web_context
 
 
 def show_image_preview_dialog(

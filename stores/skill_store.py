@@ -154,7 +154,7 @@ class SkillStore:
             self.enable_global_skills = enable_global_skills
         else:
             try:
-                from clipboard_store import AISettingsStore
+                from stores.clipboard_store import AISettingsStore
                 self.enable_global_skills = AISettingsStore().enable_global_skills
             except Exception:
                 self.enable_global_skills = True
@@ -163,7 +163,7 @@ class SkillStore:
             self.disabled_skills = set(disabled_skills)
         else:
             try:
-                from clipboard_store import AISettingsStore
+                from stores.clipboard_store import AISettingsStore
                 self.disabled_skills = set(AISettingsStore().disabled_skills)
             except Exception:
                 self.disabled_skills = set()

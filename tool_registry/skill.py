@@ -3,7 +3,7 @@
 
 import logging
 from typing import Any, Dict, List, Optional
-from skill_store import SkillStore
+from stores.skill_store import SkillStore
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ import requests
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Generator
 
-from clipboard_store import (
+from stores.clipboard_store import (
     DEFAULT_TEMPERATURE,
     DEFAULT_MAX_TOKENS,
     DEFAULT_TOP_P,
@@ -19,7 +19,7 @@ from ai_text_utils import (
     _strip_ai_markup,
 )
 import tool_registry
-from event_types import (
+from system.event_types import (
     StreamEvent, StreamEventType, ToolCallData,
     text_delta, reasoning_delta, tool_calls_event, stream_end,
     parse_tool_call_from_dict,

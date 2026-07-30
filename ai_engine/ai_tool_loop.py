@@ -15,10 +15,8 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from gi.repository import GLib
 
 import tool_registry
-from event_types import StreamEventType, ToolCallData, tool_call_to_dict
-from llm_client import _LLMHttpError
-# clean_messages_for_llm 已移至 llm_client 模块
-from llm_client import clean_messages_for_llm
+from system.event_types import StreamEventType, ToolCallData, tool_call_to_dict
+from ai_engine.llm_client import _LLMHttpError, clean_messages_for_llm
 
 if TYPE_CHECKING:
     from mcp_integration.client_manager import MCPClientManager
@@ -32,7 +30,7 @@ _MAX_TOOL_ITERATIONS: Optional[int] = None
 def _get_max_tool_iterations() -> int:
     global _MAX_TOOL_ITERATIONS
     if _MAX_TOOL_ITERATIONS is None:
-        from clipboard_store import AISettingsStore
+        from stores.clipboard_store import AISettingsStore
         _MAX_TOOL_ITERATIONS = AISettingsStore().max_tool_iterations
     return _MAX_TOOL_ITERATIONS
 
@@ -173,7 +171,7 @@ def run_llm_react_loop(
 
         # 在首轮注入当前工作区可用的 Skills 摘要（进行排重检查，避免重复追加）
         try:
-            from skill_store import SkillStore
+            from stores.skill_store import SkillStore
             cwd = tool_registry.get_bash_cwd()
             skills_prompt = SkillStore().get_skills_prompt_summary(cwd=cwd)
             if skills_prompt:

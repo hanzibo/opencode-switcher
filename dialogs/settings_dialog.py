@@ -20,7 +20,7 @@ from typing import Optional, Callable
 
 import threading
 
-from clipboard_store import QQMailCredentialsStore, GmailOAuthStore, AISettingsStore
+from stores.clipboard_store import QQMailCredentialsStore, GmailOAuthStore, AISettingsStore
 from ai_text_utils import set_code_highlight
 from mcp_integration import MCPServerConfig, MCPClientManager
 
@@ -680,7 +680,7 @@ class SettingsDialog:
 
     def _build_skill_toggle_section(self, parent_vbox):
         """动态渲染每个已扫描到的 Skill 的独立使能开关。"""
-        from skill_store import SkillStore
+        from stores.skill_store import SkillStore
         from tool_registry import get_bash_cwd
 
         cwd = get_bash_cwd()
@@ -1545,7 +1545,7 @@ class SettingsDialog:
         # 主题设置
         new_theme = "light" if self._theme_light_radio.get_active() else "dark"
         if new_theme != self._current_theme:
-            from theme_config import save_theme_config
+            from stores.theme_config import save_theme_config
             save_theme_config(new_theme)
             if self._on_theme_changed:
                 self._on_theme_changed(new_theme)

@@ -2,7 +2,7 @@
 
 from gi.repository import Gtk, GLib
 from typing import Optional, Callable
-from clipboard_store import MemStore
+from stores.clipboard_store import MemStore
 
 
 def show_memory_manager_dialog(parent,

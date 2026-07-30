@@ -50,7 +50,7 @@ from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Any, Union
 from uuid import uuid4
 
-from utils import CONVERSATIONS_DIR
+from system.utils import CONVERSATIONS_DIR
 
 CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
 CLIPBOARD_PATH = os.path.join(CONFIG_DIR, "clipboard_history.json")

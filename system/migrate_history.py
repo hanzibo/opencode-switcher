@@ -7,7 +7,7 @@ CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
 CLIPBOARD_PATH = os.path.join(CONFIG_DIR, "clipboard_history.json")
 
 from typing import Optional
-from clipboard_store import classify_text, detect_language_name
+from stores.clipboard_store import classify_text, detect_language_name
 
 def run_migration():
     if not os.path.isfile(CLIPBOARD_PATH):
