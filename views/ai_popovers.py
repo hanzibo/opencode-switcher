@@ -583,7 +583,7 @@ class HistoryPopover(Gtk.Popover):
                 title = cleaned_title[:22] + "..."
             else:
                 title = cleaned_title
-            count = len([m for m in conv.messages if (m.get("role") if isinstance(m, dict) else getattr(m, "role", "")) != "system"]) if conv.messages else 0
+            count = len(conv.messages) if conv.messages else 0
             label = f"{title} ({count}条)"
             self.history_btn_label.set_text(label)
             return
