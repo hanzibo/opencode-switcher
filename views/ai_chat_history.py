@@ -379,7 +379,7 @@ class AIChatHistoryManager:
                 summaries.append({
                     "id": active_conv_id,
                     "title": title,
-                    "message_count": len(ai_messages),
+                    "message_count": len([m for m in ai_messages if (m.get("role") if isinstance(m, dict) else getattr(m, "role", "")) != "system"]),
                     "updated_at": int(time.time() * 1000),
                 })
                 existing_ids.add(active_conv_id)
@@ -398,7 +398,7 @@ class AIChatHistoryManager:
                     summaries.append({
                         "id": cid,
                         "title": title,
-                        "message_count": len(msgs),
+                        "message_count": len([m for m in msgs if (m.get("role") if isinstance(m, dict) else getattr(m, "role", "")) != "system"]),
                         "updated_at": int(time.time() * 1000),
                     })
                     existing_ids.add(cid)

@@ -789,7 +789,7 @@ class ConversationStore:
                     "id": data.get("id", ""),
                     "title": data.get("title", "(untitled)"),
                     "summary": data.get("summary", ""),
-                    "message_count": len(data.get("messages", [])),
+                    "message_count": len([m for m in data.get("messages", []) if (m.get("role") if isinstance(m, dict) else getattr(m, "role", "")) != "system"]),
                     "updated_at": data.get("updated_at", 0),
                 })
             except Exception:

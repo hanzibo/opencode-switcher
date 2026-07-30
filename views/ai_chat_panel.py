@@ -1610,7 +1610,7 @@ class AIChatPanel(Gtk.Box):
                 if isinstance(first_msg, list):
                     first_msg = next((p["text"] for p in first_msg if isinstance(p, dict) and p.get("type") == "text"), "")
                 title = first_msg[:30] if first_msg else "New Conversation"
-                summaries.append({"id": active_id, "title": title, "message_count": len(self._ai_messages), "updated_at": int(time.time() * 1000)})
+                summaries.append({"id": active_id, "title": title, "message_count": len([m for m in self._ai_messages if (m.get("role") if isinstance(m, dict) else getattr(m, "role", "")) != "system"]), "updated_at": int(time.time() * 1000)})
                 existing_ids.add(active_id)
         for cid, st in list(self._ai_running_convs.items()):
             if cid not in existing_ids:
@@ -1620,7 +1620,7 @@ class AIChatPanel(Gtk.Box):
                     if isinstance(first_msg, list):
                         first_msg = next((p["text"] for p in first_msg if isinstance(p, dict) and p.get("type") == "text"), "")
                     title = first_msg[:30] if first_msg else "New Conversation"
-                    summaries.append({"id": cid, "title": title, "message_count": len(msgs), "updated_at": int(time.time() * 1000)})
+                    summaries.append({"id": cid, "title": title, "message_count": len([m for m in msgs if (m.get("role") if isinstance(m, dict) else getattr(m, "role", "")) != "system"]), "updated_at": int(time.time() * 1000)})
                     existing_ids.add(cid)
         summaries.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
         return summaries
