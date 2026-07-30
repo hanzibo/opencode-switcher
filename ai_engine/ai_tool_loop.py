@@ -317,7 +317,15 @@ def _perform_llm_call(
             if ctx.get_current_request_id_fn() != ctx.req_id:
                 return False
 
-            # 增量工具结果通知（v3 特性）
+            # 1. 先追加 tool 结果消息到 messages 消息列表中
+            ctx.append_message_fn({
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "name": tc.name,
+                "content": result,
+            })
+
+            # 2. 再触发 UI 增量工具结果通知（确保 UI 定时器重新渲染时能读到已完成状态）
             if ctx.on_tool_result_fn is not None:
                 status = ("cancelled" if ctx.cancel_event and ctx.cancel_event.is_set()
                           else "error" if result.strip().startswith(tool_registry.ERROR_PREFIXES)
@@ -326,33 +334,20 @@ def _perform_llm_call(
 
             # 用户取消 → 追加已取消后缀
             if ctx.cancel_event and ctx.cancel_event.is_set():
-                ctx.append_message_fn({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "name": tc.name,
-                    "content": result,
-                })
                 # 剩余未执行的工具标记为已取消
                 for remaining_tc in tool_calls_found[tc_idx + 1:]:
-                    if ctx.on_tool_result_fn is not None:
-                        ctx.on_tool_result_fn(
-                            remaining_tc.id, tool_registry.TOOL_CANCELLED, "cancelled",
-                        )
                     ctx.append_message_fn({
                         "role": "tool",
                         "tool_call_id": remaining_tc.id,
                         "name": remaining_tc.name,
                         "content": tool_registry.TOOL_CANCELLED,
                     })
+                    if ctx.on_tool_result_fn is not None:
+                        ctx.on_tool_result_fn(
+                            remaining_tc.id, tool_registry.TOOL_CANCELLED, "cancelled",
+                        )
                 GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)
                 return False
-
-            ctx.append_message_fn({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "name": tc.name,
-                "content": result,
-            })
 
         if ctx.cancel_event and ctx.cancel_event.is_set():
             GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)
