@@ -1168,7 +1168,7 @@ class AIChatPanel(Gtk.Box):
         # Initialize conversation background state
         state = {
             "streaming": True,
-            "messages": list(messages),  # Create a shallow copy of messages list
+            "messages": deepcopy(messages),  # Deep copy messages list to isolate background state
             "cancel_event": cancel_event,
             "current_assistant_text": "",
             "current_reasoning_text": "",
@@ -1197,16 +1197,17 @@ class AIChatPanel(Gtk.Box):
                 self._reasoning_flush_scheduled = False
 
         def append_message_callback(msg):
+            msg_copy = deepcopy(msg) if isinstance(msg, dict) else msg
             st = self._ai_running_convs.get(conv_id)
             if st:
-                st["messages"].append(msg)
+                st["messages"].append(msg_copy)
             if self._ai_conversation_id == conv_id:
                 if st:
                     self._ai_messages = st["messages"]
                 else:
                     # State was popped (e.g. pause during tool execution).
                     # Append directly to keep message history valid.
-                    self._ai_messages.append(msg)
+                    self._ai_messages.append(msg_copy)
                     if msg.get("role") == "tool" and self._ai_streaming is False:
                         GLib.idle_add(self._re_render_after_tool_cancel)
 
