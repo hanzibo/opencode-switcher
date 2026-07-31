@@ -10,3 +10,4 @@ venv/
 codebase_analysis.md
 monitor-resources.sh
 .playwright-mcp/
+tests/
