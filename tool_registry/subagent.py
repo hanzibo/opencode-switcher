@@ -138,8 +138,11 @@ def _notify_subagent_status_change(subagent_id: str, status_info: Optional[dict]
             if is_main_thread:
                 cb(subagent_id, status_info)
             else:
-                # idle_add 跨线程安全，会调度到主循环，由主线程执行回调
-                GLib.idle_add(cb, subagent_id, status_info)
+                # 深拷贝状态快照：idle_add 是异步投递，回调执行时若直接引用共享 dict，
+                # 会读到被后续更新覆盖后的最终值（连续动作事件全部变成最后一次动作）。
+                # 因此必须投递入队时刻的快照。
+                snapshot = copy.deepcopy(status_info) if status_info is not None else None
+                GLib.idle_add(cb, subagent_id, snapshot)
     except Exception as e:
         import sys
         print(f"[opencode-switcher] Error notifying subagent status change: {e}", file=sys.stderr)
@@ -241,6 +244,13 @@ def _run_subagent_background(task: str, max_turns: int, agent_type: str,
         if prev is None:
             return
 
+        # 结果始终写入（错误信息也写入 results，供主代理按 sid 消费/查看）
+        _background_subagent_results[subagent_id] = result
+
+        if prev.get("status") == "failed":
+            # 执行失败：保持 failed 状态，不覆盖为 completed（错误详情已广播并在结果中）
+            return
+
         _background_subagent_status[subagent_id] = {
             "task": prev.get("task", task[:100]),
             "started_at": prev.get("started_at", 0),
@@ -250,7 +260,6 @@ def _run_subagent_background(task: str, max_turns: int, agent_type: str,
             "conv_id": prev.get("conv_id"),
         }
         # 先写 results 再通知：UI 收到 completed 事件时结果必定可被消费
-        _background_subagent_results[subagent_id] = result
         _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])
         try:
             from .notification import execute_send_notification
@@ -275,13 +284,26 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
     sub_tools = _build_subagent_tools(agent_type)
     type_info = _SUBAGENT_TYPES[agent_type]
 
+    # 记录上次已广播的 action，用于去重（闭包，仅本次执行内有效）
+    last_broadcast_action = [None]
+
     def _update_action(action_str: str):
         if subagent_id and subagent_id in _background_subagent_status:
-            info = _background_subagent_status[subagent_id]
-            # 相同 action 不重复广播，避免事件风暴
-            if info.get("action") == action_str:
+            # 基于"上次已广播的 action"去重：连续相同动作不重复广播，
+            # 但首次调用（即使与预设状态一致）仍广播一次，保证事件流完整。
+            if last_broadcast_action[0] == action_str:
                 return
+            last_broadcast_action[0] = action_str
+            info = _background_subagent_status[subagent_id]
             info["action"] = action_str
+            _notify_subagent_status_change(subagent_id, info)
+
+    def _mark_failed():
+        """子代理执行失败时，将状态标记为 failed 并广播（有 subagent_id 时）。"""
+        if subagent_id and subagent_id in _background_subagent_status:
+            info = _background_subagent_status[subagent_id]
+            info["status"] = "failed"
+            info["action"] = "失败"
             _notify_subagent_status_change(subagent_id, info)
 
     local_session = _BashSession()
@@ -303,16 +325,19 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
         _bash_state.cwd = saved_bash_cwd
         _bash_state.session = saved_bash_session
         local_session.stop()
+        _mark_failed()
         return f"错误：{e}"
     if not config.api_key:
         _bash_state.cwd = saved_bash_cwd
         _bash_state.session = saved_bash_session
         local_session.stop()
+        _mark_failed()
         return "错误：未配置 LLM API key。请在 AI 设置中配置。"
     if not config.base_url:
         _bash_state.cwd = saved_bash_cwd
         _bash_state.session = saved_bash_session
         local_session.stop()
+        _mark_failed()
         return "错误：未配置 LLM base URL。请在 AI 设置中配置。"
 
     from stores.clipboard_store import AISettingsStore
@@ -354,8 +379,10 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
                     messages=messages,
                 )
             except _LLMHttpError as e:
+                _mark_failed()
                 return f"子代理 LLM 请求失败：{e}"
             except Exception as e:
+                _mark_failed()
                 return f"子代理 LLM 请求异常：{e}"
 
             content = response.get("content") or ""
