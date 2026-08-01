@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import threading
 import requests
 from dataclasses import dataclass
@@ -24,6 +25,48 @@ from system.event_types import (
     text_delta, reasoning_delta, tool_calls_event, stream_end,
     parse_tool_call_from_dict,
 )
+
+
+def _extract_http_error_details(e: Exception) -> str:
+    """Extract detailed status code and error message from a requests exception."""
+    resp = getattr(e, "response", None)
+    status = resp.status_code if resp is not None else "?"
+
+    if resp is None:
+        return f"HTTP {status}: {e}"
+
+    # Try parsing JSON error object
+    try:
+        data = resp.json()
+        if isinstance(data, dict):
+            err_obj = data.get("error")
+            if isinstance(err_obj, dict):
+                msg = err_obj.get("message")
+                if msg:
+                    return f"HTTP {status}: {msg}"
+            elif isinstance(err_obj, str) and err_obj:
+                return f"HTTP {status}: {err_obj}"
+
+            msg = data.get("message") or data.get("detail")
+            if msg:
+                return f"HTTP {status}: {msg}"
+    except Exception:
+        pass
+
+    # Try reading text response (strip HTML tags or limit length)
+    if resp.text:
+        text = resp.text.strip()
+        if text.startswith("<html") or text.startswith("<!DOCTYPE"):
+            m = re.search(r"<title>(.*?)</title>", text, re.IGNORECASE)
+            if m:
+                text = m.group(1).strip()
+            else:
+                text = re.sub(r"<[^>]+>", " ", text)[:200].strip()
+        elif len(text) > 300:
+            text = text[:300] + "..."
+        return f"HTTP {status}: {text}"
+
+    return f"HTTP {status}: {e}"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -289,10 +332,17 @@ class _LLMHttpClient:
         tuple
             (url, headers, body)
         """
-        url = config.base_url.rstrip("/") + "/chat/completions"
+        base_url = (config.base_url or "").strip().rstrip("/")
+        if base_url.endswith("/chat/completions"):
+            url = base_url
+        else:
+            url = base_url + "/chat/completions"
+
+        api_key = (config.api_key or "").strip()
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {config.api_key}",
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": "OpenCodeSwitcher/1.0 (Linux; GTK3)",
         }
 
         cleaned_messages = []
@@ -433,17 +483,13 @@ class _LLMHttpClient:
         except requests.exceptions.HTTPError as e:
             if self._active_response_check_cancel(cancel_event):
                 return
-            status = e.response.status_code if e.response is not None else "?"
-            try:
-                err_body = e.response.json() if e.response is not None else {}
-                err_msg = err_body.get("error", {}).get("message", str(e))
-            except Exception:
-                err_msg = str(e)
-            raise _LLMHttpError(f"HTTP {status}: {err_msg}")
+            err_msg = _extract_http_error_details(e)
+            raise _LLMHttpError(err_msg)
         except requests.exceptions.RequestException as e:
             if self._active_response_check_cancel(cancel_event):
                 return
-            raise _LLMHttpError(f"请求异常：{e}")
+            err_msg = _extract_http_error_details(e) if getattr(e, "response", None) is not None else str(e)
+            raise _LLMHttpError(f"请求异常：{err_msg}")
 
     def cancel_active_request(self):
         """Close the active HTTP response to unblock the SSE streaming thread.
@@ -501,6 +547,7 @@ class _LLMHttpClient:
                     print(f"[sync_chat] usage: {data['usage']}", flush=True)
             return msg
         except requests.exceptions.RequestException as e:
-            raise _LLMHttpError(f"请求异常：{e}")
+            err_msg = _extract_http_error_details(e) if getattr(e, "response", None) is not None else str(e)
+            raise _LLMHttpError(f"请求异常：{err_msg}")
         except (KeyError, IndexError, json.JSONDecodeError) as e:
             raise _LLMHttpError(f"同步请求解析失败：{e}")
