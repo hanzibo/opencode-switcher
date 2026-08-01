@@ -2022,12 +2022,16 @@ class AIChatPanel(Gtk.Box):
         """Remove a sub-agent block and clean up state."""
         self._ai_selected_subagents.discard(sid)
         entry = self._ai_subagent_blocks.pop(sid, None)
-        if entry:
-            if not self._ai_subagent_blocks:
-                self._ai_subagent_bar.get_style_context().remove_class("subagent-status-bar")
-                self._ai_subagent_bar.hide()
-            child, _event_box, _box = entry
+        if not entry:
+            return
+        child, _event_box, _box = entry
+        # 防御：child 可能已被手动移除（如发送路径先 remove 再触发异步 None 事件，
+        # 或清理竞态下重复移除），GTK 对非子 widget 的 remove 虽为 no-op，仍显式跳过
+        if child.get_parent() is not None:
             self._ai_subagent_bar.remove(child)
+        if not self._ai_subagent_blocks:
+            self._ai_subagent_bar.get_style_context().remove_class("subagent-status-bar")
+            self._ai_subagent_bar.hide()
 
     def _clear_subagent_bar_instantly(self):
         """Instantly clear all subagent blocks from the status bar UI."""
@@ -2234,8 +2238,16 @@ class AIChatPanel(Gtk.Box):
             for sid in sorted(self._ai_selected_subagents):
                 info = get_subagent_status_map().get(sid, {})
                 task_desc = info.get("task", "未知任务")
+                # 状态文案动态化：failed 时不再硬编码"已完成"（🟡-2）
+                status = info.get("status", "completed")
+                if status == "failed":
+                    status_text = "已失败"
+                elif status == "completed":
+                    status_text = "已完成"
+                else:
+                    status_text = "已结束"
                 parts.append(
-                    f"后台子代理 {sid} 已完成\n"
+                    f"后台子代理 {sid} {status_text}\n"
                     f"任务: {task_desc}\n"
                     f"结果文件: /tmp/opencode_subagent_{sid}_result.txt"
                 )

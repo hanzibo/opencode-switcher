@@ -106,6 +106,11 @@ _background_subagent_id = 0
 _background_subagent_results: Dict[str, str] = {}
 _background_subagent_status: Dict[str, Dict[str, Any]] = {}
 _subagent_status_listeners = []
+# 保护 _background_subagent_status / _background_subagent_results 的并发访问：
+# 后台线程（子代理执行、tool-loop）与 GTK 主线程（UI 读取/删除）无锁共享，
+# 深拷贝迭代期间他线程新增键会抛 RuntimeError（dict changed size during iteration），
+# 且 remove 与"prev 检查→写回"之间需要原子性（防止状态复活）。RLock 支持重入。
+_status_lock = threading.RLock()
 
 
 def register_subagent_status_listener(callback):
@@ -126,22 +131,25 @@ def _notify_subagent_status_change(subagent_id: str, status_info: Optional[dict]
             from gi.repository import GLib
         except ImportError:
             GLib = None
+        # 先构造快照：主线程同步调用与 idle_add 异步投递统一使用入队/调用时刻的快照，
+        # 避免回调读到被后续更新覆盖后的最终值（连续动作事件全部变成最后一次动作）。
+        # 快照在循环外构造一次，多监听者共享同一份。
+        snapshot = copy.deepcopy(status_info) if status_info is not None else None
         if GLib is None:
             for cb in list(_subagent_status_listeners):
-                cb(subagent_id, status_info)
+                cb(subagent_id, snapshot)
             return
-        # 判断当前线程是否是 GLib 主上下文所有者（即 GTK 主线程）。
-        # 注意：不能使用 GLib.main_depth()——后台线程中它恒为 0，
-        # 会导致 UI 回调在后台线程被直接执行（GTK 非主线程操作 = 未定义行为）。
-        is_main_thread = GLib.main_context_default().is_owner()
+        # 判断当前线程是否为 GTK 主线程：双条件——
+        # ① 是 Python 主线程；② 是 GLib 主上下文所有者（GTK 主循环所在线程）。
+        # 不能只用 GLib.main_depth()（后台线程恒 0）；也不能只用 is_owner()（被 push
+        # thread-default context 的后台线程可能误判为 True）。
+        is_main_thread = (threading.current_thread() is threading.main_thread()
+                          and GLib.main_context_default().is_owner())
         for cb in list(_subagent_status_listeners):
             if is_main_thread:
-                cb(subagent_id, status_info)
+                cb(subagent_id, snapshot)
             else:
-                # 深拷贝状态快照：idle_add 是异步投递，回调执行时若直接引用共享 dict，
-                # 会读到被后续更新覆盖后的最终值（连续动作事件全部变成最后一次动作）。
-                # 因此必须投递入队时刻的快照。
-                snapshot = copy.deepcopy(status_info) if status_info is not None else None
+                # idle_add 跨线程安全，会调度到主循环，由主线程执行回调
                 GLib.idle_add(cb, subagent_id, snapshot)
     except Exception as e:
         import sys
@@ -150,15 +158,17 @@ def _notify_subagent_status_change(subagent_id: str, status_info: Optional[dict]
 
 def get_subagent_status_map() -> Dict[str, Dict[str, Any]]:
     # 深拷贝：避免 UI 持有的 info 与后台线程共享内层 dict，
-    # 防止 _update_action 原地修改被 UI 侧意外观察到。
-    return copy.deepcopy(_background_subagent_status)
+    # 防止 _update_action 原地修改被 UI 侧意外观察到。持锁防止迭代期间 dict 扩容。
+    with _status_lock:
+        return copy.deepcopy(_background_subagent_status)
 
 
 def remove_subagent_status(subagent_id: str):
     global _background_subagent_status, _background_subagent_results
-    _background_subagent_status.pop(subagent_id, None)
-    # 同步清理未消费的结果，避免残留条目永久泄漏
-    _background_subagent_results.pop(subagent_id, None)
+    with _status_lock:
+        _background_subagent_status.pop(subagent_id, None)
+        # 同步清理未消费的结果，避免残留条目永久泄漏
+        _background_subagent_results.pop(subagent_id, None)
     _notify_subagent_status_change(subagent_id, None)
 
 
@@ -173,53 +183,62 @@ def check_background_subagents(conv_id: Optional[str] = None,
     - conv_id（默认）：按对话 ID 匹配（tool loop 后台线程使用）。
     """
     global _background_subagent_results
-    if not _background_subagent_results:
-        return ""
+    with _status_lock:
+        if not _background_subagent_results:
+            return ""
 
-    if subagent_ids:
-        matching_sids = [str(s) for s in subagent_ids
-                         if str(s) in _background_subagent_results]
-    else:
-        if conv_id is None:
-            conv_id = get_current_conversation_id()
-        matching_sids = []
-        for sid in list(_background_subagent_results.keys()):
-            sid_conv_id = _background_subagent_status.get(sid, {}).get("conv_id")
-            if sid_conv_id == conv_id:
-                matching_sids.append(sid)
+        if subagent_ids:
+            matching_sids = [str(s) for s in subagent_ids
+                             if str(s) in _background_subagent_results]
+        else:
+            if conv_id is None:
+                conv_id = get_current_conversation_id()
+            matching_sids = []
+            for sid in list(_background_subagent_results.keys()):
+                sid_conv_id = _background_subagent_status.get(sid, {}).get("conv_id")
+                if sid_conv_id == conv_id:
+                    matching_sids.append(sid)
 
-    if not matching_sids:
-        return ""
+        if not matching_sids:
+            return ""
 
-    parts = []
-    for sid in sorted(matching_sids):
-        parts.append(
-            f"## 后台子代理 {sid} 已完成\n"
-            f"结果文件: /tmp/opencode_subagent_{sid}_result.txt\n\n"
-            f"请使用 read_file 读取结果文件以获取详细信息。"
-        )
-        _background_subagent_results.pop(sid, None)
+        parts = []
+        for sid in sorted(matching_sids):
+            parts.append(
+                f"## 后台子代理 {sid} 已完成\n"
+                f"结果文件: /tmp/opencode_subagent_{sid}_result.txt\n\n"
+                f"请使用 read_file 读取结果文件以获取详细信息。"
+            )
+            _background_subagent_results.pop(sid, None)
 
-    return "\n\n---\n\n".join(parts)
+        return "\n\n---\n\n".join(parts)
 
 
 def _cleanup_expired_subagents():
-    """清理超过 _SUBAGENT_CLEANUP_AGE 的已完成子代理状态与结果（防止无限累积）。
+    """清理超过 _SUBAGENT_CLEANUP_AGE 的已完成/失败子代理状态与结果（防止无限累积）。
 
     在启动新子代理与查询状态时顺带调用，避免只依赖主代理主动调用
-    get_subagent_status 才触发清理。
+    get_subagent_status 才触发清理。failed 条目以 failed_at 为时间基准，
+    避免失败记录永久残留（🔴-1）。
     """
     global _background_subagent_status, _background_subagent_results
-    now = time.time()
-    to_remove = []
-    for sid, info in list(_background_subagent_status.items()):
-        if info.get("status") == "completed":
-            completed_at = info.get("completed_at", 0)
-            if completed_at and (now - completed_at) > _SUBAGENT_CLEANUP_AGE:
+    with _status_lock:
+        now = time.time()
+        to_remove = []
+        for sid, info in list(_background_subagent_status.items()):
+            status = info.get("status")
+            if status == "completed":
+                ts = info.get("completed_at", 0)
+            elif status == "failed":
+                ts = info.get("failed_at", 0)
+            else:
+                continue
+            if ts and (now - ts) > _SUBAGENT_CLEANUP_AGE:
                 to_remove.append(sid)
+        for sid in to_remove:
+            _background_subagent_status.pop(sid, None)
+            _background_subagent_results.pop(sid, None)
     for sid in to_remove:
-        _background_subagent_status.pop(sid, None)
-        _background_subagent_results.pop(sid, None)
         _notify_subagent_status_change(sid, None)
 
 
@@ -227,7 +246,26 @@ def _run_subagent_background(task: str, max_turns: int, agent_type: str,
                              subagent_id: str, max_tokens: Optional[int] = None):
     def _run():
         global _background_subagent_results, _background_subagent_status
-        raw_result = _execute_subagent_sync(task, max_turns, agent_type, max_tokens=max_tokens, subagent_id=subagent_id)
+        try:
+            # 兜底捕获：任何未预料异常（LLM 内部、html.unescape、竞态等）都不能让
+            # 线程静默死亡导致状态永久卡在 running（🔴-2），一律收敛到 failed。
+            raw_result = _execute_subagent_sync(task, max_turns, agent_type,
+                                                max_tokens=max_tokens, subagent_id=subagent_id)
+        except Exception as e:
+            raw_result = f"错误：子代理执行异常 — {e!r}"
+            # 标记 failed 并广播（模拟 _mark_failed），确保异常场景也收敛到 failed。
+            # 注意：此处的广播发生在 results 写入之前，与 _execute_subagent_sync
+            # 内部 _mark_failed 的时序一致（🟠-4：先落盘/写 results 再广播为理想顺序，
+            # 失败路径依赖 idle 队列 FIFO 兜底，已加注释固化该约定）。
+            _failed_info = None
+            with _status_lock:
+                _failed_info = _background_subagent_status.get(subagent_id)
+                if _failed_info is not None:
+                    _failed_info["status"] = "failed"
+                    _failed_info["action"] = "失败"
+                    _failed_info["failed_at"] = time.time()
+            if _failed_info is not None:
+                _notify_subagent_status_change(subagent_id, _failed_info)
         result = html.unescape(raw_result)
         result_path = f"/tmp/opencode_subagent_{subagent_id}_result.txt"
         # 先落盘结果文件，再更新状态并通知，避免 UI 收到 completed 时文件尚不存在
@@ -237,30 +275,27 @@ def _run_subagent_background(task: str, max_turns: int, agent_type: str,
         except OSError:
             pass
 
-        # 状态可能在运行期间被 remove_subagent_status 移除（用户已丢弃该记录）。
-        # 此时不再复活 UI 状态、不写 results（避免 started_at=0 / conv_id=None 的
-        # 脏状态与结果泄漏），仅保留已落盘的结果文件供 read_file 读取。
-        prev = _background_subagent_status.get(subagent_id)
-        if prev is None:
-            return
-
-        # 结果始终写入（错误信息也写入 results，供主代理按 sid 消费/查看）
-        _background_subagent_results[subagent_id] = result
-
-        if prev.get("status") == "failed":
-            # 执行失败：保持 failed 状态，不覆盖为 completed（错误详情已广播并在结果中）
-            return
-
-        _background_subagent_status[subagent_id] = {
-            "task": prev.get("task", task[:100]),
-            "started_at": prev.get("started_at", 0),
-            "status": "completed",
-            "action": "已完成",
-            "completed_at": time.time(),
-            "conv_id": prev.get("conv_id"),
-        }
-        # 先写 results 再通知：UI 收到 completed 事件时结果必定可被消费
-        _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])
+        with _status_lock:
+            # 锁内二次确认：状态可能在运行期间被 remove_subagent_status 移除。
+            # "检查 prev + 写回"必须与 remove 互斥（TOCTOU），否则会复活状态并重写 results。
+            prev = _background_subagent_status.get(subagent_id)
+            if prev is None:
+                return
+            # 结果始终写入（错误信息也写入 results，供主代理按 sid 消费/查看）
+            _background_subagent_results[subagent_id] = result
+            if prev.get("status") == "failed":
+                # 执行失败：保持 failed 状态，不覆盖为 completed（错误详情已广播并在结果中）
+                return
+            _background_subagent_status[subagent_id] = {
+                "task": prev.get("task", task[:100]),
+                "started_at": prev.get("started_at", 0),
+                "status": "completed",
+                "action": "已完成",
+                "completed_at": time.time(),
+                "conv_id": prev.get("conv_id"),
+            }
+            # 先写 results 再通知：UI 收到 completed 事件时结果必定可被消费
+            _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])
         try:
             from .notification import execute_send_notification
             summary = result[:100] + "..." if len(result) > 100 else result
@@ -284,26 +319,38 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
     sub_tools = _build_subagent_tools(agent_type)
     type_info = _SUBAGENT_TYPES[agent_type]
 
-    # 记录上次已广播的 action，用于去重（闭包，仅本次执行内有效）
-    last_broadcast_action = [None]
+    # 记录上次已广播的 action，用于去重（闭包，仅本次执行内有效）。
+    # 初始值 "Thinking" 与 execute_sub_agent 预置状态一致：生产路径下预置 Thinking
+    # 已广播过，线程内首个 Thinking 不应重复广播（🟡-1）。
+    last_broadcast_action = ["Thinking"]
 
     def _update_action(action_str: str):
-        if subagent_id and subagent_id in _background_subagent_status:
-            # 基于"上次已广播的 action"去重：连续相同动作不重复广播，
-            # 但首次调用（即使与预设状态一致）仍广播一次，保证事件流完整。
-            if last_broadcast_action[0] == action_str:
-                return
-            last_broadcast_action[0] = action_str
-            info = _background_subagent_status[subagent_id]
-            info["action"] = action_str
+        if subagent_id:
+            with _status_lock:
+                info = _background_subagent_status.get(subagent_id)
+                if info is None:
+                    # 状态已被移除（如 remove_subagent_status），不再更新
+                    return
+                # 基于"上次已广播的 action"去重：连续相同动作不重复广播
+                if last_broadcast_action[0] == action_str:
+                    return
+                last_broadcast_action[0] = action_str
+                info["action"] = action_str
             _notify_subagent_status_change(subagent_id, info)
 
     def _mark_failed():
-        """子代理执行失败时，将状态标记为 failed 并广播（有 subagent_id 时）。"""
-        if subagent_id and subagent_id in _background_subagent_status:
-            info = _background_subagent_status[subagent_id]
-            info["status"] = "failed"
-            info["action"] = "失败"
+        """子代理执行失败时，将状态标记为 failed 并广播（有 subagent_id 时）。
+
+        记录 failed_at 作为过期清理的时间基准（🔴-1）。
+        """
+        if subagent_id:
+            with _status_lock:
+                info = _background_subagent_status.get(subagent_id)
+                if info is None:
+                    return
+                info["status"] = "failed"
+                info["action"] = "失败"
+                info["failed_at"] = time.time()
             _notify_subagent_status_change(subagent_id, info)
 
     local_session = _BashSession()
@@ -459,13 +506,14 @@ def execute_sub_agent(task: str, max_turns: int = 10,
         conv_id = get_current_conversation_id()
         short_hash = get_conv_short_hash(conv_id)
         subagent_id = f"{short_hash}-{_background_subagent_id}"
-        _background_subagent_status[subagent_id] = {
-            "task": task[:100],
-            "started_at": time.time(),
-            "status": "running",
-            "action": "Thinking",
-            "conv_id": conv_id,
-        }
+        with _status_lock:
+            _background_subagent_status[subagent_id] = {
+                "task": task[:100],
+                "started_at": time.time(),
+                "status": "running",
+                "action": "Thinking",
+                "conv_id": conv_id,
+            }
         _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])
         _run_subagent_background(task, max_turns, agent_type, subagent_id, max_tokens)
         return (f"⏳ 子代理已启动（任务ID: {subagent_id}，类型: {agent_type}）。"
@@ -488,64 +536,73 @@ def execute_get_subagent_status(id: Optional[Any] = None,
     _cleanup_expired_subagents()
     now = time.time()  # 单 ID/列表分支计算耗时使用，勿删除
 
+    to_clear: List[str] = []
+    with _status_lock:
+        if clear_completed:
+            # 同时清除 completed 与 failed（均为终结态），并同步清理对应 results（🟠-3）
+            to_clear = [sid for sid, info in _background_subagent_status.items()
+                        if info.get("status") in ("completed", "failed")]
+            for sid in to_clear:
+                _background_subagent_status.pop(sid, None)
+                _background_subagent_results.pop(sid, None)
+
+        if not _background_subagent_status and not clear_completed:
+            return "当前没有运行中的后台子代理。"
+
+        if id is not None:
+            target_sid = None
+            id_str = str(id)
+            if id_str in _background_subagent_status:
+                target_sid = id_str
+            else:
+                for sid in _background_subagent_status:
+                    if isinstance(sid, str) and (sid.endswith(f"-{id}") or sid == id_str):
+                        target_sid = sid
+                        break
+
+            if target_sid is None:
+                return f"错误：未找到 ID 为「{id}」的后台子代理。"
+
+            info = _background_subagent_status.get(target_sid)
+            status = info.get("status", "unknown")
+            task = info.get("task", "?")
+            started = info.get("started_at", 0)
+            elapsed = int(now - started) if started else 0
+            status_emoji = "✅" if status == "completed" else "🔄" if status == "running" else "❌"
+            elapsed_str = f"{elapsed // 60}分{elapsed % 60}秒" if elapsed >= 60 else f"{elapsed}秒"
+            lines = [
+                f"📋 子代理 {target_sid} 状态:\n",
+                f"{status_emoji} ID={target_sid}，状态={status}，耗时={elapsed_str}",
+                f"   任务: {task}",
+            ]
+            if status == "completed":
+                lines.append(f"   结果文件: /tmp/opencode_subagent_{target_sid}_result.txt")
+            return "\n".join(lines)
+
+        lines = ["📋 后台子代理状态:\n"]
+        for sid in sorted(_background_subagent_status):
+            info = _background_subagent_status[sid]
+            status = info.get("status", "unknown")
+            task = info.get("task", "?")
+            started = info.get("started_at", 0)
+            elapsed = int(now - started) if started else 0
+            status_emoji = "✅" if status == "completed" else "🔄" if status == "running" else "❌"
+            elapsed_str = f"{elapsed // 60}分{elapsed % 60}秒" if elapsed >= 60 else f"{elapsed}秒"
+            lines.append(f"{status_emoji} ID={sid}，状态={status}，耗时={elapsed_str}")
+            lines.append(f"   任务: {task}")
+            if status == "completed":
+                lines.append(f"   结果文件: /tmp/opencode_subagent_{sid}_result.txt")
+            lines.append("")
+        result_text = "\n".join(lines).strip()
+
+    # 锁外广播删除事件（clear_completed 场景），确保 UI 块被移除
+    for sid in to_clear:
+        _notify_subagent_status_change(sid, None)
     if clear_completed:
-        to_clear = [sid for sid, info in _background_subagent_status.items()
-                    if info.get("status") == "completed"]
-        for sid in to_clear:
-            del _background_subagent_status[sid]
-            _notify_subagent_status_change(sid, None)
         if not _background_subagent_status:
             return "✅ 已清除所有已完成的后台子代理记录。"
         return f"✅ 已清除 {len(to_clear)} 个已完成的后台子代理记录。"
-
-    if not _background_subagent_status:
-        return "当前没有运行中的后台子代理。"
-
-    if id is not None:
-        target_sid = None
-        id_str = str(id)
-        if id_str in _background_subagent_status:
-            target_sid = id_str
-        else:
-            for sid in _background_subagent_status:
-                if isinstance(sid, str) and (sid.endswith(f"-{id}") or sid == id_str):
-                    target_sid = sid
-                    break
-
-        if target_sid is None:
-            return f"错误：未找到 ID 为「{id}」的后台子代理。"
-
-        info = _background_subagent_status.get(target_sid)
-        status = info.get("status", "unknown")
-        task = info.get("task", "?")
-        started = info.get("started_at", 0)
-        elapsed = int(now - started) if started else 0
-        status_emoji = "✅" if status == "completed" else "🔄" if status == "running" else "❌"
-        elapsed_str = f"{elapsed // 60}分{elapsed % 60}秒" if elapsed >= 60 else f"{elapsed}秒"
-        lines = [
-            f"📋 子代理 {target_sid} 状态:\n",
-            f"{status_emoji} ID={target_sid}，状态={status}，耗时={elapsed_str}",
-            f"   任务: {task}",
-        ]
-        if status == "completed":
-            lines.append(f"   结果文件: /tmp/opencode_subagent_{target_sid}_result.txt")
-        return "\n".join(lines)
-
-    lines = ["📋 后台子代理状态:\n"]
-    for sid in sorted(_background_subagent_status):
-        info = _background_subagent_status[sid]
-        status = info.get("status", "unknown")
-        task = info.get("task", "?")
-        started = info.get("started_at", 0)
-        elapsed = int(now - started) if started else 0
-        status_emoji = "✅" if status == "completed" else "🔄" if status == "running" else "❌"
-        elapsed_str = f"{elapsed // 60}分{elapsed % 60}秒" if elapsed >= 60 else f"{elapsed}秒"
-        lines.append(f"{status_emoji} ID={sid}，状态={status}，耗时={elapsed_str}")
-        lines.append(f"   任务: {task}")
-        if status == "completed":
-            lines.append(f"   结果文件: /tmp/opencode_subagent_{sid}_result.txt")
-        lines.append("")
-    return "\n".join(lines).strip()
+    return result_text
 
 
 TOOL_SCHEMAS = [
