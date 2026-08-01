@@ -486,6 +486,7 @@ def execute_get_subagent_status(id: Optional[Any] = None,
     global _background_subagent_status
 
     _cleanup_expired_subagents()
+    now = time.time()  # 单 ID/列表分支计算耗时使用，勿删除
 
     if clear_completed:
         to_clear = [sid for sid, info in _background_subagent_status.items()
