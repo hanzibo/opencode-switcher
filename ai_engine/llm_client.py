@@ -540,7 +540,7 @@ class _LLMHttpClient:
             data = resp.json()
             msg = data["choices"][0]["message"]
             content = msg.get("content")
-            if not content:
+            if not content and not msg.get("tool_calls"):
                 fr = data["choices"][0].get("finish_reason", "?")
                 print(f"[sync_chat] API 返回 content 为空 (finish_reason={fr})", flush=True)
                 if data.get("usage"):

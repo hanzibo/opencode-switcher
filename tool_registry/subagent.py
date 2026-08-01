@@ -123,7 +123,7 @@ def _notify_subagent_status_change(subagent_id: str, status_info: Optional[dict]
     try:
         try:
             from gi.repository import GLib
-            has_glib = True
+            has_glib = GLib.main_depth() > 0
         except ImportError:
             has_glib = False
         for cb in list(_subagent_status_listeners):
@@ -179,12 +179,13 @@ def _run_subagent_background(task: str, max_turns: int, agent_type: str,
                              subagent_id: str, max_tokens: Optional[int] = None):
     def _run():
         global _background_subagent_results, _background_subagent_status
-        raw_result = _execute_subagent_sync(task, max_turns, agent_type, max_tokens)
+        raw_result = _execute_subagent_sync(task, max_turns, agent_type, max_tokens=max_tokens, subagent_id=subagent_id)
         result = html.unescape(raw_result)
         _background_subagent_status[subagent_id] = {
             "task": task[:100],
             "started_at": _background_subagent_status.get(subagent_id, {}).get("started_at", 0),
             "status": "completed",
+            "action": "已完成",
             "completed_at": time.time(),
             "conv_id": _background_subagent_status.get(subagent_id, {}).get("conv_id"),
         }
@@ -213,10 +214,16 @@ def _run_subagent_background(task: str, max_turns: int, agent_type: str,
 
 
 def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
-                           max_tokens: Optional[int] = None) -> str:
+                           max_tokens: Optional[int] = None,
+                           subagent_id: Optional[str] = None) -> str:
     """Synchronous sub-agent execution (internal)."""
     sub_tools = _build_subagent_tools(agent_type)
     type_info = _SUBAGENT_TYPES[agent_type]
+
+    def _update_action(action_str: str):
+        if subagent_id and subagent_id in _background_subagent_status:
+            _background_subagent_status[subagent_id]["action"] = action_str
+            _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])
 
     local_session = _BashSession()
     try:
@@ -249,7 +256,11 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
         local_session.stop()
         return "错误：未配置 LLM base URL。请在 AI 设置中配置。"
 
-    clamped_turns = max(1, min(max_turns, _MAX_SUBAGENT_TURNS))
+    from stores.clipboard_store import AISettingsStore
+    ai_settings = AISettingsStore()
+    effective_max_turns = max_turns if (max_turns and max_turns > 0) else ai_settings.max_tool_iterations
+    clamped_turns = max(1, min(effective_max_turns, ai_settings.max_tool_iterations))
+
     messages = [
         {"role": "system", "content": type_info["system_prompt"]},
         {"role": "user", "content": task},
@@ -268,6 +279,7 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
         final_text = ""
 
         for turn in range(clamped_turns):
+            _update_action("Thinking")
             try:
                 sub_config = LLMRequestConfig(
                     base_url=config.base_url,
@@ -291,6 +303,7 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
             tool_calls = response.get("tool_calls")
 
             if not tool_calls:
+                _update_action("Answering")
                 final_text = content
                 break
 
@@ -300,6 +313,7 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
 
             for tc in tool_calls:
                 tc_name = tc.get("function", {}).get("name", "")
+                _update_action(f"Tool Call: {tc_name}")
                 try:
                     from . import execute_tool_call
                     result = execute_tool_call(tc)
@@ -362,6 +376,7 @@ def execute_sub_agent(task: str, max_turns: int = 10,
             "task": task[:100],
             "started_at": time.time(),
             "status": "running",
+            "action": "Thinking",
             "conv_id": conv_id,
         }
         _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])

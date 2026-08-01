@@ -1944,9 +1944,22 @@ class AIChatPanel(Gtk.Box):
         child = Gtk.FlowBoxChild.new()
         box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
         
-        # Option 2: Extract and show only the local numeric ID part in label
         local_id = sid.split("-")[-1] if isinstance(sid, str) and "-" in sid else sid
-        label = Gtk.Label.new(f"  子代理 {local_id}  ")
+        status = info.get("status", "unknown")
+        action = info.get("action", "")
+
+        if status == "running":
+            action_suffix = f" ({action})" if action else ""
+            label_text = f"  子代理 {local_id}{action_suffix}  "
+            tooltip_text = f"子代理 {sid}\n动作：{action or 'Thinking'}"
+        elif status == "completed":
+            label_text = f"  子代理 {local_id}  "
+            tooltip_text = f"子代理 {sid}\n状态：已完成 ✅"
+        else:
+            label_text = f"  子代理 {local_id}  "
+            tooltip_text = f"子代理 {sid}\n状态：失败 ❌"
+
+        label = Gtk.Label.new(label_text)
         label.set_margin_start(4)
         label.set_margin_end(4)
         label.set_margin_top(2)
@@ -1954,19 +1967,13 @@ class AIChatPanel(Gtk.Box):
         box.pack_start(label, True, True, 0)
         child.add(box)
 
-        status = info.get("status", "unknown")
-        task = info.get("task", "")
         box_ctx = box.get_style_context()
-        
-        # Tooltip text shows full ID and task description
-        tooltip_text = f"ID: {sid}\n任务: {task}"
-        
         if status == "completed":
             box_ctx.add_class("subagent-block-done")
             child.set_tooltip_text(tooltip_text)
         elif status == "running":
             box_ctx.add_class("subagent-block-running")
-            child.set_tooltip_text(f"运行中 — {tooltip_text}")
+            child.set_tooltip_text(tooltip_text)
         else:
             box_ctx.add_class("subagent-block-failed")
             child.set_tooltip_text(tooltip_text)
@@ -1982,21 +1989,34 @@ class AIChatPanel(Gtk.Box):
             return
         child, event_box, box = entry
         status = info.get("status", "unknown")
+        action = info.get("action", "")
+        local_id = sid.split("-")[-1] if isinstance(sid, str) and "-" in sid else sid
         ctx = box.get_style_context()
-        task = info.get("task", "")
 
-        tooltip_text = f"ID: {sid}\n任务: {task}"
+        # Update label text
+        children = box.get_children()
+        if children and isinstance(children[0], Gtk.Label):
+            lbl = children[0]
+            if status == "running":
+                action_suffix = f" ({action})" if action else ""
+                lbl.set_text(f"  子代理 {local_id}{action_suffix}  ")
+            else:
+                lbl.set_text(f"  子代理 {local_id}  ")
 
         if status == "completed":
             ctx.remove_class("subagent-block-running")
             ctx.add_class("subagent-block-done")
-            event_box.set_tooltip_text(tooltip_text)
+            event_box.set_tooltip_text(f"子代理 {sid}\n状态：已完成 ✅")
         elif status == "running":
             if ctx.has_class("subagent-block-done"):
                 ctx.remove_class("subagent-block-done")
                 self._ai_selected_subagents.discard(sid)
             ctx.add_class("subagent-block-running")
-            event_box.set_tooltip_text(f"运行中 — {tooltip_text}")
+            event_box.set_tooltip_text(f"子代理 {sid}\n动作：{action or 'Thinking'}")
+        else:
+            ctx.remove_class("subagent-block-running")
+            ctx.add_class("subagent-block-failed")
+            event_box.set_tooltip_text(f"子代理 {sid}\n状态：失败 ❌")
 
     def _remove_subagent_block(self, sid: Any):
         """Remove a sub-agent block and clean up state."""
