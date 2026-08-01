@@ -573,6 +573,7 @@ class PromptsConfigDialog:
                 model_name_entry.set_text("")
                 default_check.set_active(False)
                 title_check.set_active(False)
+                subagent_check.set_active(False)
                 temperature_spin.set_value(DEFAULT_TEMPERATURE)
                 max_tokens_spin.set_value(DEFAULT_MAX_TOKENS)
                 top_p_spin.set_value(DEFAULT_TOP_P)
@@ -587,6 +588,7 @@ class PromptsConfigDialog:
                 model_name_entry.set_sensitive(False)
                 default_check.set_sensitive(False)
                 title_check.set_sensitive(False)
+                subagent_check.set_sensitive(False)
                 temperature_spin.set_sensitive(False)
                 max_tokens_spin.set_sensitive(False)
                 top_p_spin.set_sensitive(False)
@@ -626,6 +628,7 @@ class PromptsConfigDialog:
         def on_delete_model_clicked(_btn):
             if len(local_models) <= 1:
                 return
+            target = local_models[self._active_model_idx]
             confirm_dialog = Gtk.MessageDialog(
                 transient_for=dialog,
                 modal=True,
@@ -633,7 +636,10 @@ class PromptsConfigDialog:
                 buttons=Gtk.ButtonsType.YES_NO,
                 text="确认删除模型吗？",
             )
-            confirm_dialog.format_secondary_text(f"模型 '{local_models[self._active_model_idx].alias}' 将被永久删除。")
+            secondary = f"模型 '{target.alias}' 将被永久删除。"
+            if getattr(target, "is_subagent_default", False):
+                secondary += "\n该模型是子代理默认模型，删除后子代理将使用全局默认模型。"
+            confirm_dialog.format_secondary_text(secondary)
             resp = confirm_dialog.run()
             confirm_dialog.destroy()
             if resp == Gtk.ResponseType.YES:
@@ -672,7 +678,16 @@ class PromptsConfigDialog:
                                 lbl.set_text(_model_label(m))
                 else:
                     has_other_default = any(m.is_default for idx, m in enumerate(local_models) if idx != self._active_model_idx)
-                    if not has_other_default:
+                    if has_other_default:
+                        # 同步数据与 UI：取消勾选时立即清除该模型 is_default 并刷新标签，
+                        # 避免出现"复选框未勾选但标签仍显示(默认)"的脱节状态（B4）
+                        local_models[self._active_model_idx].is_default = False
+                        row = model_list_box.get_row_at_index(self._active_model_idx)
+                        if row:
+                            lbl = row.get_child()
+                            if isinstance(lbl, Gtk.Label):
+                                lbl.set_text(_model_label(local_models[self._active_model_idx]))
+                    else:
                         self._updating_model_ui = True
                         widget.set_active(True)
                         self._updating_model_ui = False
