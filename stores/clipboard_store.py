@@ -864,6 +864,7 @@ class LLMModelConfig:
     model_name: str
     is_default: bool = False
     is_title_model: bool = False
+    is_subagent_default: bool = False  # 标记为子代理（sub_agent 工具）默认模型
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
     top_p: float = DEFAULT_TOP_P
@@ -905,6 +906,7 @@ class LLMSettingsStore:
                         model_name=m.get("model_name", ""),
                         is_default=m.get("is_default", False),
                         is_title_model=m.get("is_title_model", False),
+                        is_subagent_default=m.get("is_subagent_default", False),
                         temperature=m.get("temperature", DEFAULT_TEMPERATURE),
                         max_tokens=m.get("max_tokens", DEFAULT_MAX_TOKENS),
                         top_p=m.get("top_p", DEFAULT_TOP_P),

@@ -285,12 +285,15 @@ class PromptsConfigDialog:
         model_hbox.pack_start(model_name_entry, True, True, 0)
         vbox_right.pack_start(model_hbox, False, False, 0)
 
-        # Check button row: default model + title generation model
+        # Check button row: default model + title generation model + subagent default model
         check_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 16)
         default_check = Gtk.CheckButton.new_with_label("设为默认模型")
         title_check = Gtk.CheckButton.new_with_label("标题生成模型")
+        subagent_check = Gtk.CheckButton.new_with_label("子代理默认模型")
+        subagent_check.set_tooltip_text("指定该模型作为子代理（sub_agent 工具）的默认模型；未设置时回退到全局默认模型")
         check_hbox.pack_start(default_check, False, False, 0)
         check_hbox.pack_start(title_check, False, False, 0)
+        check_hbox.pack_start(subagent_check, False, False, 0)
         default_check.set_margin_top(4)
         default_check.set_margin_bottom(4)
 
@@ -483,6 +486,7 @@ class PromptsConfigDialog:
                 m.model_name = model_name_entry.get_text().strip()
                 m.is_default = default_check.get_active()
                 m.is_title_model = title_check.get_active()
+                m.is_subagent_default = subagent_check.get_active()
                 m.temperature = temperature_spin.get_value()
                 m.max_tokens = int(max_tokens_spin.get_value())
                 m.top_p = top_p_spin.get_value()
@@ -495,6 +499,8 @@ class PromptsConfigDialog:
                 parts.append("默认")
             if m.is_title_model:
                 parts.append("标题")
+            if getattr(m, "is_subagent_default", False):
+                parts.append("子代理")
             suffix = f" ({', '.join(parts)})" if parts else ""
             return m.alias + suffix
 
@@ -538,6 +544,7 @@ class PromptsConfigDialog:
                 model_name_entry.set_text(m.model_name)
                 default_check.set_active(m.is_default)
                 title_check.set_active(m.is_title_model)
+                subagent_check.set_active(getattr(m, "is_subagent_default", False))
                 temperature_spin.set_value(m.temperature)
                 max_tokens_spin.set_value(m.max_tokens)
                 top_p_spin.set_value(m.top_p)
@@ -684,6 +691,21 @@ class PromptsConfigDialog:
                             if isinstance(lbl, Gtk.Label):
                                 lbl.set_text(_model_label(m))
 
+        def on_subagent_toggled(widget):
+            if self._updating_model_ui:
+                return
+            if 0 <= self._active_model_idx < len(local_models):
+                active = widget.get_active()
+                # 勾选时互斥：其他模型清除子代理默认标记；
+                # 取消时允许无子代理默认（回退到全局默认模型），不做强制保持。
+                for idx, m in enumerate(local_models):
+                    m.is_subagent_default = (active and idx == self._active_model_idx)
+                    row = model_list_box.get_row_at_index(idx)
+                    if row:
+                        lbl = row.get_child()
+                        if isinstance(lbl, Gtk.Label):
+                            lbl.set_text(_model_label(m))
+
         def refresh_model_combo():
             model_combo.remove_all()
             for m in self.llm_settings_store.models:
@@ -696,6 +718,7 @@ class PromptsConfigDialog:
         alias_entry.connect("changed", on_alias_entry_changed)
         default_check.connect("toggled", on_default_toggled)
         title_check.connect("toggled", on_title_toggled)
+        subagent_check.connect("toggled", on_subagent_toggled)
 
         refresh_model_combo()
 

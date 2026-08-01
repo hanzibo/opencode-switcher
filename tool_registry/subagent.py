@@ -53,9 +53,17 @@ _SUBAGENT_TYPES = {
 
 
 def _get_llm_config():
-    """Read the default LLM model config for sub-agent use."""
-    from stores.clipboard_store import LLMSettingsStore, LLMModelConfig
+    """读取子代理使用的默认模型配置。
+
+    优先级：① is_subagent_default（API Settings 中指定的子代理默认模型）
+            → ② is_default（全局默认模型）→ ③ models 第一个 → 报错
+    """
+    from stores.clipboard_store import LLMSettingsStore
     store = LLMSettingsStore()
+    subagent_default = next((m for m in store.models
+                             if getattr(m, "is_subagent_default", False)), None)
+    if subagent_default is not None:
+        return subagent_default
     default = next((m for m in store.models if m.is_default), None)
     if default is None and store.models:
         default = store.models[0]
