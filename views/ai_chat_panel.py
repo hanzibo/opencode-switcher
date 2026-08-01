@@ -2227,8 +2227,9 @@ class AIChatPanel(Gtk.Box):
         # Handle selected sub-agent blocks: build notification text and send
         if self._ai_selected_subagents:
             from tool_registry import get_subagent_status_map, check_background_subagents
-            # Drain any pending background results first
-            check_background_subagents()
+            # 按 sid 精确消费结果（UI 主线程 conv_id 恒为 None，按 conv_id 匹配必然失败，
+            # 会导致结果残留泄漏；同时避免 tool loop 重复注入）
+            check_background_subagents(subagent_ids=list(self._ai_selected_subagents))
             parts = []
             for sid in sorted(self._ai_selected_subagents):
                 info = get_subagent_status_map().get(sid, {})

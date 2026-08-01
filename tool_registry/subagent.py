@@ -1,6 +1,7 @@
 """Sub-agent tools — spawn isolated sub-agents for parallel task execution."""
 
 import hashlib
+import copy
 import html
 import os
 import threading
@@ -123,42 +124,66 @@ def _notify_subagent_status_change(subagent_id: str, status_info: Optional[dict]
     try:
         try:
             from gi.repository import GLib
-            has_glib = GLib.main_depth() > 0
         except ImportError:
-            has_glib = False
-        for cb in list(_subagent_status_listeners):
-            if has_glib:
-                GLib.idle_add(cb, subagent_id, status_info)
-            else:
+            GLib = None
+        if GLib is None:
+            for cb in list(_subagent_status_listeners):
                 cb(subagent_id, status_info)
+            return
+        # 判断当前线程是否是 GLib 主上下文所有者（即 GTK 主线程）。
+        # 注意：不能使用 GLib.main_depth()——后台线程中它恒为 0，
+        # 会导致 UI 回调在后台线程被直接执行（GTK 非主线程操作 = 未定义行为）。
+        is_main_thread = GLib.main_context_default().is_owner()
+        for cb in list(_subagent_status_listeners):
+            if is_main_thread:
+                cb(subagent_id, status_info)
+            else:
+                # idle_add 跨线程安全，会调度到主循环，由主线程执行回调
+                GLib.idle_add(cb, subagent_id, status_info)
     except Exception as e:
         import sys
         print(f"[opencode-switcher] Error notifying subagent status change: {e}", file=sys.stderr)
 
 
 def get_subagent_status_map() -> Dict[str, Dict[str, Any]]:
-    return dict(_background_subagent_status)
+    # 深拷贝：避免 UI 持有的 info 与后台线程共享内层 dict，
+    # 防止 _update_action 原地修改被 UI 侧意外观察到。
+    return copy.deepcopy(_background_subagent_status)
 
 
 def remove_subagent_status(subagent_id: str):
-    global _background_subagent_status
+    global _background_subagent_status, _background_subagent_results
     _background_subagent_status.pop(subagent_id, None)
+    # 同步清理未消费的结果，避免残留条目永久泄漏
+    _background_subagent_results.pop(subagent_id, None)
     _notify_subagent_status_change(subagent_id, None)
 
 
-def check_background_subagents(conv_id: Optional[str] = None) -> str:
+def check_background_subagents(conv_id: Optional[str] = None,
+                               subagent_ids: Optional[List[str]] = None) -> str:
+    """检查后台子代理结果，返回可注入主代理上下文的文本。
+
+    两种消费模式：
+    - subagent_ids：按 sid 精确消费（UI 手动发送选中块时使用）。UI 主线程的
+      thread-local conv_id 恒为 None，按 conv_id 匹配永远失败，因此必须按 sid 消费，
+      否则结果会残留并泄漏。
+    - conv_id（默认）：按对话 ID 匹配（tool loop 后台线程使用）。
+    """
     global _background_subagent_results
     if not _background_subagent_results:
         return ""
 
-    if conv_id is None:
-        conv_id = get_current_conversation_id()
-
-    matching_sids = []
-    for sid in list(_background_subagent_results.keys()):
-        sid_conv_id = _background_subagent_status.get(sid, {}).get("conv_id")
-        if sid_conv_id == conv_id:
-            matching_sids.append(sid)
+    if subagent_ids:
+        matching_sids = [str(s) for s in subagent_ids
+                         if str(s) in _background_subagent_results]
+    else:
+        if conv_id is None:
+            conv_id = get_current_conversation_id()
+        matching_sids = []
+        for sid in list(_background_subagent_results.keys()):
+            sid_conv_id = _background_subagent_status.get(sid, {}).get("conv_id")
+            if sid_conv_id == conv_id:
+                matching_sids.append(sid)
 
     if not matching_sids:
         return ""
@@ -175,28 +200,58 @@ def check_background_subagents(conv_id: Optional[str] = None) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+def _cleanup_expired_subagents():
+    """清理超过 _SUBAGENT_CLEANUP_AGE 的已完成子代理状态与结果（防止无限累积）。
+
+    在启动新子代理与查询状态时顺带调用，避免只依赖主代理主动调用
+    get_subagent_status 才触发清理。
+    """
+    global _background_subagent_status, _background_subagent_results
+    now = time.time()
+    to_remove = []
+    for sid, info in list(_background_subagent_status.items()):
+        if info.get("status") == "completed":
+            completed_at = info.get("completed_at", 0)
+            if completed_at and (now - completed_at) > _SUBAGENT_CLEANUP_AGE:
+                to_remove.append(sid)
+    for sid in to_remove:
+        _background_subagent_status.pop(sid, None)
+        _background_subagent_results.pop(sid, None)
+        _notify_subagent_status_change(sid, None)
+
+
 def _run_subagent_background(task: str, max_turns: int, agent_type: str,
                              subagent_id: str, max_tokens: Optional[int] = None):
     def _run():
         global _background_subagent_results, _background_subagent_status
         raw_result = _execute_subagent_sync(task, max_turns, agent_type, max_tokens=max_tokens, subagent_id=subagent_id)
         result = html.unescape(raw_result)
-        _background_subagent_status[subagent_id] = {
-            "task": task[:100],
-            "started_at": _background_subagent_status.get(subagent_id, {}).get("started_at", 0),
-            "status": "completed",
-            "action": "已完成",
-            "completed_at": time.time(),
-            "conv_id": _background_subagent_status.get(subagent_id, {}).get("conv_id"),
-        }
-        _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])
         result_path = f"/tmp/opencode_subagent_{subagent_id}_result.txt"
+        # 先落盘结果文件，再更新状态并通知，避免 UI 收到 completed 时文件尚不存在
         try:
             with open(result_path, "w", encoding="utf-8") as f:
                 f.write(result)
         except OSError:
             pass
+
+        # 状态可能在运行期间被 remove_subagent_status 移除（用户已丢弃该记录）。
+        # 此时不再复活 UI 状态、不写 results（避免 started_at=0 / conv_id=None 的
+        # 脏状态与结果泄漏），仅保留已落盘的结果文件供 read_file 读取。
+        prev = _background_subagent_status.get(subagent_id)
+        if prev is None:
+            return
+
+        _background_subagent_status[subagent_id] = {
+            "task": prev.get("task", task[:100]),
+            "started_at": prev.get("started_at", 0),
+            "status": "completed",
+            "action": "已完成",
+            "completed_at": time.time(),
+            "conv_id": prev.get("conv_id"),
+        }
+        # 先写 results 再通知：UI 收到 completed 事件时结果必定可被消费
         _background_subagent_results[subagent_id] = result
+        _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])
         try:
             from .notification import execute_send_notification
             summary = result[:100] + "..." if len(result) > 100 else result
@@ -222,8 +277,12 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
 
     def _update_action(action_str: str):
         if subagent_id and subagent_id in _background_subagent_status:
-            _background_subagent_status[subagent_id]["action"] = action_str
-            _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])
+            info = _background_subagent_status[subagent_id]
+            # 相同 action 不重复广播，避免事件风暴
+            if info.get("action") == action_str:
+                return
+            info["action"] = action_str
+            _notify_subagent_status_change(subagent_id, info)
 
     local_session = _BashSession()
     try:
@@ -368,6 +427,7 @@ def execute_sub_agent(task: str, max_turns: int = 10,
 
     if run_in_background:
         global _background_subagent_id
+        _cleanup_expired_subagents()  # 顺带清理过期状态，防止无限累积
         _background_subagent_id += 1
         conv_id = get_current_conversation_id()
         short_hash = get_conv_short_hash(conv_id)
@@ -398,16 +458,7 @@ def execute_get_subagent_status(id: Optional[Any] = None,
     """查询后台子代理的执行状态。"""
     global _background_subagent_status
 
-    now = time.time()
-    to_remove = []
-    for sid, info in list(_background_subagent_status.items()):
-        if info.get("status") == "completed":
-            completed_at = info.get("completed_at", 0)
-            if completed_at and (now - completed_at) > _SUBAGENT_CLEANUP_AGE:
-                to_remove.append(sid)
-    for sid in to_remove:
-        del _background_subagent_status[sid]
-        _notify_subagent_status_change(sid, None)
+    _cleanup_expired_subagents()
 
     if clear_completed:
         to_clear = [sid for sid, info in _background_subagent_status.items()
