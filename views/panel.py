@@ -1088,7 +1088,7 @@ class SearchPanel:
 
             # Inject Ctrl+V and Enter
             try:
-                # Try evdev (uinput) first for Wayland/X11 hardware-level emulation
+                # Try evdev (uinput) for hardware-level key injection
                 try:
                     from evdev import UInput, ecodes as ec
                     events = {

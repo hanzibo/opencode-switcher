@@ -63,33 +63,37 @@ sudo apt install gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-
 ```
 ./
 ├── main.py                     # 应用主入口：单实例锁、托盘指示器、Gtk.main()
-├── panel.py                    # 搜索面板 UI：会话搜索、斜杠命令、CSS 主题
-├── clipboard_panel.py          # 剪贴板面板容器：组装子组件 + 事件路由（~1950 行）
-├── clipboard_store.py          # 数据层：剪贴板去重/分类、自定义分类、提示词、对话存储
-├── session_store.py            # OpenCode SQLite 数据库读取 + 进程活体检测
-├── system/hotkey.py             # 热键管理：Wayland (Unix Socket)
-├── launcher.py                 # 终端自动检测 + OpenCode 会话拉起
-├── system/utils.py             # 工具函数：相对时间、聚焦请求、缓存路径
+├── views/                      # 主 UI 视图
+│   ├── panel.py                # 搜索面板：会话搜索、斜杠命令、CSS 主题
+│   ├── clipboard_panel.py      # 剪贴板面板容器：组装子组件 + 事件路由
+│   ├── ai_chat_panel.py        # AI 助手侧栏：WebView、LLM 对话、流式输出
+│   └── ai_popovers.py          # AI 命令自动补全 + 历史对话弹窗
+├── dialogs/                    # GTK 对话框（设置/提示词/回收站/排序/记忆管理等）
+├── stores/                     # 数据持久化层
+│   ├── clipboard_store.py      # 剪贴板去重/分类、自定义分类、对话存储
+│   ├── session_store.py        # OpenCode SQLite 数据库读取 + 进程活体检测
+│   ├── skill_store.py          # AI Skill 存储
+│   └── theme_config.py         # 主题配置
+├── ai_engine/                  # AI LLM 引擎与渲染
+│   ├── llm_client.py           # LLM HTTP 客户端（SSE 流式、工具调用累积器）
+│   ├── ai_tool_loop.py         # ReAct 工具调用循环
+│   ├── ai_html_template.py     # WebView HTML 模板 + KaTeX 内联
+│   └── render_pipeline.py      # 渲染管线
+├── ai_text_utils/              # 纯文本/Markdown/数学/图像工具（零 GTK 依赖）
+├── mcp_integration/            # MCP 协议层（JSON-RPC over stdio/http、GTK asyncio 桥）
+├── tool_registry/              # AI 工具执行器（28 个工具：bash/web/文件/子代理等）
+├── html_templates/             # WebView 前端资源（chat.js / chat.css）
+├── system/                     # 系统 IPC 与工具
+│   ├── hotkey.py               # 热键管理：Wayland (Unix Socket)
+│   ├── launcher.py             # 终端自动检测 + OpenCode 会话拉起
+│   ├── utils.py                # 工具函数：相对时间、聚焦请求、缓存路径
+│   ├── migrate_history.py      # 数据库迁移工具
+│   └── inspect_db.py           # 数据库检查器
 │
-├── ai_chat_panel.py            # AI 助手侧栏：WebView、LLM 对话、流式输出、ReAct 工具调用
-├── ai_html_template.py         # WebView HTML 模板 + KaTeX 内联
-├── ai_text_utils.py            # Markdown/数学/视觉处理工具（纯函数，零 GTK 依赖）
-├── ai_tool_loop.py             # ReAct 工具调用循环（最大 25 轮迭代）
-├── ai_popovers.py              # AI 命令自动补全 + 历史对话弹窗
-├── llm_client.py               # LLM HTTP 客户端（SSE 流式、工具调用累积器）
-├── tool_registry.py            # 9 种 AI 工具定义与执行器
-├── prompts_config_dialog.py    # 提示词 / LLM 配置对话框
-├── prompt_dialog.py            # 创建/编辑提示词对话框
-├── dynamic_copy_dialog.py      # 模板占位符填充对话框
-├── sort_dialog.py              # 剪贴板项排序对话框（拖拽）
-├── sort_cats_dialog.py         # 分类排序对话框（拖拽）
-├── recycle_bin_dialog.py       # 回收站对话框
-│
-├── migrate_history.py          # 数据库迁移工具
-├── inspect_db.py               # 数据库检查器
 ├── opencode-switcher-toggle    # Unix Socket 触发脚本
 ├── katex/                      # KaTeX CSS/JS/字体（AI WebView 数学渲染）
 ├── gnome-extension/            # GNOME Shell 扩展（Wayland 剪贴板 + 聚焦 IPC）
+├── deploy/                     # systemd service / desktop 模板（install.sh sed 替换）
 ├── docs/usage.md               # 详细使用指南
 ├── run.sh                      # 生产环境启动器（日志轮转、nvm）
 ├── install.sh                  # 安装/卸载/状态脚本

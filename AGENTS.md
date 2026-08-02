@@ -50,7 +50,7 @@ systemd/.desktop → run.sh → main.py (flock lock)
 | `ai_engine/` | ~1350 | AI LLM engine & rendering (`llm_client.py`, `ai_tool_loop.py`, `ai_html_template.py`, `render_pipeline.py`) |
 | `system/` | ~440 | System IPC & utilities (`hotkey.py`, `launcher.py`, `event_types.py`, `migrate_history.py`, `utils.py`) |
 | `mcp_integration/` | ~2170 | MCP protocol layer (JSON-RPC over stdio/http transports in `transports/`, GTK asyncio bridge) |
-| `tool_registry/` | 28 tools across 14 modules | AI tool executors (bash, web, filesystem, code analysis, subagent, search, etc.) |
+| `tool_registry/` | 28 tools across 13 tool modules (+display helper) | AI tool executors (bash, web, filesystem, code analysis, subagent, search, etc.) |
 | `html_templates/` | ~1910 | Web assets (`chat.js`, `chat.css`) for WebKit WebView rendering |
 | `ai_text_utils/` | ~1270 | Pure text/markdown/math helpers (zero GTK dep) |
 | `deploy/` | — | Templated `opencode-switcher.{service,desktop}` + icon; `install.sh` substitutes `__INSTALL_DIR__` via `sed` |
@@ -126,7 +126,7 @@ Dynamically add/remove `.subagent-status-bar` class on FlowBox before `hide()`/`
 
 ### Subagent Monitoring & Iteration Limit
 - Subagent bubbles show real-time ReAct action status (Thinking / Tool Call: `<tool>` / Answering) via `tool_registry/subagent.py` — event-driven, no fixed turn cap.
-- Max turns is governed by `AISettingsStore().max_tool_iterations` (shared with main agent), NOT a hardcoded constant. Changing that setting affects subagent depth.
+- Subagent turns are clamped by `AISettingsStore().max_tool_iterations` (shared with main agent); the tool's own default is 10, but the setting caps the effective depth. Changing that setting affects subagent depth.
 
 ### SQLite Database Coupling
 - **DB**: `~/.local/share/opencode/opencode.db`. Connection: `timeout=5`, `PRAGMA journal_mode=WAL`.
