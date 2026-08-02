@@ -3,6 +3,7 @@ import re
 import os
 import sys
 import threading
+import copy
 # jieba / rank_bm25 在 MemStore 中懒加载，非必须依赖
 
 # Heuristic Code Classification Regexes
@@ -788,12 +789,16 @@ class ConversationStore:
             system_prompt=src_conv.system_prompt,
             messages=cloned_messages,
             summary=src_conv.summary,
-            model_config_snapshot=dict(src_conv.model_config_snapshot) if src_conv.model_config_snapshot else {},
+            model_config_snapshot=copy.deepcopy(src_conv.model_config_snapshot) if src_conv.model_config_snapshot else {},
             created_at=now,
             updated_at=now,
         )
-        self.save_conversation(new_conv, bump_updated_at=False)
-        return new_conv
+        try:
+            self.save_conversation(new_conv, bump_updated_at=False)
+            return new_conv
+        except Exception as e:
+            print(f"Error saving forked conversation: {e}", flush=True)
+            return None
 
     def list_conversations(self) -> List[Dict[str, Any]]:
         summaries = []

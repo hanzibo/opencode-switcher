@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from stores.clipboard_store import ConversationStore, Conversation, ChatMessage
 
 
@@ -62,6 +63,28 @@ class TestConversationFork(unittest.TestCase):
 
         self.assertIsNotNone(forked)
         self.assertEqual(forked.title, "Custom Branch Title")
+
+    def test_fork_conversation_nested_model_config_deepcopy(self):
+        conv = self.store.create_conversation(
+            title="Nested Model Config Test",
+            model_config={"nested": {"param": 123}}
+        )
+        self.store.save_conversation(conv)
+
+        forked = self.store.fork_conversation(conv.id)
+        self.assertIsNotNone(forked)
+        
+        # Modify forked nested dict, verify original remains unchanged
+        forked.model_config_snapshot["nested"]["param"] = 999
+        self.assertEqual(conv.model_config_snapshot["nested"]["param"], 123)
+
+    def test_fork_conversation_save_disk_error(self):
+        conv = self.store.create_conversation(title="Disk Error Test")
+        self.store.save_conversation(conv)
+
+        with patch.object(self.store, "save_conversation", side_effect=OSError("Disk full")):
+            forked = self.store.fork_conversation(conv.id)
+            self.assertIsNone(forked)
 
     def test_fork_nonexistent_conversation(self):
         forked = self.store.fork_conversation("non_existent_id")

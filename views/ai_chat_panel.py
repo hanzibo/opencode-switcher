@@ -2178,7 +2178,7 @@ class AIChatPanel(Gtk.Box):
             return
         if text.startswith("/fork "):
             buf.set_text("")
-            fork_title = text[len("/fork "):].strip()
+            fork_title = text[len("/fork "):].strip() or None
             self._handle_fork_command(fork_title)
             return
         if text == "/retry":
@@ -2474,6 +2474,10 @@ class AIChatPanel(Gtk.Box):
             self._save_current_conversation(model_snapshot, preserve_updated_at=True)
         except Exception as e:
             print(f"Error saving conversation before fork: {e}", flush=True)
+            self.append_html_to_webview(
+                f'<div class="chat-simple-error">❌ 分支建立失败：无法保存当前对话状态 ({html.escape(str(e))})。</div>'
+            )
+            return
 
         current_id = self._ai_conversation_id
 
@@ -2481,12 +2485,12 @@ class AIChatPanel(Gtk.Box):
         new_conv = self._conversation_store.fork_conversation(current_id, custom_title)
         if not new_conv:
             self.append_html_to_webview(
-                '<div class="chat-simple-error">❌ 分支建立失败：无法读取原对话数据。</div>'
+                '<div class="chat-simple-error">❌ 分支建立失败：无法生成新对话分支或磁盘写入失败。</div>'
             )
             return
 
-        # 3. Switch to the newly created conversation branch
-        self._switch_to_conversation(new_conv.id)
+        # 3. Switch to the newly created conversation branch (skip duplicate save)
+        self._switch_to_conversation(new_conv.id, save_current=False)
 
         # 4. Append success notification message to the new conversation view
         escaped_title = html.escape(new_conv.title)
@@ -3573,14 +3577,14 @@ class AIChatPanel(Gtk.Box):
         if self._ai_conversation_id:
             self._ai_html_cache[self._ai_conversation_id] = getattr(self, "_last_rendered_html", "")
 
-    def _switch_to_conversation(self, conv_id: str):
+    def _switch_to_conversation(self, conv_id: str, save_current: bool = True):
         """Switch AI panel to display a different conversation by ID."""
         if not hasattr(self, "_ai_request_id"):
             self._ai_request_id = 0
         self._ai_request_id += 1
 
-        # Save current conversation if it has content and is not streaming
-        if self._ai_messages and self._ai_conversation_id:
+        # Save current conversation if requested, has content, and is not streaming
+        if save_current and self._ai_messages and self._ai_conversation_id:
             is_currently_running = self._ai_running_convs.get(self._ai_conversation_id, {}).get("streaming", False)
             if not is_currently_running:
                 try:
