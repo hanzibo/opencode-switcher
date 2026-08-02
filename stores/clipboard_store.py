@@ -774,6 +774,27 @@ class ConversationStore:
         except OSError:
             pass
 
+    def fork_conversation(self, src_conv_id: str, new_title: Optional[str] = None) -> Optional[Conversation]:
+        """Create a complete copy of an existing conversation with a new conversation ID."""
+        src_conv = self.load_conversation(src_conv_id)
+        if not src_conv:
+            return None
+        now = int(time.time() * 1000)
+        title = new_title if new_title else f"{src_conv.title or 'New Conversation'} (Fork)"
+        cloned_messages = [ChatMessage(**asdict(m)) for m in src_conv.messages]
+        new_conv = Conversation(
+            id=uuid4().hex[:12],
+            title=title,
+            system_prompt=src_conv.system_prompt,
+            messages=cloned_messages,
+            summary=src_conv.summary,
+            model_config_snapshot=dict(src_conv.model_config_snapshot) if src_conv.model_config_snapshot else {},
+            created_at=now,
+            updated_at=now,
+        )
+        self.save_conversation(new_conv, bump_updated_at=False)
+        return new_conv
+
     def list_conversations(self) -> List[Dict[str, Any]]:
         summaries = []
         if not os.path.isdir(self._dir):

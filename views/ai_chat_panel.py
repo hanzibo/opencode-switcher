@@ -84,6 +84,7 @@ class AIChatPanel(Gtk.Box):
     _AI_COMMANDS = [
         ("/new", "新对话"),
         ("/delete", "删除并新建"),
+        ("/fork", "建立当前对话的分支 (Fork)"),
         ("/retry", "回滚到上一轮"),
         ("/rollback", "回滚到任意轮"),
         ("/title", "设置/生成标题"),
@@ -2171,6 +2172,15 @@ class AIChatPanel(Gtk.Box):
                 self._ai_html_cache.pop(conv_id, None)
             self._reset_ai_panel_silent()
             return
+        if text == "/fork":
+            buf.set_text("")
+            self._handle_fork_command(None)
+            return
+        if text.startswith("/fork "):
+            buf.set_text("")
+            fork_title = text[len("/fork "):].strip()
+            self._handle_fork_command(fork_title)
+            return
         if text == "/retry":
             buf.set_text("")
             self._handle_retry_command()
@@ -2443,6 +2453,51 @@ class AIChatPanel(Gtk.Box):
             return
 
         self.append_html_to_webview(html_val)
+
+    def _handle_fork_command(self, custom_title: Optional[str] = None):
+        """Handle /fork command: create a duplicated conversation branch with a new ID."""
+        if not self._ai_conversation_id or not self._ai_messages:
+            self.append_html_to_webview(
+                '<div class="chat-simple-error">⚠️ 当前没有活跃且包含消息的对话可供 Fork 分支。</div>'
+            )
+            return
+
+        if self._ai_streaming or self._ai_cancelling:
+            self.append_html_to_webview(
+                '<div class="chat-simple-error">⚠️ 当前正处于回复生成状态，请在当前轮次完成后再执行 /fork 分支。</div>'
+            )
+            return
+
+        # 1. Save current conversation state first
+        try:
+            model_snapshot = self._build_model_snapshot()
+            self._save_current_conversation(model_snapshot, preserve_updated_at=True)
+        except Exception as e:
+            print(f"Error saving conversation before fork: {e}", flush=True)
+
+        current_id = self._ai_conversation_id
+
+        # 2. Fork conversation in store
+        new_conv = self._conversation_store.fork_conversation(current_id, custom_title)
+        if not new_conv:
+            self.append_html_to_webview(
+                '<div class="chat-simple-error">❌ 分支建立失败：无法读取原对话数据。</div>'
+            )
+            return
+
+        # 3. Switch to the newly created conversation branch
+        self._switch_to_conversation(new_conv.id)
+
+        # 4. Append success notification message to the new conversation view
+        escaped_title = html.escape(new_conv.title)
+        escaped_id = html.escape(new_conv.id)
+        msg_count = len(new_conv.messages)
+        self.append_html_to_webview(
+            f'<div class="chat-simple-info">'
+            f'🔀 <strong>已成功建立并切换至对话分支</strong><br/>'
+            f'📌 标题: <strong>{escaped_title}</strong> (ID: <code>{escaped_id}</code>)<br/>'
+            f'📦 已继承原对话全部 {msg_count} 条上下文记录</div>'
+        )
 
     def _handle_title_command(self, title_text: str):
         """Handle /title command: set custom title or regenerate via LLM.
