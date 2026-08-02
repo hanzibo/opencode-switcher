@@ -2,14 +2,6 @@ import time
 import os
 
 
-def is_wayland() -> bool:
-    """Return True if the current session is Wayland."""
-    return (
-        os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
-        or "WAYLAND_DISPLAY" in os.environ
-    )
-
-
 def relative_time(ts_ms: int) -> str:
     """Convert a millisecond timestamp to a human-readable relative time string."""
     if not ts_ms:
