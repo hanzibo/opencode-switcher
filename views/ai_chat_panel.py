@@ -1991,10 +1991,10 @@ class AIChatPanel(Gtk.Box):
         if status == "running":
             # 轮次/工具计数（A+B 方案）：第 N 轮每轮必变，工具×M 单调递增
             spinner.set_no_show_all(False)
-            label_text = f"  子代理 {local_id} · 第 {turn} 轮 · 工具×{tool_count}  "
+            label_text = f"子代理 {local_id} · 第 {turn} 轮 · 工具×{tool_count}"
             spinner.start()
         else:
-            label_text = f"  子代理 {local_id}  "
+            label_text = f"子代理 {local_id}"
             spinner.stop()
             spinner.hide()
 
@@ -2037,9 +2037,9 @@ class AIChatPanel(Gtk.Box):
         lbl = next((w for w in box.get_children() if isinstance(w, Gtk.Label)), None)
         if lbl is not None:
             if status == "running":
-                lbl.set_text(f"  子代理 {local_id} · 第 {turn} 轮 · 工具×{tool_count}  ")
+                lbl.set_text(f"子代理 {local_id} · 第 {turn} 轮 · 工具×{tool_count}")
             else:
-                lbl.set_text(f"  子代理 {local_id}  ")
+                lbl.set_text(f"子代理 {local_id}")
 
         # 更新 spinner 生命周期：running 持续旋转，终态停止并隐藏（🟡-1）
         if status == "running":
