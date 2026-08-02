@@ -1979,8 +1979,8 @@ class AIChatPanel(Gtk.Box):
 
         # 进度感知：运行中左侧持续旋转的加载圈（A 方案）
         spinner = Gtk.Spinner.new()
-        spinner.set_size_request(14, 14)
-        spinner.get_style_context().add_class("subagent-spinner")
+        spinner.get_style_context().add_class("subagent-spinner")  # 尺寸由 CSS 控制（🔵-3）
+        spinner.set_no_show_all(True)  # show_all() 不显示未手动 show 的 spinner（🟡-1）
         box.pack_start(spinner, False, False, 0)
 
         local_id = sid.split("-")[-1] if isinstance(sid, str) and "-" in sid else sid
@@ -1990,6 +1990,7 @@ class AIChatPanel(Gtk.Box):
 
         if status == "running":
             # 轮次/工具计数（A+B 方案）：第 N 轮每轮必变，工具×M 单调递增
+            spinner.set_no_show_all(False)
             label_text = f"  子代理 {local_id} · 第 {turn} 轮 · 工具×{tool_count}  "
             spinner.start()
         else:
@@ -2040,8 +2041,9 @@ class AIChatPanel(Gtk.Box):
             else:
                 lbl.set_text(f"  子代理 {local_id}  ")
 
-        # 更新 spinner 生命周期：running 持续旋转，终态停止并隐藏
+        # 更新 spinner 生命周期：running 持续旋转，终态停止并隐藏（🟡-1）
         if status == "running":
+            spinner.set_no_show_all(False)
             spinner.show()
             spinner.start()
         else:

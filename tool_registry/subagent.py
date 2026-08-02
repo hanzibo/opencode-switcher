@@ -352,6 +352,8 @@ def _execute_subagent_sync(task: str, agent_type: str,
     def _bump_turn():
         """轮次 +1 并必广播（进度信号，不受 action 去重影响）。
 
+        turn 语义 = 已发起的 LLM 请求次数（含失败轮：LLM 异常时该轮已
+        +1 但未完成、无工具执行，failed 浮窗以状态行明确失败）（🔵-2）。
         每轮 LLM 请求开始前调用；同时把 action 置为 "Thinking"
         （新轮次开始的语义）并更新去重哨兵，替代原先单独的
         _update_action("Thinking")——轮次递增本身即进度事件，必广播。
@@ -366,13 +368,15 @@ def _execute_subagent_sync(task: str, agent_type: str,
                 last_broadcast_action[0] = "Thinking"
             _notify_subagent_status_change(subagent_id, info)
 
-    def _bump_tool(tool_name: str):
-        """工具调用计数 +1、历史追加（环形缓冲）并必广播。
+    # 标记本轮是否已累计工具调用（_collect_tool 置位，_flush_tool_progress 消费）
+    _pending_tool_flush = [False]
 
-        在工具执行完成后调用；与 _bump_turn 一样是进度信号，
-        保证"工具×N"与浮窗历史即使工具执行瞬间完成也可见。
+    def _collect_tool(tool_name: str):
+        """锁内累计工具计数与历史（不广播，由 _flush_tool_progress 轮末统一广播）。
+
+        空名跳过（🔵-1：畸形 tool_calls 不污染历史/浮窗）。
         """
-        if subagent_id:
+        if subagent_id and tool_name:
             with _status_lock:
                 info = _background_subagent_status.get(subagent_id)
                 if info is None:
@@ -383,7 +387,19 @@ def _execute_subagent_sync(task: str, agent_type: str,
                     info["tools_history"] = hist[-_MAX_TOOL_HISTORY + 1:] + [tool_name]
                 else:
                     info["tools_history"] = hist + [tool_name]
-            _notify_subagent_status_change(subagent_id, info)
+                _pending_tool_flush[0] = True
+
+    def _flush_tool_progress():
+        """轮末统一广播一次工具进度（O(N) 工具 → O(1) 事件，缓解 idle 堆积 🟡-2）。
+
+        工具执行瞬间完成，逐工具广播无感知差异；合并后计数/历史在轮末一致。
+        """
+        if subagent_id and _pending_tool_flush[0]:
+            _pending_tool_flush[0] = False
+            with _status_lock:
+                info = _background_subagent_status.get(subagent_id)
+            if info is not None:
+                _notify_subagent_status_change(subagent_id, info)
 
     def _mark_failed():
         """子代理执行失败时，将状态标记为 failed 并广播（有 subagent_id 时）。
@@ -508,7 +524,7 @@ def _execute_subagent_sync(task: str, agent_type: str,
                     result = execute_tool_call(tc)
                 except Exception as e:
                     result = f"执行工具「{tc_name}」时异常：{e}"
-                _bump_tool(tc_name)  # 工具计数 +1 + 历史追加（必广播，执行完成瞬间也可见）
+                _collect_tool(tc_name)  # 累计计数+历史（不广播，轮末统一 flush）
 
                 messages.append({
                     "role": "tool",
@@ -516,6 +532,7 @@ def _execute_subagent_sync(task: str, agent_type: str,
                     "name": tc_name,
                     "content": result,
                 })
+            _flush_tool_progress()  # 轮末统一广播一次工具进度（🟡-2 节流）
 
         if not final_text:
             result_parts = []
