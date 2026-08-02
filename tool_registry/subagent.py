@@ -20,6 +20,7 @@ _SUBAGENT_BLOCKED_TOOLS = frozenset([
 
 _SUBAGENT_TIMEOUT_PER_TURN = 60
 _SUBAGENT_CLEANUP_AGE = 300
+_MAX_TOOL_HISTORY = 10  # tools_history 环形缓冲保留的最近工具名数量
 _MAX_TOOL_RESULT_CHARS = 5000
 
 _SUBAGENT_TYPES = {
@@ -300,6 +301,10 @@ def _run_subagent_background(task: str, agent_type: str,
                 "action": "已完成",
                 "completed_at": time.time(),
                 "conv_id": prev.get("conv_id"),
+                # 进度字段必须保留：completed 后浮窗/查询仍显示轮次与工具历史
+                "turn": prev.get("turn", 0),
+                "tool_calls_count": prev.get("tool_calls_count", 0),
+                "tools_history": list(prev.get("tools_history") or []),
             }
             # 先写 results 再通知：UI 收到 completed 事件时结果必定可被消费
             _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])
@@ -342,6 +347,42 @@ def _execute_subagent_sync(task: str, agent_type: str,
                     return
                 last_broadcast_action[0] = action_str
                 info["action"] = action_str
+            _notify_subagent_status_change(subagent_id, info)
+
+    def _bump_turn():
+        """轮次 +1 并必广播（进度信号，不受 action 去重影响）。
+
+        每轮 LLM 请求开始前调用；同时把 action 置为 "Thinking"
+        （新轮次开始的语义）并更新去重哨兵，替代原先单独的
+        _update_action("Thinking")——轮次递增本身即进度事件，必广播。
+        """
+        if subagent_id:
+            with _status_lock:
+                info = _background_subagent_status.get(subagent_id)
+                if info is None:
+                    return
+                info["turn"] = info.get("turn", 0) + 1
+                info["action"] = "Thinking"
+                last_broadcast_action[0] = "Thinking"
+            _notify_subagent_status_change(subagent_id, info)
+
+    def _bump_tool(tool_name: str):
+        """工具调用计数 +1、历史追加（环形缓冲）并必广播。
+
+        在工具执行完成后调用；与 _bump_turn 一样是进度信号，
+        保证"工具×N"与浮窗历史即使工具执行瞬间完成也可见。
+        """
+        if subagent_id:
+            with _status_lock:
+                info = _background_subagent_status.get(subagent_id)
+                if info is None:
+                    return
+                info["tool_calls_count"] = info.get("tool_calls_count", 0) + 1
+                hist = info.get("tools_history") or []
+                if len(hist) >= _MAX_TOOL_HISTORY:
+                    info["tools_history"] = hist[-_MAX_TOOL_HISTORY + 1:] + [tool_name]
+                else:
+                    info["tools_history"] = hist + [tool_name]
             _notify_subagent_status_change(subagent_id, info)
 
     def _mark_failed():
@@ -425,7 +466,7 @@ def _execute_subagent_sync(task: str, agent_type: str,
         final_text = ""
 
         for turn in range(clamped_turns):
-            _update_action("Thinking")
+            _bump_turn()  # 轮次 +1 必广播，action 置 Thinking（"第 N 轮"每轮必变）
             try:
                 sub_config = LLMRequestConfig(
                     base_url=config.base_url,
@@ -467,6 +508,7 @@ def _execute_subagent_sync(task: str, agent_type: str,
                     result = execute_tool_call(tc)
                 except Exception as e:
                     result = f"执行工具「{tc_name}」时异常：{e}"
+                _bump_tool(tc_name)  # 工具计数 +1 + 历史追加（必广播，执行完成瞬间也可见）
 
                 messages.append({
                     "role": "tool",
@@ -543,6 +585,9 @@ def execute_sub_agent(task: str, agent_type: str = "general",
                 "status": "running",
                 "action": "Thinking",
                 "conv_id": conv_id,
+                "turn": 0,
+                "tool_calls_count": 0,
+                "tools_history": [],
             }
         _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])
         _run_subagent_background(task, agent_type, subagent_id)
@@ -600,11 +645,15 @@ def execute_get_subagent_status(id: Optional[Any] = None,
             elapsed = int(now - started) if started else 0
             status_emoji = "✅" if status == "completed" else "🔄" if status == "running" else "❌"
             elapsed_str = f"{elapsed // 60}分{elapsed % 60}秒" if elapsed >= 60 else f"{elapsed}秒"
+            turn = info.get("turn", 0)
+            tool_count = info.get("tool_calls_count", 0)
             lines = [
                 f"📋 子代理 {target_sid} 状态:\n",
                 f"{status_emoji} ID={target_sid}，状态={status}，耗时={elapsed_str}",
                 f"   任务: {task}",
             ]
+            if turn or tool_count:
+                lines.append(f"   进度: 第 {turn} 轮，工具调用 {tool_count} 次")
             if status == "completed":
                 lines.append(f"   结果文件: /tmp/opencode_subagent_{target_sid}_result.txt")
             return "\n".join(lines)
@@ -618,8 +667,12 @@ def execute_get_subagent_status(id: Optional[Any] = None,
             elapsed = int(now - started) if started else 0
             status_emoji = "✅" if status == "completed" else "🔄" if status == "running" else "❌"
             elapsed_str = f"{elapsed // 60}分{elapsed % 60}秒" if elapsed >= 60 else f"{elapsed}秒"
+            turn = info.get("turn", 0)
+            tool_count = info.get("tool_calls_count", 0)
             lines.append(f"{status_emoji} ID={sid}，状态={status}，耗时={elapsed_str}")
             lines.append(f"   任务: {task}")
+            if turn or tool_count:
+                lines.append(f"   进度: 第 {turn} 轮，工具调用 {tool_count} 次")
             if status == "completed":
                 lines.append(f"   结果文件: /tmp/opencode_subagent_{sid}_result.txt")
             lines.append("")
