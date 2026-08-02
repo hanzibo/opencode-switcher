@@ -250,14 +250,14 @@ def _cleanup_expired_subagents():
         _notify_subagent_status_change(sid, None)
 
 
-def _run_subagent_background(task: str, max_turns: int, agent_type: str,
+def _run_subagent_background(task: str, agent_type: str,
                              subagent_id: str, max_tokens: Optional[int] = None):
     def _run():
         global _background_subagent_results, _background_subagent_status
         try:
             # 兜底捕获：任何未预料异常（LLM 内部、html.unescape、竞态等）都不能让
             # 线程静默死亡导致状态永久卡在 running（🔴-2），一律收敛到 failed。
-            raw_result = _execute_subagent_sync(task, max_turns, agent_type,
+            raw_result = _execute_subagent_sync(task, agent_type,
                                                 max_tokens=max_tokens, subagent_id=subagent_id)
         except Exception as e:
             raw_result = f"错误：子代理执行异常 — {e!r}"
@@ -320,7 +320,7 @@ def _run_subagent_background(task: str, max_turns: int, agent_type: str,
     t.start()
 
 
-def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
+def _execute_subagent_sync(task: str, agent_type: str,
                            max_tokens: Optional[int] = None,
                            subagent_id: Optional[str] = None) -> str:
     """Synchronous sub-agent execution (internal)."""
@@ -397,8 +397,9 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
 
     from stores.clipboard_store import AISettingsStore
     ai_settings = AISettingsStore()
-    effective_max_turns = max_turns if (max_turns and max_turns > 0) else ai_settings.max_tool_iterations
-    clamped_turns = max(1, min(effective_max_turns, ai_settings.max_tool_iterations))
+    # 轮次上限仅由用户设置 max_tool_iterations 决定：子代理不再接收主代理的
+    # max_turns 参数，执行到模型给出纯文本答案即自然结束，最多跑到设置上限。
+    clamped_turns = max(1, ai_settings.max_tool_iterations)
 
     messages = [
         {"role": "system", "content": type_info["system_prompt"]},
@@ -499,11 +500,17 @@ def _execute_subagent_sync(task: str, max_turns: int, agent_type: str,
         _file_read_state.store.update(saved_read_state)
 
 
-def execute_sub_agent(task: str, max_turns: int = 10,
-                      agent_type: str = "general",
+def execute_sub_agent(task: str, agent_type: str = "general",
                       run_in_background: bool = True,
-                      max_tokens: Optional[int] = None) -> str:
-    """Spawn an isolated sub-agent to complete a task independently."""
+                      max_tokens: Optional[int] = None,
+                      **kwargs) -> str:
+    """Spawn an isolated sub-agent to complete a task independently.
+
+    轮次机制：子代理不再接收主代理传入的 max_turns，执行到模型给出纯文本
+    答案即自然结束；唯一硬上限是用户设置（AISettingsStore.max_tool_iterations，
+    默认 25）。**kwargs 用于吸收旧版本模型缓存中可能携带的 max_turns 等
+    冗余参数，避免 TypeError 导致工具调用崩溃。
+    """
     if agent_type not in _SUBAGENT_TYPES:
         return f"错误：无效的子代理类型「{agent_type}」。有效值：general, explore, bash"
 
@@ -523,12 +530,12 @@ def execute_sub_agent(task: str, max_turns: int = 10,
                 "conv_id": conv_id,
             }
         _notify_subagent_status_change(subagent_id, _background_subagent_status[subagent_id])
-        _run_subagent_background(task, max_turns, agent_type, subagent_id, max_tokens)
+        _run_subagent_background(task, agent_type, subagent_id, max_tokens)
         return (f"⏳ 子代理已启动（任务ID: {subagent_id}，类型: {agent_type}）。"
                 f"完成后结果将保存至 /tmp/opencode_subagent_{subagent_id}_result.txt，"
                 f"可让主代理使用 read_file 读取。")
 
-    sync_result = _execute_subagent_sync(task, max_turns, agent_type, max_tokens)
+    sync_result = _execute_subagent_sync(task, agent_type, max_tokens)
     unescaped = html.unescape(sync_result)
     if len(unescaped) > _MAX_TOOL_RESULT_CHARS:
         return (unescaped[:_MAX_TOOL_RESULT_CHARS]
@@ -623,7 +630,6 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "task": {"type": "string", "description": "子代理需要完成的任务描述"},
-                    "max_turns": {"type": "integer", "description": "最大工具调用轮数（1-15，默认 10）", "default": 10},
                     "agent_type": {"type": "string", "description": "代理类型：general（全工具）、explore（只读探索）、bash（仅命令执行）", "enum": ["general", "explore", "bash"], "default": "general"},
                     "run_in_background": {"type": "boolean", "description": "是否在后台运行（默认 true，后台运行）", "default": True},
                     "max_tokens": {"type": "integer", "description": "子代理响应的最大 token 数（可选）"}

@@ -144,12 +144,11 @@ def format_tool_calls_for_display(tool_calls: List[dict]) -> str:
         elif name == "sub_agent":
             stask = args.get("task", "")
             safe_task = html.escape(stask[:120])
-            max_t = args.get("max_turns", 10)
             max_tok = args.get("max_tokens")
             tok_str = f"，最大 Token: {max_tok}" if max_tok is not None else ""
             parts.append(
                 f'<div class="tool-call-info">🔄 <b>子代理任务：</b>{safe_task}'
-                f'<span style="color:#888;font-size:11px;margin-left:8px;">最多 {max_t} 轮{tok_str}</span></div>'
+                f'<span style="color:#888;font-size:11px;margin-left:8px;">{tok_str}</span></div>'
             )
         elif name == "bash":
             cmd = args.get("command", "")
