@@ -2,10 +2,6 @@ import gc
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
-try:
-    from gi.repository import GdkX11
-except ImportError:
-    GdkX11 = None
 from typing import Optional, Callable, List, Dict
 from stores.session_store import Session
 from views.clipboard_panel import ClipboardPanel
@@ -472,15 +468,7 @@ class SearchPanel:
         self._window.move(x, y)
         self._window.show_all()
         self._window.set_focus(self._search_entry)
-        display = Gdk.Display.get_default()
-        if GdkX11 is not None and isinstance(display, GdkX11.X11Display):
-            win = self._window.get_window()
-            if win is not None:
-                self._window.present_with_time(GdkX11.x11_get_server_time(win))
-            else:
-                self._window.present()
-        else:
-            self._window.present()
+        self._window.present()
         self._search_entry.grab_focus()
         if self._clipboard_panel:
             self._clipboard_panel.on_panel_shown()

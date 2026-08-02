@@ -1,6 +1,6 @@
 # gnome-extension — Agent Instructions
 
-GNOME Shell extension for Wayland clipboard monitoring (owner-changed signal) and window focus (file-based IPC). Bridges the gap for the opencode-switcher tray app on Wayland where X11 polling/focus tools don't work.
+GNOME Shell extension for Wayland clipboard monitoring (owner-changed signal) and window focus (file-based IPC). Provides the Wayland-native capture and focus mechanisms the opencode-switcher tray app relies on.
 
 ## STRUCTURE
 

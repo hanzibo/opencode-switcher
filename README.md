@@ -17,9 +17,7 @@ OpenCode Switcher 是一个专为 Linux GTK3 桌面环境设计的系统托盘�
   - 自定义分类提示词管理，支持对历史项执行快捷 AI 搜索与分析。
   - 支持模板化占位符 `${&}`，可在提示词中任意位置内嵌剪切板原内容；支持反斜杠转义（`\${&}` 将输出为字面量）。
   - Prompts Config 弹窗提供快捷置入 `+ ${&}` 按钮。
-- **🖥️ 平台双模适配 (X11 & Wayland)**：
-  - **X11**：后台守护线程毫秒级轮询剪切板，使用 `pynput` 监听全局快捷键 `Ctrl+Shift+Space`，利用 `xdotool` 执行窗口聚焦。
-  - **Wayland**：完全停用后台轮询，通过配套的 **GNOME Shell 扩展** 实时监听剪切板变动，通过系统级 Unix 套接字监听快捷键触发，通过文件共享机制安全请求窗口聚焦。
+- **🖥️ Wayland 原生支持**：通过配套的 **GNOME Shell 扩展** 实时监听剪切板变动（`owner-changed` 信号），通过系统级 Unix 套接字监听快捷键触发，通过文件共享机制安全请求窗口聚焦。
 - **🔧 智能终端拉起**：自动探知系统中安装的终端（按优先级：`Ptyxis` → `GNOME Terminal` → `Console/kgx` → `Black Box`），并在对应的终端里拉起指定的 OpenCode 会话。
 - **🤖 AI 助手侧栏**：内嵌 WebKit2 WebView 的多轮 LLM 对话面板，支持流式输出、Markdown/代码高亮/KaTeX 数学渲染、图片附件、模型切换，以及基于 ReAct 循环的 9 种工具调用（网页搜索、文件操作等）。
 - **🔁 对话回滚与重试**：支持回滚到任意历史轮次（`/rollback`），重试上一轮响应（`/retry`），以及完整的对话历史管理。
@@ -32,10 +30,8 @@ OpenCode Switcher 是一个专为 Linux GTK3 桌面环境设计的系统托盘�
 
 ```bash
 # Debian/Ubuntu 及其衍生系统
-sudo apt install gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard xclip xdotool
+sudo apt install gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard
 ```
-
-> **注意**：`xdotool` 为可选安装，仅在 X11 环境下执行窗口强聚焦时需要。
 
 ---
 
@@ -71,9 +67,9 @@ sudo apt install gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-
 ├── clipboard_panel.py          # 剪贴板面板容器：组装子组件 + 事件路由（~1950 行）
 ├── clipboard_store.py          # 数据层：剪贴板去重/分类、自定义分类、提示词、对话存储
 ├── session_store.py            # OpenCode SQLite 数据库读取 + 进程活体检测
-├── hotkey.py                   # 热键管理：X11 (pynput) + Wayland (Unix Socket)
+├── system/hotkey.py             # 热键管理：Wayland (Unix Socket)
 ├── launcher.py                 # 终端自动检测 + OpenCode 会话拉起
-├── utils.py                    # 工具函数：is_wayland()、聚焦请求、缓存路径
+├── system/utils.py             # 工具函数：相对时间、聚焦请求、缓存路径
 │
 ├── ai_chat_panel.py            # AI 助手侧栏：WebView、LLM 对话、流式输出、ReAct 工具调用
 ├── ai_html_template.py         # WebView HTML 模板 + KaTeX 内联
