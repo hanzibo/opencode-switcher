@@ -18,7 +18,6 @@ _SUBAGENT_BLOCKED_TOOLS = frozenset([
     "sub_agent",
 ])
 
-_MAX_SUBAGENT_TURNS = 20
 _SUBAGENT_TIMEOUT_PER_TURN = 60
 _SUBAGENT_CLEANUP_AGE = 300
 _MAX_TOOL_RESULT_CHARS = 5000
@@ -394,11 +393,16 @@ def _execute_subagent_sync(task: str, agent_type: str,
         _mark_failed()
         return "错误：未配置 LLM base URL。请在 AI 设置中配置。"
 
-    from stores.clipboard_store import AISettingsStore
+    from stores.clipboard_store import AISettingsStore, DEFAULT_MAX_TOKENS
     ai_settings = AISettingsStore()
     # 轮次上限仅由用户设置 max_tool_iterations 决定：子代理不再接收主代理的
     # max_turns 参数，执行到模型给出纯文本答案即自然结束，最多跑到设置上限。
-    clamped_turns = max(1, ai_settings.max_tool_iterations)
+    # 对 JSON 手改/损坏的字符串/None 做类型归一（int），失败回退默认 25（M2）。
+    try:
+        _max_iter = int(ai_settings.max_tool_iterations)
+    except (TypeError, ValueError):
+        _max_iter = 25
+    clamped_turns = max(1, _max_iter)
 
     messages = [
         {"role": "system", "content": type_info["system_prompt"]},
@@ -407,13 +411,13 @@ def _execute_subagent_sync(task: str, agent_type: str,
 
     # 最大输出 tokens 遵循子代理默认模型（API Settings 中指定，_get_llm_config
     # 返回）的 max_tokens 配置，不再由主代理传递；配置非法（<=0/非数字）时
-    # 回退 4096 兜底。
+    # 回退 DEFAULT_MAX_TOKENS 兜底（L2：与 clipboard_store 单一事实来源对齐）。
     try:
         subagent_max_tokens = int(config.max_tokens)
         if subagent_max_tokens <= 0:
-            subagent_max_tokens = 4096
+            subagent_max_tokens = DEFAULT_MAX_TOKENS
     except (ValueError, TypeError):
-        subagent_max_tokens = 4096
+        subagent_max_tokens = DEFAULT_MAX_TOKENS
 
     try:
         from ai_engine.llm_client import _LLMHttpClient, _LLMHttpError, LLMRequestConfig
@@ -510,10 +514,18 @@ def execute_sub_agent(task: str, agent_type: str = "general",
     轮次机制：子代理不再接收主代理传入的 max_turns，执行到模型给出纯文本
     答案即自然结束；唯一硬上限是用户设置（AISettingsStore.max_tool_iterations，
     默认 25）。最大输出 tokens 遵循子代理默认模型（API Settings 中指定）的
-    max_tokens 配置，同样不由主代理传递。**kwargs 用于吸收旧版本模型缓存中
-    可能携带的 max_turns / max_tokens 等冗余参数，避免 TypeError 导致工具
-    调用崩溃。
+    max_tokens 配置，同样不由主代理传递。**kwargs 仅用于吸收旧版本模型缓存中
+    可能携带的 max_turns / max_tokens 冗余参数，避免 TypeError；其他未知参数
+    不静默吞掉，告警提示 schema 与实现漂移（M1）。
     """
+    # 显式吸收已知旧参数；其余未知参数告警，避免未来新增合法参数被静默忽略
+    for _stale in ("max_turns", "max_tokens"):
+        kwargs.pop(_stale, None)
+    if kwargs:
+        import logging
+        logging.getLogger(__name__).warning(
+            "execute_sub_agent 收到未知参数已忽略: %s", sorted(kwargs)
+        )
     if agent_type not in _SUBAGENT_TYPES:
         return f"错误：无效的子代理类型「{agent_type}」。有效值：general, explore, bash"
 
