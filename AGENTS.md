@@ -14,9 +14,11 @@ Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipb
 | Install | `./install.sh install` | Copies to `~/.local/share/opencode-switcher/`, enables systemd, GNOME ext |
 | Uninstall | `./install.sh uninstall` | Interactive — asks about keeping user data |
 | Status | `./install.sh status` | Checks install, desktop entry, service, opencode CLI, GNOME ext |
-| DB inspect | `venv/bin/python3 inspect_db.py` | Lists session table schema + latest rows |
+| DB inspect | `venv/bin/python3 -m system.inspect_db` | Lists session table schema + latest rows |
 
 **System deps**: `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-gi-cairo python3-pip python3-venv wl-clipboard gir1.2-webkit2-4.1` — webkit2gtk NOT in `install.sh` but required at runtime (AI panel crashes without it).
+
+**`tests/` is gitignored**: only `test_conversation_fork.py` is tracked (pre-ignore). Most test files exist locally but are NOT in version control — don't rely on `git` to find them, and don't be surprised when new test files don't show up in `git status`.
 
 **Commit convention**: `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `docs(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`, `tool-registry`, `clipboard`, `mcp`).
 
@@ -42,15 +44,16 @@ systemd/.desktop → run.sh → main.py (flock lock)
 | Module | Lines | Role |
 |--------|-------|------|
 | `main.py` | 261 | Entrypoint: flock lock, App(), Gtk.main() |
-| `views/` | ~7500 | Main UI views (`panel.py`, `clipboard_panel.py`, `ai_chat_panel.py`, `ai_popovers.py`) |
-| `dialogs/` | ~3000 | GTK dialogs (`settings_dialog.py`, `prompts_config_dialog.py`, `memory_manager_dialog.py`, etc.) |
-| `stores/` | ~1800 | Data persistence & state (`clipboard_store.py`, `session_store.py`, `skill_store.py`, `theme_config.py`) |
-| `ai_engine/` | ~1100 | AI LLM engine & rendering (`llm_client.py`, `ai_tool_loop.py`, `ai_html_template.py`, `render_pipeline.py`) |
-| `system/` | ~300 | System IPC & utilities (`hotkey.py`, `launcher.py`, `event_types.py`, `migrate_history.py`, `utils.py`) |
-| `mcp_integration/` | ~2140 | MCP protocol layer (JSON-RPC over stdio, GTK asyncio bridge) |
+| `views/` | ~8300 | Main UI views (`panel.py`, `clipboard_panel.py`, `ai_chat_panel.py`, `ai_popovers.py`) |
+| `dialogs/` | ~4200 | GTK dialogs (`settings_dialog.py`, `prompts_config_dialog.py`, `memory_manager_dialog.py`, etc.) |
+| `stores/` | ~2100 | Data persistence & state (`clipboard_store.py`, `session_store.py`, `skill_store.py`, `theme_config.py`) |
+| `ai_engine/` | ~1350 | AI LLM engine & rendering (`llm_client.py`, `ai_tool_loop.py`, `ai_html_template.py`, `render_pipeline.py`) |
+| `system/` | ~440 | System IPC & utilities (`hotkey.py`, `launcher.py`, `event_types.py`, `migrate_history.py`, `utils.py`) |
+| `mcp_integration/` | ~2170 | MCP protocol layer (JSON-RPC over stdio/http transports in `transports/`, GTK asyncio bridge) |
 | `tool_registry/` | 28 tools across 14 modules | AI tool executors (bash, web, filesystem, code analysis, subagent, search, etc.) |
 | `html_templates/` | ~1910 | Web assets (`chat.js`, `chat.css`) for WebKit WebView rendering |
 | `ai_text_utils/` | ~1270 | Pure text/markdown/math helpers (zero GTK dep) |
+| `deploy/` | — | Templated `opencode-switcher.{service,desktop}` + icon; `install.sh` substitutes `__INSTALL_DIR__` via `sed` |
 
 ### Tool Registry (`tool_registry/`)
 
@@ -96,8 +99,9 @@ These cause SIGSEGV if violated. Follow strictly.
 
 ## Key Features & Quirks
 
-### Slash Commands (in search bar)
-`/new`, `/open`, `/gm <query>`, `/google <query>`. Tab-completion. `/gm` uses `evdev.UInput` for automated typing simulation. Delay: 1.2s (Firefox running) / 4.0s (not).
+### Slash Commands
+- **Search bar** (`views/panel.py`): `/new`, `/open`, `/gm <query>`, `/google <query>`. Tab-completion. `/gm` uses `evdev.UInput` for automated typing simulation. Delay: 1.2s (Firefox running) / 4.0s (not).
+- **AI chat input** (`_AI_COMMANDS` in `views/ai_chat_panel.py`): `/new`, `/delete`, `/fork`, `/retry`, `/rollback`, `/title`, `/model`, `/cd`, `/summary keep=N`, `/skill`. List duplicated in `views/clipboard_panel.py` — keep in sync. `/fork` branches the current conversation via `ConversationStore.fork_conversation()`.
 
 ### Clipboard Classification
 Heuristic regex scoring in `clipboard_store.py` (`classify_text()`, `detect_language_name()`). **Duplicated in `gnome-extension/extension.js`** — ~150 lines of scoring in both Python and JS. Must update both for any classification change.
@@ -119,6 +123,10 @@ Heuristic regex scoring in `clipboard_store.py` (`classify_text()`, `detect_lang
 
 ### Subagent Status Bar Flash Guard
 Dynamically add/remove `.subagent-status-bar` class on FlowBox before `hide()`/`.remove(child)` to avoid GTK3 layout flicker.
+
+### Subagent Monitoring & Iteration Limit
+- Subagent bubbles show real-time ReAct action status (Thinking / Tool Call: `<tool>` / Answering) via `tool_registry/subagent.py` — event-driven, no fixed turn cap.
+- Max turns is governed by `AISettingsStore().max_tool_iterations` (shared with main agent), NOT a hardcoded constant. Changing that setting affects subagent depth.
 
 ### SQLite Database Coupling
 - **DB**: `~/.local/share/opencode/opencode.db`. Connection: `timeout=5`, `PRAGMA journal_mode=WAL`.
@@ -178,6 +186,7 @@ When Phase 3a added `data-tool-call-id` to `<details class="tool-step-details">`
 
 ## Reference
 
-- `.hzb-agents/experience/` — 128 per-feature postmortems
-- `.omo/plans/` — 48 structured work plans
+- `.hzb-agents/experience/` — 130 per-feature postmortems
+- `.omo/plans/` — 49 structured work plans
+- `docs/plans/` — recent audit/refactor plans (e.g., `/fork` review, subagent monitoring)
 - `gnome-extension/AGENTS.md` — GNOME Shell extension internals
