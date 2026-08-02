@@ -144,8 +144,11 @@ class _ToolCallAccumulator:
         兼容两种 chunk 风格（修复 Ling-3.0-flash 等兼容实现的流中断）：
         - OpenAI 标准：后续 chunk 省略 id/name/arguments 键
         - 部分兼容实现：显式发送 null 值（{"id": null, "name": null}）
-        两种情况下均须跳过 None，避免 str + None 的 TypeError 中断整个流。
+        两种情况下均须跳过 None/非 str 值，避免 str + None 的 TypeError
+        中断整个流。非 dict 元素（如 tool_calls 数组中的 null）整体跳过。
         """
+        if not isinstance(delta, dict):
+            return
         index = delta.get("index")
         if index is None:
             return
@@ -156,15 +159,18 @@ class _ToolCallAccumulator:
                 "function": {"name": "", "arguments": ""},
             }
         call = self._calls[index]
-        # 用 .get() 取真实值而非 "in" 检查键存在：{"id": null} 时跳过拼接
-        if delta.get("id"):
-            call["id"] += delta["id"]
+        # 值判空 + 类型守卫：{"id": null} 或非 str 值均跳过拼接（🟡-1/🟡-2）
+        val = delta.get("id")
+        if isinstance(val, str) and val:
+            call["id"] += val
         fn = delta.get("function")
         if isinstance(fn, dict):
-            if fn.get("name"):
-                call["function"]["name"] += fn["name"]
-            if fn.get("arguments"):
-                call["function"]["arguments"] += fn["arguments"]
+            name = fn.get("name")
+            if isinstance(name, str) and name:
+                call["function"]["name"] += name
+            args = fn.get("arguments")
+            if isinstance(args, str) and args:
+                call["function"]["arguments"] += args
 
     def get_calls(self) -> List[dict]:
         """Return all accumulated tool calls, ordered by index, filtering out incomplete ones."""
@@ -236,11 +242,17 @@ def parse_sse_events(
             except json.JSONDecodeError:
                 continue
 
-            choices = chunk.get("choices", [{}])
-            if not choices:
+            # 逐层防御（🟡-1）：chunk / choices / 首元素 / delta 显式 null 均不中断流
+            if not isinstance(chunk, dict):
                 continue
-            delta = choices[0].get("delta", {})
-            finish_reason = choices[0].get("finish_reason")
+            choices = chunk.get("choices")
+            if not isinstance(choices, list) or not choices:
+                continue
+            first = choices[0]
+            if not isinstance(first, dict):
+                continue
+            delta = first.get("delta") or {}
+            finish_reason = first.get("finish_reason")
 
             # 处理工具调用增量
             tc_delta = delta.get("tool_calls")
@@ -272,6 +284,10 @@ def parse_sse_events(
             if reasoning:
                 yield reasoning_delta(reasoning)
     except Exception as e:
+        # 用户取消导致响应被关闭（cancel_active_request 并发 close）时，
+        # 读取中断属预期行为，静默收尾而非误报"流读取中断"（🟡-4）
+        if cancel_event and cancel_event.is_set():
+            return
         logger.error("SSE 流读取异常: %s", e)
         raise _LLMHttpError(f"SSE 流读取中断: {e}")
 
@@ -477,8 +493,6 @@ class _LLMHttpClient:
                 for event in parse_sse_events(response, cancel_event):
                     yield event
 
-            self._active_response = None
-
         except requests.exceptions.Timeout:
             if self._active_response_check_cancel(cancel_event):
                 return
@@ -497,6 +511,11 @@ class _LLMHttpClient:
                 return
             err_msg = _extract_http_error_details(e) if getattr(e, "response", None) is not None else str(e)
             raise _LLMHttpError(f"请求异常：{err_msg}")
+        finally:
+            # 任何路径（正常结束/异常/GeneratorExit/取消）均清理悬挂引用（🟡-3）：
+            # 生成器在 yield 处被消费方提前 break 时，with 块后的代码不会执行，
+            # 若不在此清理，cancel_active_request 会误判"无 response"走错分支。
+            self._active_response = None
 
     def cancel_active_request(self):
         """Close the active HTTP response to unblock the SSE streaming thread.
