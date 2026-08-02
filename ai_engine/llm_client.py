@@ -139,7 +139,13 @@ class _ToolCallAccumulator:
         self._calls: Dict[int, dict] = {}
 
     def add_delta(self, delta: dict) -> None:
-        """Accumulate a tool_calls delta chunk from the SSE stream."""
+        """Accumulate a tool_calls delta chunk from the SSE stream.
+
+        兼容两种 chunk 风格（修复 Ling-3.0-flash 等兼容实现的流中断）：
+        - OpenAI 标准：后续 chunk 省略 id/name/arguments 键
+        - 部分兼容实现：显式发送 null 值（{"id": null, "name": null}）
+        两种情况下均须跳过 None，避免 str + None 的 TypeError 中断整个流。
+        """
         index = delta.get("index")
         if index is None:
             return
@@ -150,13 +156,14 @@ class _ToolCallAccumulator:
                 "function": {"name": "", "arguments": ""},
             }
         call = self._calls[index]
-        if "id" in delta:
+        # 用 .get() 取真实值而非 "in" 检查键存在：{"id": null} 时跳过拼接
+        if delta.get("id"):
             call["id"] += delta["id"]
-        if "function" in delta:
-            fn = delta["function"]
-            if "name" in fn:
+        fn = delta.get("function")
+        if isinstance(fn, dict):
+            if fn.get("name"):
                 call["function"]["name"] += fn["name"]
-            if "arguments" in fn:
+            if fn.get("arguments"):
                 call["function"]["arguments"] += fn["arguments"]
 
     def get_calls(self) -> List[dict]:
