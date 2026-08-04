@@ -343,11 +343,28 @@ function _renderMath(element) {
                     resetReasoning();
                     const content = document.getElementById('content');
                     content.innerHTML = html;
+                    _wrapTables(content);
                     addCopyButtons();
                     _renderMath(content);
                     _throttledWindowing();
                     _scrollToBottom();
                     _initRoundNav();
+                }
+                /**
+                 * _wrapTables - wrap every <table> in a .table-scroll div so wide
+                 * tables scroll inside the bubble instead of overflowing the page
+                 * (<table> ignores overflow-x, a block div honors it).
+                 * Idempotent: already-wrapped tables are skipped.
+                 */
+                function _wrapTables(root) {
+                    const scope = root || document;
+                    scope.querySelectorAll('table').forEach(function(t) {
+                        if (t.parentElement && t.parentElement.classList.contains('table-scroll')) return;
+                        const wrap = document.createElement('div');
+                        wrap.className = 'table-scroll';
+                        t.parentNode.insertBefore(wrap, t);
+                        wrap.appendChild(t);
+                    });
                 }
                 function appendMessageContainer(msgId) {
                     window._isStreaming = true;
@@ -389,6 +406,7 @@ function _renderMath(element) {
                     if (isSplit) {
                         container.className = ''; // Remove container styling for split layout
                         container.innerHTML = html;
+                        _wrapTables(container);
                         addCopyButtons();
                         _debouncedRenderMath(container);
                     } else {
@@ -413,12 +431,14 @@ function _renderMath(element) {
                                 var typing = regions[2].querySelector('.typing-indicator');
                                 if (typing) typing.remove();
                                 regions[2].innerHTML = answer.innerHTML;
+                                _wrapTables(regions[2]);
                             }
                             addCopyButtons();
                             _debouncedRenderMath(div);
                         } else {
                             // 旧结构：向后兼容
                             div.innerHTML = html;
+                            _wrapTables(div);
                             addCopyButtons();
                             _debouncedRenderMath(div);
                         }

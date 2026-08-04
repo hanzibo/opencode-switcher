@@ -182,6 +182,25 @@
                 summary { cursor: pointer; }
                 table { border-collapse: collapse; width: 100%; margin: 8px 0; }
                 body.streaming table { table-layout: fixed; }
+                /* Wide tables: wrapped by JS _wrapTables() into a .table-scroll div.
+                   A plain block div honors overflow-x:auto reliably (table elements
+                   do not), so the scrollbar stays inside the bubble instead of
+                   scrolling the whole page. width:max-content lets columns keep
+                   natural width; min-width:100% keeps narrow tables full-width;
+                   nowrap prevents word-break from crushing columns to nothing. */
+                .table-scroll {
+                    max-width: 100%;
+                    overflow-x: auto;
+                }
+                .table-scroll table {
+                    width: max-content;
+                    min-width: 100%;
+                    border-collapse: collapse;
+                }
+                .table-scroll th,
+                .table-scroll td {
+                    white-space: nowrap;
+                }
                 th, td { border: 1px solid {pre_border}; padding: 6px 10px; text-align: left; word-break: break-all; overflow-wrap: break-word; }
                 th { background-color: {table_header_bg}; font-weight: 600; }
                 tr:nth-child(even) { background-color: {table_alt_bg}; }
