@@ -298,22 +298,43 @@ def _ensure_list_blankline(text: str) -> str:
     return '\n'.join(result)
 
 
+_TABLE_SEPARATOR_RE = re.compile(r'^\s*\|[\s:\-|]+\|\s*$')
+
+
 def _ensure_table_blankline(text: str) -> str:
-    """Ensure pipe tables are preceded by blank lines for Python-markdown's tables extension."""
+    """Ensure pipe tables are surrounded by blank lines for Python-markdown's tables extension.
+
+    覆盖三种边界（均在代码块外）：
+    1. 表格前：普通文本/其他块紧跟表头时补空行（既有逻辑）；
+    2. 表格后：表格行后紧跟普通文本/引用时补空行——否则 tables 扩展会把
+       后续文本并进表格 tbody（如 "| 1 | 2 |\n总结文字" 中总结文字被吞）；
+    3. 相邻表格：表1末行后紧跟表2表头（下一行是分隔行）时补空行——否则
+       两个表格被解析为一个表格，分隔行变成普通行。
+    """
     lines = text.split('\n')
     result = []
     in_code_block = False
 
     for i, line in enumerate(lines):
         stripped = line.strip()
+        next_line = lines[i + 1].strip() if i + 1 < len(lines) else ''
 
         if stripped.startswith('```'):
             in_code_block = not in_code_block
 
-        if not in_code_block and stripped.startswith('|'):
-            if i > 0:
-                prev_stripped = lines[i - 1].strip()
-                if prev_stripped and not prev_stripped.startswith('|'):
+        if not in_code_block and stripped:
+            if stripped.startswith('|'):
+                # ① 表格前补空行（前一行非空且非表格行）
+                if (result and result[-1].strip()
+                        and not result[-1].strip().startswith('|')):
+                    result.append('')
+                # ② 相邻表格：当前行是新表头（下一行是分隔行）且前一行是表格行
+                elif (next_line and _TABLE_SEPARATOR_RE.match(next_line)
+                      and result and result[-1].strip().startswith('|')):
+                    result.append('')
+            else:
+                # ③ 表格后补空行：普通文本/引用紧跟表格行
+                if result and result[-1].strip().startswith('|'):
                     result.append('')
 
         result.append(line)

@@ -43,6 +43,47 @@ class TestAITextUtils(unittest.TestCase):
         self.assertIn("<strong>bold</strong>", html)
         self.assertIn("<code>code</code>", html)
 
+    # ── 表格边界（_ensure_table_blankline）──
+
+    def test_table_blankline_before_table(self):
+        """表格前无空行（既有逻辑回归）：表格正常渲染。"""
+        md = "说明文字。\n| 名称 | 数量 |\n|---|---|\n| 苹果 | 3 |"
+        html = _markdown_to_html_safe(md)
+        self.assertIn("<table>", html)
+        self.assertIn("<th>名称</th>", html)
+        self.assertNotIn("说明文字。", html.split("<table>")[1])  # 说明文字不在表格内
+
+    def test_table_blankline_after_table_text(self):
+        """表格后紧跟普通文本：文本独立成段，不被并入表格。"""
+        md = "| 名称 | 数量 |\n|---|---|\n| 苹果 | 3 |\n总结文字"
+        html = _markdown_to_html_safe(md)
+        self.assertIn("<table>", html)
+        self.assertIn("<p>总结文字</p>", html)
+        self.assertNotIn("<td>总结文字</td>", html)
+
+    def test_table_blankline_after_table_quote(self):
+        """表格后紧跟引用：引用独立成块，不被并入表格。"""
+        md = "| A | B |\n|---|---|\n| 1 | 2 |\n> 引用文字"
+        html = _markdown_to_html_safe(md)
+        self.assertIn("<table>", html)
+        self.assertIn("<blockquote>", html)
+        self.assertNotIn("<td>&gt; 引用文字</td>", html)
+
+    def test_table_blankline_adjacent_tables(self):
+        """两个相邻表格（无文本间隔）：各自独立渲染，不合并。"""
+        md = "| A | B |\n|---|---|\n| 1 | 2 |\n| C | D |\n|---|---|\n| 3 | 4 |"
+        html = _markdown_to_html_safe(md)
+        self.assertEqual(html.count("<table>"), 2, "相邻表格应渲染为两个独立表格")
+        self.assertIn("<th>A</th>", html)
+        self.assertIn("<th>C</th>", html)
+
+    def test_table_blankline_inside_code_block(self):
+        """代码块内的 | 行不受影响（不插入空行、不破坏代码）。"""
+        md = "```\n| a | b |\n| 1 | 2 |\n```"
+        html = _markdown_to_html_safe(md)
+        self.assertNotIn("<table>", html)
+        self.assertIn("| a | b |", html)
+
     def test_strip_ai_markup(self):
         text_with_markup = 'Hello world <details class="thinking-details">internal reasoning</details>\n<div class="answer-header">Header</div>'
         cleaned = _strip_ai_markup(text_with_markup)
