@@ -29,7 +29,7 @@ Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipb
 `main.py` is the sole entrypoint. Startup:
 ```
 systemd/.desktop → run.sh → main.py (flock lock)
-  → _load_config() → migrate_history.run_migration()
+  → load_theme_config() → migrate_history.run_migration()
   → ClipboardStore → CategoryStore → SearchPanel+ClipboardPanel → HotkeyManager
   → App.run(): hotkey start → Gtk.main()
   → Ctrl+C: app.stop() → flock release
@@ -50,7 +50,7 @@ systemd/.desktop → run.sh → main.py (flock lock)
 | `ai_engine/` | ~1350 | AI LLM engine & rendering (`llm_client.py`, `ai_tool_loop.py`, `ai_html_template.py`, `render_pipeline.py`) |
 | `system/` | ~440 | System IPC & utilities (`hotkey.py`, `launcher.py`, `event_types.py`, `migrate_history.py`, `utils.py`) |
 | `mcp_integration/` | ~2170 | MCP protocol layer (JSON-RPC over stdio/http transports in `transports/`, GTK asyncio bridge) |
-| `tool_registry/` | 28 tools across 13 tool modules (+display helper) | AI tool executors (bash, web, filesystem, code analysis, subagent, search, etc.) |
+| `tool_registry/` | 28 tools across 12 schema modules (+display helper, no schemas) | AI tool executors (bash, web, filesystem, code analysis, subagent, search, etc.) |
 | `html_templates/` | ~1910 | Web assets (`chat.js`, `chat.css`) for WebKit WebView rendering |
 | `ai_text_utils/` | ~1270 | Pure text/markdown/math helpers (zero GTK dep) |
 | `deploy/` | — | Templated `opencode-switcher.{service,desktop}` + icon; `install.sh` substitutes `__INSTALL_DIR__` via `sed` |
@@ -92,10 +92,12 @@ These cause SIGSEGV if violated. Follow strictly.
 
 ## WebView Memory Optimization Patterns
 
-- **`terminate_web_process()` is the only effective memory release** for WebKit. `load_html('<html></html>')` + `clear_cache()` + `malloc_trim()` reduces only ~30MB of ~200MB WebProcess RSS.
-- **MemoryPressureSettings** must be set at `WebContext` construction time (`WebKit2.WebContext.new_with_context()`). Runtime changes are ignored. Configured at `ai_chat_panel.py:258-262` — 300MB limit, 5s poll, 0.2/0.4 thresholds.
-- **After terminate**, call `set_background_color(rgba)` with opaque color — terminated WebView renders transparent, showing desktop behind.
-- For clean suspension: terminate → set background → clear_cache.
+- **`terminate_web_process()` is the only effective memory release** for WebKit — `load_html` + cache clearing barely moves the ~200MB WebProcess RSS.
+- **MemoryPressureSettings must be set at `WebContext` construction time** — runtime changes are ignored. Configured in `ai_engine/ai_html_template.py:118-126` (`get_shared_web_context()`): 300MB limit, 5s poll, 0.2/0.4 thresholds; constants duplicated at `views/ai_chat_panel.py:50-53`.
+- **Shared WebContext singleton**: all WebViews use `get_shared_web_context()` to avoid duplicate WebKitNet processes. Reuse it (never create a fresh context) when rebuilding a WebView.
+- **Suspend flow** (`views/ai_chat_panel.py`): 5s after panel hidden (`_SUSPEND_DELAY_SECONDS`), deferred while any conversation is still streaming → cache `_last_rendered_html` into `_ai_html_cache[conv_id]`, set `_webview_suspended`, then `terminate_web_process()`.
+- **Resume flow**: `on_panel_shown` → `load_html(theme_template + cached_html)`, reset `_streaming_container_created` (DOM must be rebuilt).
+- **Crash vs suspend**: `_on_webview_crashed` skips the rebuild when `_webview_suspended` is set (intentional termination, not a crash); on real crashes it builds a new `WebKit2.WebView` reusing the shared context.
 
 ## Key Features & Quirks
 
@@ -126,7 +128,7 @@ Dynamically add/remove `.subagent-status-bar` class on FlowBox before `hide()`/`
 
 ### Subagent Monitoring & Iteration Limit
 - Subagent bubbles show real-time ReAct action status (Thinking / Tool Call: `<tool>` / Answering) via `tool_registry/subagent.py` — event-driven, no fixed turn cap.
-- Subagent turns are clamped by `AISettingsStore().max_tool_iterations` (shared with main agent); the tool's own default is 10, but the setting caps the effective depth. Changing that setting affects subagent depth.
+- Subagent depth is capped only by `AISettingsStore().max_tool_iterations` (shared with main agent; default 25, fallback 25 on corrupt/None values). The old `max_turns` parameter was removed — subagents run until the model emits a plain-text answer or hits the cap. Changing the setting affects subagent depth.
 
 ### SQLite Database Coupling
 - **DB**: `~/.local/share/opencode/opencode.db`. Connection: `timeout=5`, `PRAGMA journal_mode=WAL`.
