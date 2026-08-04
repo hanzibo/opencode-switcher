@@ -658,19 +658,19 @@ TOOL_SCHEMAS = [
             "type": "function",
             "function": {
                 "name": "edit_file",
-                "description": "编辑现有文件：替换字符串（string 模式，根据 old_string 匹配定位）或替换行范围（line 模式）。string 模式任意读取过文件即可编辑（old_string 匹配确保安全），line 模式需完整读取（无字符串兜底）。设置 force=True 跳过所有读取检查。支持 replace_all 替换全部匹配。不适用于创建新文件（应使用 write_file），不适用于重命名或删除文件。",
+                "description": "编辑现有文件（需先经 read_file 读取过）。两种模式：\n- string 模式（默认）：按 old_string 精确匹配定位（含空格/缩进）；默认仅替换第一个匹配，若出现多处且未设 replace_all=True 会拒绝并列出位置（需扩大上下文或设 replace_all）；new_string 传空字符串可删除匹配内容。\n- line 模式：按行号范围替换（start_line 必填、从 1 起始、含端点，end_line 缺省=start_line）；new_string 传空字符串可删除该行范围；需完整读取过文件。\n安全机制：文件自读取后被外部修改会拒绝编辑（内容一致则自动刷新状态）；force=True 跳过所有读取校验（谨慎使用）。不适用于创建新文件（应使用 write_file）、重命名或删除文件。",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "文件的绝对路径"},
                         "purpose": {"type": "string", "description": "简短描述编辑该文件的目的（10-40字），用于向用户解释执行此操作的原因。例如：修复语法错误、更新配置项、替换旧版权信息"},
-                        "old_string": {"type": "string", "description": "要替换的原文（string 模式下必填）"},
-                        "new_string": {"type": "string", "description": "替换后的新内容"},
-                        "replace_all": {"type": "boolean", "description": "是否替换所有出现位置", "default": False},
-                        "mode": {"type": "string", "description": "编辑模式", "enum": ["string", "line"], "default": "string"},
-                        "start_line": {"type": "integer", "description": "替换的起始行号（line 模式）"},
-                        "end_line": {"type": "integer", "description": "替换的结束行号（line 模式，含）"},
-                        "force": {"type": "boolean", "description": "跳过前置读取检查，强制编辑", "default": False}
+                        "old_string": {"type": "string", "description": "要替换的原文（string 模式下必填）。需与文件内容精确匹配（含空格/缩进）；出现多处且未设 replace_all 时会拒绝并提示，可扩大上下文或设置 replace_all=True"},
+                        "new_string": {"type": "string", "description": "替换后的新内容；传空字符串可删除匹配项（string 模式）或行范围（line 模式）"},
+                        "replace_all": {"type": "boolean", "description": "是否替换所有出现位置（string 模式）。默认 False 时仅替换第一个匹配，多处匹配会拒绝", "default": False},
+                        "mode": {"type": "string", "description": "编辑模式：string 按原文匹配替换；line 按行号范围替换", "enum": ["string", "line"], "default": "string"},
+                        "start_line": {"type": "integer", "description": "替换的起始行号（line 模式必填，从 1 开始，含端点）"},
+                        "end_line": {"type": "integer", "description": "替换的结束行号（line 模式，含；缺省 = start_line）"},
+                        "force": {"type": "boolean", "description": "跳过所有读取校验（含文件被外部修改的 stale 检测），谨慎使用", "default": False}
                     },
                     "required": ["path"]
                 }
