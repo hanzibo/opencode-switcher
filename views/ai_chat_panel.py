@@ -1521,6 +1521,13 @@ class AIChatPanel(Gtk.Box):
             show_tool_details=self._show_tool_details,
         ))
 
+        # 2.5 提前结束流式标志：最终渲染前移除 body.streaming，
+        #     使表格使用最终布局（auto）一次到位（消除 fixed→auto 二次计算跳动），
+        #     且 _debouncedRenderMath 检测到 !_isStreaming 立即渲染公式（消除 800ms 延迟）。
+        js_pre = "window._isStreaming = false;"
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript(js_pre, None, None)
+
         # 3. 使用 build_update_js + updateMessageContainer 做最终渲染
         #    复用旧版渲染路径，比 onStreamEnd 方式更可靠
         js_final = build_update_js(msg_id, output)
@@ -1536,10 +1543,10 @@ class AIChatPanel(Gtk.Box):
         start_idx = last_user_idx + 1
         self._append_assistant_turn_to_cache()
 
-        # 5. JS 同步：结束 reasoning + 停止流式标记 + 复制按钮 + 窗口控制
+        # 5. JS 同步：结束 reasoning + 复制按钮 + 窗口控制
+        #    （_isStreaming 已在步骤 2.5 提前置 false，此处不再重复设置）
         js_sync = (
             f"finishReasoning();"
-            f"window._isStreaming = false;"
             f"(function(){{"
             f"var m=document.getElementById('{msg_id}')?.querySelector('copy-marker');"
             f"if(m&&!m.dataset.msgIndex)m.dataset.msgIndex='{start_idx}';"
