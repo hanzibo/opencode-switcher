@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import os
+import shutil
 import time
 import subprocess
 from dataclasses import dataclass
@@ -167,7 +168,26 @@ def get_sessions(limit: int = 100) -> List[Session]:
         conn.close()
 
 
-def delete_session(session_id: str) -> Optional[str]:
+def _session_exists(session_id: str) -> bool:
+    """交叉验证：CLI 声称成功后确认行是否真的消失。"""
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        try:
+            n = conn.execute(
+                "SELECT COUNT(*) FROM session WHERE id=?", (session_id,)
+            ).fetchone()[0]
+            return n > 0
+        finally:
+            conn.close()
+    except Exception:
+        return True  # 查不到视为存在，走兜底（保守）
+
+
+def _soft_delete(session_id: str) -> Optional[str]:
+    """软删除兜底：置 time_archived（原 delete_session 逻辑，抽为单点）。
+
+    返回 None = 软删成功；返回 str = 错误。
+    """
     if not os.path.isfile(DB_PATH):
         return "Database not found"
     try:
@@ -175,13 +195,48 @@ def delete_session(session_id: str) -> Optional[str]:
         conn.execute("PRAGMA journal_mode=WAL")
         try:
             now = int(time.time() * 1000)
-            conn.execute("UPDATE session SET time_archived=? WHERE id=?", (now, session_id))
+            cur = conn.execute(
+                "UPDATE session SET time_archived=? WHERE id=?", (now, session_id)
+            )
             conn.commit()
+            if cur.rowcount == 0:
+                return "session 不存在或已被删除（UPDATE 影响 0 行）"
             return None
         finally:
             conn.close()
     except Exception as e:
         return str(e)
+
+
+def delete_session(session_id: str) -> Optional[str]:
+    """删除 session：硬删除优先（opencode 官方命令实际删库），失败回退软删除兜底。
+
+    返回 None = 已从数据库彻底删除；
+    返回 str = 警告（已软删除隐藏，数据可能残留）或错误（完全未删）。
+    """
+    if not os.path.isfile(DB_PATH):
+        return "Database not found"
+    opencode = shutil.which("opencode")
+    if opencode:
+        try:
+            proc = subprocess.run(
+                [opencode, "session", "delete", session_id],
+                capture_output=True, text=True, errors="replace", timeout=30,
+            )
+            if proc.returncode == 0:
+                if not _session_exists(session_id):
+                    return None  # 交叉验证通过：彻底删除
+                hard_err = "CLI 返回成功但 session 仍存在"
+            else:
+                hard_err = (proc.stderr or proc.stdout or "").strip()[:200]
+        except (subprocess.TimeoutExpired, OSError) as e:
+            hard_err = str(e)
+    else:
+        hard_err = "opencode 不在 PATH"
+    soft_err = _soft_delete(session_id)
+    if soft_err:
+        return f"硬删除失败（{hard_err}），且软删除也失败：{soft_err}"
+    return f"警告：opencode 删除失败（{hard_err}），已软删除隐藏（数据可能残留）"
 
 
 def rename_session(session_id: str, new_title: str) -> Optional[str]:

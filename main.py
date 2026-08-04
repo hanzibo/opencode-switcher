@@ -14,6 +14,7 @@ from gi.repository import Gtk, GLib, AyatanaAppIndicator3
 from system.hotkey import HotkeyManager
 from views.panel import SearchPanel
 from stores.session_store import get_sessions, delete_session, rename_session
+from stores.delete_queue import DeleteQueue
 from system.launcher import launch_session, launch_new_session, launch_session_pure
 # ponytail: removed PromptStore import
 from stores.clipboard_store import ClipboardStore, CategoryStore
@@ -54,6 +55,13 @@ class App:
         self._panel.on_launch_pure = self._on_session_launch_pure
         self._hotkey.on_trigger = lambda: self._on_hotkey()
         self._hotkey.on_trigger_ai = lambda: self._on_hotkey_ai()
+
+        # 并发安全删除队列：单 worker 串行消费，连续删除不阻塞 UI、不锁冲突
+        self._delete_queue = DeleteQueue(
+            do_delete=lambda sid: delete_session(sid),
+            on_refresh=lambda: self._schedule_refresh_after_delete(),
+            on_batch_done=lambda errs: GLib.idle_add(self._show_delete_summary, errs),
+        )
 
     def _build_indicator(self):
         ind = AyatanaAppIndicator3.Indicator.new(
@@ -201,16 +209,15 @@ class App:
         dialog.show_all()
 
     def _on_delete_session(self, session):
+        """确认框 → 入队（worker 串行执行，不阻塞 UI）。"""
         def on_confirm(dialog, response):
             dialog.destroy()
             if response != Gtk.ResponseType.YES:
+                # 取消时复位 panel 的删除保护标志（避免 60s 内面板不自动隐藏）
+                if hasattr(self._panel, "_delete_in_progress"):
+                    self._panel._delete_in_progress = False
                 return
-            err = delete_session(session.id)
-            if err:
-                GLib.idle_add(lambda: self._show_error(err))
-            else:
-                sessions = get_sessions()
-                self._panel.load_sessions(sessions)
+            self._delete_queue.enqueue(session.id)
         dialog = Gtk.MessageDialog(
             transient_for=None,
             modal=True,
@@ -218,8 +225,48 @@ class App:
             buttons=Gtk.ButtonsType.YES_NO,
             text=f'Delete "{session.title}"?',
         )
-        dialog.format_secondary_text("This session will be archived and hidden from the list.")
+        dialog.format_secondary_text(
+            "This session will be permanently deleted from the database. "
+            "If deletion fails, it will be archived and hidden from the list."
+        )
         dialog.connect("response", on_confirm)
+        dialog.show_all()
+
+    def _schedule_refresh_after_delete(self):
+        """删除后刷新：使在途后台加载失效（防"诈尸"）+ 后台线程加载（不卡 UI）。"""
+        self._session_load_seq = getattr(self, "_session_load_seq", 0) + 1
+        seq = self._session_load_seq
+
+        def _bg():
+            try:
+                sessions = get_sessions()
+                def _apply():
+                    if seq == self._session_load_seq:
+                        self._panel.load_sessions(sessions)
+                    return False
+                GLib.idle_add(_apply)
+            except Exception as e:
+                print(f"Error refreshing sessions after delete: {e}", flush=True)
+
+        threading.Thread(target=_bg, daemon=True).start()
+
+    def _show_delete_summary(self, errs):
+        """批次结束错误汇总：WARNING 框，≤3 条 + 手动清理指引。"""
+        lines = "\n".join(f"• {e[:150]}" for e in errs[:3])
+        if len(errs) > 3:
+            lines += f"\n• … 等共 {len(errs)} 条"
+        dialog = Gtk.MessageDialog(
+            transient_for=None,
+            modal=True,
+            message_type=Gtk.MessageType.WARNING,
+            buttons=Gtk.ButtonsType.OK,
+            text="部分会话未能从数据库完全删除",
+        )
+        dialog.format_secondary_text(
+            f"{lines}\n\n这些会话已从列表隐藏，但数据可能仍存在于数据库。\n"
+            f"可手动执行：opencode session delete <session_id>"
+        )
+        dialog.connect("response", lambda dlg, _: dlg.destroy())
         dialog.show_all()
 
     def _on_rename_session(self, session_id: str, new_title: str):
