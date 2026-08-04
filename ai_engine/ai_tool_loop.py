@@ -9,7 +9,7 @@
 import json
 import logging
 from dataclasses import dataclass, field, replace
-from threading import Event
+from threading import Event, Timer
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from gi.repository import GLib
@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 
 # lazily initialized from AISettingsStore
 _MAX_TOOL_ITERATIONS: Optional[int] = None
+
+# LLM 流式调用超时看门狗（与 _generate_summary_async 的双层超时策略一致）：
+# - 首 token 总超时：从流开始算，收到首个事件后撤销
+# - 流式停顿超时：收到事件后重置；仅覆盖 LLM 流式阶段，不打断工具执行
+_LLM_FIRST_TOKEN_TIMEOUT_SEC = 20
+_LLM_STREAM_IDLE_TIMEOUT_SEC = 25
 
 
 def _get_max_tool_iterations() -> int:
@@ -71,6 +77,7 @@ class ToolLoopContext:
     on_reasoning_delta_fn: Optional[Callable[[str], None]] = None
     on_tool_result_fn: Optional[Callable[[str, str, str], None]] = None
     on_tool_calls_started_fn: Optional[Callable[[int], None]] = None
+    on_llm_error_fn: Optional[Callable[[str], None]] = None
     conv_id: Optional[str] = None
     mcp_tool_definitions: Optional[list] = None
     mcp_client_manager: Optional['MCPClientManager'] = None
@@ -232,6 +239,40 @@ def _perform_llm_call(
 
     ctx.reset_iteration_state_fn()
 
+    # ── LLM 流式调用超时看门狗（建议 1：首 token 总超时 + 流式停顿超时）──
+    # 与 _generate_summary_async 的双层 Timer 策略一致；超时通过 cancel_event +
+    # cancel_active_request() 双通道中断，复用现有取消清理链。
+    timeout_reason = None
+    call_active = True
+    total_timer: Optional[Timer] = None
+    idle_timer: Optional[Timer] = None
+
+    def _fire_timeout(reason: str):
+        nonlocal timeout_reason
+        if not call_active:
+            # 本调用已结束（finally 已清理），防止迟到定时器误关新请求
+            return
+        timeout_reason = reason
+        if ctx.cancel_event:
+            ctx.cancel_event.set()          # ① 协作式取消标志
+        llm_client.cancel_active_request()  # ② 强关响应，解除 iter_lines 阻塞
+
+    def _on_activity():
+        """收到任何流事件（文本/推理/工具调用）即视为模型在工作：撤总超时、重置停顿超时。"""
+        nonlocal idle_timer
+        if total_timer:
+            total_timer.cancel()
+        if idle_timer:
+            idle_timer.cancel()
+        idle_timer = Timer(
+            _LLM_STREAM_IDLE_TIMEOUT_SEC,
+            lambda: _fire_timeout(
+                f"模型响应停顿超过 {_LLM_STREAM_IDLE_TIMEOUT_SEC} 秒，已中止"
+            ),
+        )
+        idle_timer.daemon = True
+        idle_timer.start()
+
     try:
         cleaned_msgs = clean_messages_for_llm(messages)
         # 合并内置工具（过滤已禁用的）与 MCP 工具定义
@@ -246,12 +287,24 @@ def _perform_llm_call(
             tool_choice=tool_registry.TOOL_CHOICE_AUTO,
         )
 
+        total_timer = Timer(
+            _LLM_FIRST_TOKEN_TIMEOUT_SEC,
+            lambda: _fire_timeout(
+                f"{_LLM_FIRST_TOKEN_TIMEOUT_SEC} 秒内未收到模型响应，已中止"
+            ),
+        )
+        total_timer.daemon = True
+        total_timer.start()
+
         for event in llm_client.stream_chat_completion(
             call_config, cleaned_msgs,
             cancel_event=ctx.cancel_event,
         ):
             if ctx.get_current_request_id_fn() != ctx.req_id:
                 return False
+
+            # 任何事件都代表模型在工作：撤首 token 总超时、重置停顿超时
+            _on_activity()
 
             if event.type == StreamEventType.TOOL_CALLS:
                 if event.tool_calls:
@@ -283,6 +336,9 @@ def _perform_llm_call(
 
         # ── 处理本轮产生的工具调用 ──
         if not tool_calls_found:
+            # 超时中止（非用户主动暂停）→ 先上报错误气泡，再走公共收尾
+            if timeout_reason and ctx.on_llm_error_fn is not None:
+                GLib.idle_add(ctx.on_llm_error_fn, timeout_reason)
             GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)
             return False
 
@@ -372,6 +428,8 @@ def _perform_llm_call(
 
     except _LLMHttpError as e:
         print(f"[ToolLoop] LLM HTTP error: {e}", flush=True)
+        if ctx.on_llm_error_fn is not None:
+            GLib.idle_add(ctx.on_llm_error_fn, f"LLM 请求失败：{e}")
         GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)
         return False
     except Exception as e:
@@ -380,3 +438,10 @@ def _perform_llm_call(
         traceback.print_exc()
         GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)
         return False
+    finally:
+        # 任何路径（正常/异常/取消）均撤除超时看门狗，防止迟到定时器误动作
+        call_active = False
+        if total_timer:
+            total_timer.cancel()
+        if idle_timer:
+            idle_timer.cancel()

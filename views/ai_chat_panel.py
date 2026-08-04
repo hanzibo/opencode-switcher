@@ -1259,6 +1259,11 @@ class AIChatPanel(Gtk.Box):
             if self._ai_conversation_id == conv_id:
                 GLib.idle_add(self.append_html_to_webview, html)
 
+        def on_llm_error_fn(reason):
+            """LLM 请求失败/超时回调：仅活跃会话渲染错误气泡（后台会话切换时由缓存重建展示）。"""
+            if self._ai_conversation_id == conv_id:
+                GLib.idle_add(self._render_llm_error, reason)
+
         def on_token_delta_fn(text):
             """v2: 增量回调，后台线程收到 token delta 时调用。"""
             if self._ai_conversation_id == conv_id:
@@ -1306,6 +1311,7 @@ class AIChatPanel(Gtk.Box):
             on_reasoning_delta_fn=on_reasoning_delta_fn,
             on_tool_result_fn=on_tool_result_fn,
             on_tool_calls_started_fn=self._on_tool_calls_started,
+            on_llm_error_fn=on_llm_error_fn,
             conv_id=conv_id,
             mcp_tool_definitions=getattr(self, "_cached_mcp_tools", None),
             mcp_client_manager=getattr(self, "_mcp_client_mgr", None),
@@ -2435,6 +2441,16 @@ class AIChatPanel(Gtk.Box):
             self._save_current_conversation(self._build_model_snapshot())
         except Exception:
             pass
+
+    def _render_llm_error(self, reason: str):
+        """主线程：在 WebView 中渲染 LLM 请求失败/超时错误气泡。
+
+        由后台线程经 GLib.idle_add 调用；文本已在此处 html.escape，杜绝注入。
+        """
+        safe = html.escape(reason)
+        self.append_html_to_webview(
+            '<div class="chat-system-error">❌ ' + safe + '</div>'
+        )
 
     def _build_conversation_rounds(self, msgs: list) -> list:
         """将消息列表聚合为以 user 提问为起点的轮次结构列表。
