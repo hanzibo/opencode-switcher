@@ -477,7 +477,7 @@ def _execute_subagent_sync(task: str, agent_type: str,
         subagent_max_tokens = DEFAULT_MAX_TOKENS
 
     try:
-        from ai_engine.llm_client import _LLMHttpClient, _LLMHttpError, LLMRequestConfig
+        from ai_engine.llm_client import _LLMHttpClient, _LLMHttpError, LLMRequestConfig, extract_reasoning_content
         llm = _LLMHttpClient()
         final_text = ""
 
@@ -514,6 +514,11 @@ def _execute_subagent_sync(task: str, agent_type: str,
 
             assistant_msg = {"role": "assistant", "content": content or None}
             assistant_msg["tool_calls"] = tool_calls
+            # thinking 模式下 API 要求工具调用轮的 reasoning_content 必须全量回传；
+            # 兼容 DeepSeek (reasoning_content) 和 MiMo (reasoning) 两种响应键
+            rc = extract_reasoning_content(response)
+            if rc:
+                assistant_msg["reasoning_content"] = rc
             messages.append(assistant_msg)
 
             for tc in tool_calls:

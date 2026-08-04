@@ -100,6 +100,15 @@ class LLMRequestConfig:
 # ═══════════════════════════════════════════════════════════════════
 
 
+def extract_reasoning_content(msg: dict) -> Optional[str]:
+    """兼容 DeepSeek (reasoning_content) 与 MiMo (reasoning) 的思考内容提取。
+
+    作为 thinking 模式 rc 字段兼容映射的单一事实来源：SSE 解析、请求体构建、
+    子代理消息组装均复用本函数，避免键兼容策略在多处重复维护。
+    """
+    return msg.get("reasoning_content") or msg.get("reasoning")
+
+
 def clean_messages_for_llm(messages: list) -> list:
     """清理消息列表：去除 AI 回复的 HTML/Markdown 标记等。
 
@@ -280,7 +289,7 @@ def parse_sse_events(
             if content:
                 yield text_delta(content)
 
-            reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+            reasoning = extract_reasoning_content(delta)
             if reasoning:
                 yield reasoning_delta(reasoning)
     except Exception as e:
@@ -410,12 +419,13 @@ class _LLMHttpClient:
                 if tool_calls:
                     msg["tool_calls"] = tool_calls
                     msg["content"] = content if content else None
-                    # 兼容 DeepSeek (reasoning_content) 和 MiMo (reasoning)
-                    rc = m.get("reasoning_content") or m.get("reasoning")
-                    if rc:
-                        msg["reasoning_content"] = rc
                 else:
                     msg["content"] = content or ""
+                # 无论是否带 tool_calls 均回传 rc——thinking 模式下 API 要求
+                # 工具调用轮必须全量回传，非工具轮回传会被忽略（官方文档确认无害）
+                rc = extract_reasoning_content(m)
+                if rc:
+                    msg["reasoning_content"] = rc
             elif role == "tool":
                 msg["content"] = content or ""
                 msg["tool_call_id"] = m.get("tool_call_id") or ""
