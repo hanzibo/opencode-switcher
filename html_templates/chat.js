@@ -431,9 +431,9 @@ function _renderMath(element) {
                                 var typing = regions[2].querySelector('.typing-indicator');
                                 if (typing) typing.remove();
                                 regions[2].innerHTML = answer.innerHTML;
-                                _wrapTables(regions[2]);
                             }
                             addCopyButtons();
+                            _wrapTables(div);   // 覆盖全部三个区域（幂等），与 isSplit/旧结构分支一致
                             _debouncedRenderMath(div);
                         } else {
                             // 旧结构：向后兼容

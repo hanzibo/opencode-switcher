@@ -1521,16 +1521,16 @@ class AIChatPanel(Gtk.Box):
             show_tool_details=self._show_tool_details,
         ))
 
-        # 2.5 提前结束流式标志：最终渲染前移除 body.streaming，
-        #     使表格使用最终布局（auto）一次到位（消除 fixed→auto 二次计算跳动），
-        #     且 _debouncedRenderMath 检测到 !_isStreaming 立即渲染公式（消除 800ms 延迟）。
-        js_pre = "window._isStreaming = false;"
-        if hasattr(self, "_ai_webview") and self._ai_webview:
-            self._ai_webview.run_javascript(js_pre, None, None)
-
         # 3. 使用 build_update_js + updateMessageContainer 做最终渲染
-        #    复用旧版渲染路径，比 onStreamEnd 方式更可靠
-        js_final = build_update_js(msg_id, output)
+        #    复用旧版渲染路径，比 onStreamEnd 方式更可靠。
+        #    置位 _isStreaming=false 与最终渲染合并在同一段 JS 中（原子化），
+        #    保证 updateMessageContainer 执行时 body.streaming 已移除（表格
+        #    auto 布局一次到位、_debouncedRenderMath 立即渲染公式），
+        #    且不依赖两次 run_javascript 之间的 FIFO 顺序。
+        js_final = (
+            f"window._isStreaming = false;"
+            f"{build_update_js(msg_id, output)}"
+        )
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(js_final, None, None)
 
