@@ -1555,11 +1555,13 @@ class SettingsDialog:
         self._ai_settings_store.summary_prompt_template = buf.get_text(
             buf.get_start_iter(), buf.get_end_iter(), False
         )
-        # 系统提示词
-        sp_buf = self._system_prompt_view.get_buffer()
-        self._ai_settings_store.system_prompt = sp_buf.get_text(
-            sp_buf.get_start_iter(), sp_buf.get_end_iter(), False
-        )
+        # 系统提示词（防御性判空：若标签页被移除/重排则不写入）
+        sp_view = getattr(self, "_system_prompt_view", None)
+        if sp_view is not None:
+            sp_buf = sp_view.get_buffer()
+            self._ai_settings_store.system_prompt = sp_buf.get_text(
+                sp_buf.get_start_iter(), sp_buf.get_end_iter(), False
+            )
         self._ai_settings_store.max_clipboard = int(self._clip_max_spin.get_value())
         self._ai_settings_store.max_tool_iterations = int(self._tool_iter_spin.get_value())
         # 流式输出设置（始终为 full 模式，仅保留增量工具和详情选项）

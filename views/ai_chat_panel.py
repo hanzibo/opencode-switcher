@@ -729,10 +729,14 @@ class AIChatPanel(Gtk.Box):
             self._cached_mcp_tools = None
             print("[MCP] 所有 Server 已禁用，清空工具缓存", flush=True)
 
+    def _snapshot_system_prompt(self) -> None:
+        """从 Settings 快照系统提示词（仅新会话入口调用；旧对话由 _switch_to_conversation 加载自身快照）。"""
+        self._ai_system_prompt = AISettingsStore().system_prompt
+
     def _start_new_conversation(self, prompt_text: str):
         self._ai_messages = [{"role": "user", "content": prompt_text}]
         # 新对话建立时快照当前 Settings 中的系统提示词；此后该对话沿用此快照，不受 Settings 热加载影响
-        self._ai_system_prompt = AISettingsStore().system_prompt
+        self._snapshot_system_prompt()
         self._ai_conversation_id = uuid4().hex[:12]
         self._ai_assistant_buffer = ""
         self._ai_current_assistant_text = ""
@@ -769,7 +773,7 @@ class AIChatPanel(Gtk.Box):
         Returns:
             tuple: (messages_list, extra_system_messages)
             - messages_list: 纯对话消息列表（不含摘要）
-            - extra_system_messages: 摘要 system 消息列表（如有），
+            - extra_system_messages: 系统提示词 + 历史摘要 system 消息列表（如有），
               仅在 HTTP 请求层注入，不污染 self._ai_messages
         """
         extra = []
@@ -937,7 +941,7 @@ class AIChatPanel(Gtk.Box):
         self._init_mcp()
         # 空会话首条消息：快照当前 Settings 中的系统提示词（幂等；旧对话 _ai_messages 非空不会刷新）
         if not self._ai_messages:
-            self._ai_system_prompt = AISettingsStore().system_prompt
+            self._snapshot_system_prompt()
         # Build message content with or without pending image
         if self._ai_pending_image_hash:
             content = [
@@ -4002,7 +4006,7 @@ class AIChatPanel(Gtk.Box):
         self._last_rendered_html = ""
         self._ai_messages = []
         # /new、/delete、Ctrl+L 等开启的全新空白会话：快照当前 Settings 中的系统提示词
-        self._ai_system_prompt = AISettingsStore().system_prompt
+        self._snapshot_system_prompt()
         self._clear_subagent_bar_instantly()
         self._refresh_subagent_bar()
         self._ai_assistant_buffer = ""
