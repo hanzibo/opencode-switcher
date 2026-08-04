@@ -214,8 +214,7 @@ class App:
             dialog.destroy()
             if response != Gtk.ResponseType.YES:
                 # 取消时复位 panel 的删除保护标志（避免 60s 内面板不自动隐藏）
-                if hasattr(self._panel, "_delete_in_progress"):
-                    self._panel._delete_in_progress = False
+                self._panel.reset_delete_guard()
                 return
             self._delete_queue.enqueue(session.id)
         dialog = Gtk.MessageDialog(
@@ -233,7 +232,12 @@ class App:
         dialog.show_all()
 
     def _schedule_refresh_after_delete(self):
-        """删除后刷新：使在途后台加载失效（防"诈尸"）+ 后台线程加载（不卡 UI）。"""
+        """删除后刷新：使在途后台加载失效（防"诈尸"）+ 后台线程加载（不卡 UI）。
+
+        注：本方法在 worker 线程被调用，与主线程 _on_panel_opened 并发写
+        _session_load_seq。CPython GIL 保证整数自增原子性，最坏情况仅某次
+        刷新因 seq 不匹配被跳过，无害。
+        """
         self._session_load_seq = getattr(self, "_session_load_seq", 0) + 1
         seq = self._session_load_seq
 

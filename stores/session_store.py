@@ -90,11 +90,17 @@ def _extract_snippet_text(data_json: str) -> Optional[str]:
     return None
 
 
+def _connect_db() -> sqlite3.Connection:
+    """打开 opencode 数据库连接（统一超时与 WAL 模式）。"""
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
 def get_sessions(limit: int = 100) -> List[Session]:
     if not os.path.isfile(DB_PATH):
         return []
-    conn = sqlite3.connect(DB_PATH, timeout=5)
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn = _connect_db()
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.execute(
@@ -171,7 +177,7 @@ def get_sessions(limit: int = 100) -> List[Session]:
 def _session_exists(session_id: str) -> bool:
     """交叉验证：CLI 声称成功后确认行是否真的消失。"""
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=5)
+        conn = _connect_db()
         try:
             n = conn.execute(
                 "SELECT COUNT(*) FROM session WHERE id=?", (session_id,)
@@ -191,8 +197,7 @@ def _soft_delete(session_id: str) -> Optional[str]:
     if not os.path.isfile(DB_PATH):
         return "Database not found"
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=5)
-        conn.execute("PRAGMA journal_mode=WAL")
+        conn = _connect_db()
         try:
             now = int(time.time() * 1000)
             cur = conn.execute(
@@ -243,8 +248,7 @@ def rename_session(session_id: str, new_title: str) -> Optional[str]:
     if not os.path.isfile(DB_PATH):
         return "Database not found"
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=5)
-        conn.execute("PRAGMA journal_mode=WAL")
+        conn = _connect_db()
         try:
             now = int(time.time() * 1000)
             conn.execute(

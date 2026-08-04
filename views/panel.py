@@ -932,6 +932,10 @@ class SearchPanel:
         menu.popup_at_pointer(event)
         return True
 
+    def reset_delete_guard(self):
+        """复位删除保护标志（外部在删除确认框取消时调用）。"""
+        self._delete_in_progress = False
+
     def _clear_menu(self):
         self._menu_active = False
         self._clear_menu_source_id = None
