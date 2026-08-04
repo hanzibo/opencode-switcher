@@ -253,6 +253,7 @@ def _perform_llm_call(
             # 本调用已结束（finally 已清理），防止迟到定时器误关新请求
             return
         timeout_reason = reason
+        logger.warning("LLM 流式调用超时中止: %s (req_id=%s)", reason, ctx.req_id)
         if ctx.cancel_event:
             ctx.cancel_event.set()          # ① 协作式取消标志
         llm_client.cancel_active_request()  # ② 强关响应，解除 iter_lines 阻塞
@@ -301,6 +302,10 @@ def _perform_llm_call(
             cancel_event=ctx.cancel_event,
         ):
             if ctx.get_current_request_id_fn() != ctx.req_id:
+                # ⚠️ 死代码（既有问题，未修）：get_current_request_id_fn 恒返回本请求的
+                # req_id（见 ai_chat_panel 接线 lambda: req_id），该检查永不成立。
+                # 本意是"用户已重试/新请求启动则放弃本请求"，实际未生效——
+                # 旧线程只能靠 cancel_event 感知取消。重构时改为读取面板当前 req_id。
                 return False
 
             # 任何事件都代表模型在工作：撤首 token 总超时、重置停顿超时
@@ -334,11 +339,22 @@ def _perform_llm_call(
             if event.type == StreamEventType.STREAM_END:
                 break
 
+        # ── 流阶段结束：立即撤除看门狗（H-1）──
+        # 工具执行阶段可能远超流式停顿阈值（bash 最长 120s、ask_user_question 300s），
+        # 若不在此撤除，idle_timer 会在长工具执行期间误触发取消（bash 进程组被杀）。
+        # finally 中的清理仍保留作为异常/return 路径的兜底。
+        if total_timer:
+            total_timer.cancel()
+        if idle_timer:
+            idle_timer.cancel()
+
         # ── 处理本轮产生的工具调用 ──
+        # 超时中止（非用户主动暂停）→ 先上报错误气泡，再走公共收尾。
+        # 独立于 tool_calls_found：已累积部分工具调用后停顿同样需要上报（H-2）。
+        if timeout_reason and ctx.on_llm_error_fn is not None:
+            ctx.on_llm_error_fn(timeout_reason)
+
         if not tool_calls_found:
-            # 超时中止（非用户主动暂停）→ 先上报错误气泡，再走公共收尾
-            if timeout_reason and ctx.on_llm_error_fn is not None:
-                GLib.idle_add(ctx.on_llm_error_fn, timeout_reason)
             GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)
             return False
 
@@ -429,7 +445,7 @@ def _perform_llm_call(
     except _LLMHttpError as e:
         print(f"[ToolLoop] LLM HTTP error: {e}", flush=True)
         if ctx.on_llm_error_fn is not None:
-            GLib.idle_add(ctx.on_llm_error_fn, f"LLM 请求失败：{e}")
+            ctx.on_llm_error_fn(f"LLM 请求失败：{e}")
         GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)
         return False
     except Exception as e:

@@ -124,7 +124,6 @@ class AIChatPanel(Gtk.Box):
         self._ai_pending_image_hash = None
         self._ai_pending_image_path = None
         self._ai_pending_image_data_uri = None
-        self._ai_cancel_event = threading.Event()
         self._ai_cancelling = False
         self._ai_messages = []
         self._ai_system_prompt: str = ""  # 会话级系统提示词快照（新对话从 Settings 快照，旧对话从会话记录加载）
@@ -1022,7 +1021,6 @@ class AIChatPanel(Gtk.Box):
             self._render_markdown(self._ai_markdown_text)
             return
 
-        self._ai_cancel_event.clear()
         self._update_send_button(True)
         self._ai_entry.placeholder_text = "等待回复中..."
         msgs_for_llm, extra_sys = self._build_llm_messages()
@@ -1084,7 +1082,6 @@ class AIChatPanel(Gtk.Box):
             self._ai_last_prompt_obj,
             getattr(self, "_ai_active_model_info", None)
         )
-        self._ai_cancel_event.clear()
         msgs_for_llm, extra_sys = self._build_llm_messages()
         threading.Thread(
             target=self._run_llm_api_request,
@@ -1162,7 +1159,6 @@ class AIChatPanel(Gtk.Box):
             self._ai_webview.load_html(self.get_html_template(self._theme, html), "file:///")
             return
 
-        self._ai_cancel_event.clear()
         self._update_send_button(True)
         msgs_for_llm, extra_sys = self._build_llm_messages()
         threading.Thread(
@@ -1260,9 +1256,13 @@ class AIChatPanel(Gtk.Box):
                 GLib.idle_add(self.append_html_to_webview, html)
 
         def on_llm_error_fn(reason):
-            """LLM 请求失败/超时回调：仅活跃会话渲染错误气泡（后台会话切换时由缓存重建展示）。"""
-            if self._ai_conversation_id == conv_id:
-                GLib.idle_add(self._render_llm_error, reason)
+            """LLM 请求失败/超时回调（后台线程调用）。
+
+            经 GLib.idle_add 转主线程后由 _render_llm_error 最终校验会话归属：
+            - 后台会话/已切换会话的错误不渲染（丢弃）
+            - 错误气泡仅 append 到 DOM，不持久化（会话缓存重建后不保留）
+            """
+            GLib.idle_add(self._render_llm_error, conv_id, reason)
 
         def on_token_delta_fn(text):
             """v2: 增量回调，后台线程收到 token delta 时调用。"""
@@ -1297,6 +1297,9 @@ class AIChatPanel(Gtk.Box):
         ctx = ToolLoopContext(
             req_id=req_id,
             cancel_event=cancel_event,
+            # ⚠️ 死代码（既有问题，未修）：恒返回本请求 req_id → ai_tool_loop 中
+            # get_current_request_id_fn() != req_id 检查永不成立。本意是检测
+            # "用户已重试/新请求启动"，需改为读取面板当前 self._ai_request_id。
             get_current_request_id_fn=lambda: req_id,
             append_message_fn=append_message_callback,
             append_html_to_webview_fn=append_html_callback,
@@ -1700,7 +1703,10 @@ class AIChatPanel(Gtk.Box):
             assistant_msg["reasoning_content"] = reasoning
 
         target_messages = state["messages"] if state else self._ai_messages
-        if target_messages and target_messages[-1].get("role") == "user":
+        # L-2：仅在有实际内容时追加 assistant 消息——防止取消/暂停无输出时
+        # 产生空 assistant 消息，也避免与 _cancel_streaming_if_active 的清空
+        # 配合后出现 {role: assistant, content: ""} 残留。
+        if target_messages and target_messages[-1].get("role") == "user" and (assistant_text or reasoning):
             target_messages.append(assistant_msg)
         elif target_messages and assistant_text:
             target_messages.append(assistant_msg)
@@ -2413,20 +2419,19 @@ class AIChatPanel(Gtk.Box):
         if self._ai_streaming:
             # 设置当前会话的 cancel_event（与暂停按钮一致），使 parse_sse_events
             # 走静默返回而非抛 _LLMHttpError；找不到则兜底取消所有运行中的流。
-            # 注意：self._ai_cancel_event 是孤儿事件（无人读取），不得在此使用。
             active_state = self._ai_running_convs.get(self._ai_conversation_id)
             if active_state and active_state.get("cancel_event"):
                 active_state["cancel_event"].set()
+                # L-2：清空流式缓存。partial 由 _on_llm_api_finished 统一追加
+                # （此处不手动追加），避免同一段文本在后台收尾时被重复写入历史。
+                active_state["current_assistant_text"] = ""
+                self._ai_current_assistant_text = ""
             else:
                 for st in list(self._ai_running_convs.values()):
                     ce = st.get("cancel_event")
                     if ce:
                         ce.set()
             self._llm_client.cancel_active_request()
-            # Preserve partial assistant content before resetting state
-            partial = getattr(self, "_ai_current_assistant_text", "")
-            if partial.strip():
-                self._ai_messages.append({"role": "assistant", "content": partial})
             self._update_send_button(False)
             self._ai_streaming = False
             self._ai_cancelling = False
@@ -2459,13 +2464,17 @@ class AIChatPanel(Gtk.Box):
         except Exception:
             pass
 
-    def _render_llm_error(self, reason: str):
+    def _render_llm_error(self, conv_id: str, reason: str):
         """主线程：在 WebView 中渲染 LLM 请求失败/超时错误气泡。
 
-        由后台线程经 GLib.idle_add 调用；文本已在此处 html.escape，杜绝注入。
-        用户主动暂停/取消（_ai_cancelling）期间不弹气泡——覆盖超时 Timer
-        与暂停竞态、以及取消路径误报等场景。
+        由后台线程经 GLib.idle_add 转接调用。主线程内做最终校验：
+        - 会话归属：错误属于已切换走的会话则丢弃（闭合 M-3 竞态窗口）
+        - 用户主动暂停/取消（_ai_cancelling）期间不弹气泡（覆盖超时 Timer
+          与暂停竞态、以及取消路径误报等场景）
+        文本已在此处 html.escape，杜绝注入。
         """
+        if self._ai_conversation_id != conv_id:
+            return
         if self._ai_cancelling:
             return
         safe = html.escape(reason)
