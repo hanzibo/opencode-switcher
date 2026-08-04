@@ -1,6 +1,6 @@
 # OpenCode Switcher — Agent Instructions
 
-Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipboard history, AI assistant sidebar, and MCP tool integration. Python 3 + GTK3 + AyatanaAppIndicator.
+Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipboard history, AI assistant sidebar, and MCP tool integration. Python 3 + GTK3 + AyatanaAppIndicator. Wayland-only (X11 support was dropped).
 
 ## Commands
 
@@ -9,7 +9,7 @@ Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipb
 | Run (dev) | `venv/bin/python3 main.py` | Needs `opencode` in PATH |
 | Run (prod) | `./run.sh` | Log rotation, nvm, `JSC_useJIT=false` |
 | Test (all) | `venv/bin/python3 -m unittest discover tests` | |
-| Test (single) | `venv/bin/python3 -m unittest tests/test_mcp_integration.py` | |
+| Test (single) | `venv/bin/python3 -m unittest tests.test_mcp_integration` | Also works: `tests/test_mcp_integration.py` |
 | Venv setup | `python3 -m venv --system-site-packages venv && venv/bin/pip install -r requirements.txt` | `--system-site-packages` required for system PyGObject |
 | Install | `./install.sh install` | Copies to `~/.local/share/opencode-switcher/`, enables systemd, GNOME ext |
 | Uninstall | `./install.sh uninstall` | Interactive — asks about keeping user data |
@@ -18,7 +18,7 @@ Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipb
 
 **System deps**: `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-gi-cairo python3-pip python3-venv wl-clipboard gir1.2-webkit2-4.1` — webkit2gtk NOT in `install.sh` but required at runtime (AI panel crashes without it).
 
-**`tests/` is gitignored**: only `test_conversation_fork.py` is tracked (pre-ignore). Most test files exist locally but are NOT in version control — don't rely on `git` to find them, and don't be surprised when new test files don't show up in `git status`.
+**Tests ARE version-controlled**: all 17 `tests/test_*.py` files are tracked (only `tests/__pycache__/` is gitignored). No CI, no pre-commit, no pyproject — stdlib `unittest` is the only test runner, and there is no linter/formatter config (manual discipline). Run focused tests as `venv/bin/python3 -m unittest tests.test_session_store`; the venv uses `--system-site-packages` so a fresh clone needs system GTK deps installed first.
 
 **Commit convention**: `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `docs(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`, `tool-registry`, `clipboard`, `mcp`).
 
@@ -26,7 +26,7 @@ Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipb
 
 ### Entrypoint & Startup Flow
 
-`main.py` is the sole entrypoint. Startup:
+`main.py` (312 lines) is the sole entrypoint. Startup:
 ```
 systemd/.desktop → run.sh → main.py (flock lock)
   → load_theme_config() → migrate_history.run_migration()
@@ -43,23 +43,23 @@ systemd/.desktop → run.sh → main.py (flock lock)
 
 | Module | Lines | Role |
 |--------|-------|------|
-| `main.py` | 261 | Entrypoint: flock lock, App(), Gtk.main() |
-| `views/` | ~8300 | Main UI views (`panel.py`, `clipboard_panel.py`, `ai_chat_panel.py`, `ai_popovers.py`) |
-| `dialogs/` | ~4200 | GTK dialogs (`settings_dialog.py`, `prompts_config_dialog.py`, `memory_manager_dialog.py`, etc.) |
-| `stores/` | ~2100 | Data persistence & state (`clipboard_store.py`, `session_store.py`, `skill_store.py`, `theme_config.py`) |
-| `ai_engine/` | ~1350 | AI LLM engine & rendering (`llm_client.py`, `ai_tool_loop.py`, `ai_html_template.py`, `render_pipeline.py`) |
-| `system/` | ~440 | System IPC & utilities (`hotkey.py`, `launcher.py`, `event_types.py`, `migrate_history.py`, `utils.py`) |
+| `main.py` | 312 | Entrypoint: flock lock, App(), Gtk.main() |
+| `views/` | ~8360 | Main UI views (`panel.py`, `clipboard_panel.py`, `ai_chat_panel.py`, `ai_popovers.py`) |
+| `dialogs/` | ~4270 | GTK dialogs (`settings_dialog.py`, `prompts_config_dialog.py`, `memory_manager_dialog.py`, etc.) |
+| `stores/` | ~2260 | Data persistence & state (`clipboard_store.py`, `session_store.py`, `skill_store.py`, `theme_config.py`, `delete_queue.py`) |
+| `ai_engine/` | ~1390 | AI LLM engine & rendering (`llm_client.py`, `ai_tool_loop.py`, `ai_html_template.py`, `render_pipeline.py`) |
+| `system/` | ~430 | System IPC & utilities (`hotkey.py`, `launcher.py`, `event_types.py`, `migrate_history.py`, `utils.py`, `inspect_db.py`) |
 | `mcp_integration/` | ~2170 | MCP protocol layer (JSON-RPC over stdio/http transports in `transports/`, GTK asyncio bridge) |
-| `tool_registry/` | 28 tools across 12 schema modules (+display helper, no schemas) | AI tool executors (bash, web, filesystem, code analysis, subagent, search, etc.) |
+| `tool_registry/` | ~6100 | AI tool executors — 28 tools across 13 schema modules (+`display.py`/`_state.py` helpers, no schemas) |
 | `html_templates/` | ~1910 | Web assets (`chat.js`, `chat.css`) for WebKit WebView rendering |
-| `ai_text_utils/` | ~1270 | Pure text/markdown/math helpers (zero GTK dep) |
+| `ai_text_utils/` | ~1280 | Pure text/markdown/math helpers (zero GTK dep) |
 | `deploy/` | — | Templated `opencode-switcher.{service,desktop}` + icon; `install.sh` substitutes `__INSTALL_DIR__` via `sed` |
 
 ### Tool Registry (`tool_registry/`)
 
-28 AI tool executors dispatched via `TOOL_EXECUTORS` dict. Assembled from per-module `TOOL_SCHEMAS` lists in `__init__.py`. Each tool call carries a `purpose` parameter (agent-generated description) displayed in the tool summary line.
+28 AI tool executors dispatched via `TOOL_EXECUTORS` dict in `__init__.py`, assembled from per-module `TOOL_SCHEMAS` lists. Each tool call carries a `purpose` parameter (agent-generated description) displayed in the tool summary line.
 
-Key executor modules: `bash.py` (persistent bash session, sentinel protocol, interactive command blocking), `web.py` (`web_search`/`web_fetch` with Obscura browser), `filesystem.py` (safe-path guarded), `subagent.py` (parallel isolated execution), `memory.py` (long-term semantic memory), `mail.py` (read_qq_mail with credential caching).
+Key executor modules: `bash.py` (persistent bash session, sentinel protocol, interactive command blocking), `web.py` (`web_search`/`web_fetch` with Obscura browser), `filesystem.py` (safe-path guarded), `subagent.py` (parallel isolated execution), `memory.py` (long-term semantic memory → `agent_memory.json`), `mail.py` (read_qq_mail with credential caching), `gmail.py` (OAuth2 Gmail via `google-api-python-client`, creds in `gmail_credentials/`), `notification.py` (`send_notification`), `todo.py` (todo store → `todos.json`), `search.py`, `skill.py` (`read_skill`), `code_analysis.py` (`get_code_metrics`/`find_project_dependencies`/`parse_file_ast`).
 
 ### Wayland Integration (GNOME Shell Extension)
 
@@ -103,7 +103,10 @@ These cause SIGSEGV if violated. Follow strictly.
 
 ### Slash Commands
 - **Search bar** (`views/panel.py`): `/new`, `/open`, `/gm <query>`, `/google <query>`. Tab-completion. `/gm` uses `evdev.UInput` for automated typing simulation. Delay: 1.2s (Firefox running) / 4.0s (not).
-- **AI chat input** (`_AI_COMMANDS` in `views/ai_chat_panel.py`): `/new`, `/delete`, `/fork`, `/retry`, `/rollback`, `/title`, `/model`, `/cd`, `/summary keep=N`, `/skill`. List duplicated in `views/clipboard_panel.py` — keep in sync. `/fork` branches the current conversation via `ConversationStore.fork_conversation()`.
+- **AI chat input** (`_AI_COMMANDS` in `views/ai_chat_panel.py`): `/new`, `/delete`, `/fork`, `/retry`, `/rollback`, `/title`, `/model`, `/cd`, `/summary keep=N` (default 50), `/skill`. **`views/clipboard_panel.py` has its own shorter `_AI_COMMANDS` subset** (6 entries, no `/fork`, `/summary`, `/skill`) — both lists must stay in sync with the ai_chat_panel version. `/fork` branches the current conversation via `ConversationStore.fork_conversation()` and copies the source conversation's system prompt snapshot.
+
+### System Prompt (per-conversation snapshot)
+Global default lives in `AISettingsStore().system_prompt` (`ai_settings.json`). On new conversation creation, the current global value is snapshotted into `conv.system_prompt` (`_snapshot_system_prompt()` in `views/ai_chat_panel.py`). Later edits to the global setting do **not** affect existing conversations — each conversation keeps the prompt it was started with, persisted in the conversation JSON. Test coverage: `tests/test_system_prompt.py`.
 
 ### Clipboard Classification
 Heuristic regex scoring in `clipboard_store.py` (`classify_text()`, `detect_language_name()`). **Duplicated in `gnome-extension/extension.js`** — ~150 lines of scoring in both Python and JS. Must update both for any classification change.
@@ -135,6 +138,7 @@ Dynamically add/remove `.subagent-status-bar` class on FlowBox before `hide()`/`
 - **Exclude**: archived sessions, subagent sessions (`title LIKE '%(@%subagent)%'`), non-existent dirs.
 - **Live detection**: `pgrep -f opencode` → scan `/proc/<pid>/cmdline` + `/proc/<pid>/cwd`. Filters out switcher itself.
 - **Status**: "live" (running), "recent" (<24h), "closed".
+- **Hard delete**: confirmed deletions shell out to `opencode session delete <session_id>` (`session_store.py:228`) instead of only hiding rows.
 - **Known optimization**: `part` table snippet query reduced from 49,740→100 rows via `INNER JOIN + MAX(time_created)` subquery (`session_store.py`). Data transfer dropped ~97MB→0.03MB.
 
 ## Anti-Patterns (Must-Know)
@@ -155,13 +159,17 @@ Dynamically add/remove `.subagent-status-bar` class on FlowBox before `hide()`/`
 | Path | Contents |
 |------|----------|
 | `~/.config/opencode-switcher/config.json` | Theme setting (dark/light) |
-| `~/.config/opencode-switcher/clipboard_history.json` | 150 FIFO clipboard items |
+| `~/.config/opencode-switcher/clipboard_history.json` | 150 FIFO clipboard items (+ `.backup`) |
 | `~/.config/opencode-switcher/categories.json` | Custom categories + recycle bin |
 | `~/.config/opencode-switcher/custom_prompts.json` | Named prompts |
 | `~/.config/opencode-switcher/llm_settings.json` | LLM API keys (perms `0o600`) |
-| `~/.config/opencode-switcher/ai_settings.json` | AI truncation threshold (`soft_limit`, `trim_target`) |
-| `~/.config/opencode-switcher/memory.json` | Long-term semantic memory (perms `0o600`) |
+| `~/.config/opencode-switcher/ai_settings.json` | AI truncation (`soft_limit`, `trim_target`) + `system_prompt` + `max_tool_iterations` |
+| `~/.config/opencode-switcher/agent_memory.json` | Long-term semantic memory |
+| `~/.config/opencode-switcher/gmail_credentials/` | `credentials.json` + `token.json` (token `0o600`) |
+| `~/.config/opencode-switcher/qq_mail_credentials.json` | QQ mail IMAP credentials |
 | `~/.config/opencode-switcher/mcp_servers.json` | MCP server configs (perms `0o600`) |
+| `~/.config/opencode-switcher/todos.json` | Todo tool store |
+| `~/.config/opencode-switcher/skills/` | AI skill store |
 | `~/.config/opencode-switcher/lock` | Flock lock file |
 | `~/.cache/opencode-switcher/toggle.sock` | Unix socket (Wayland hotkey) |
 | `~/.cache/opencode-switcher/conversations/` | AI conversation JSON files |
@@ -177,6 +185,7 @@ Dynamically add/remove `.subagent-status-bar` class on FlowBox before `hide()`/`
 - **`# ponytail:`** marks intentionally removed code — searchable breadcrumb for deleted blocks.
 - **`console.error('opencode-switcher: ...')`** prefix in GNOME extension JS error messages.
 - **Settings dialog**: factory pattern `show_settings_dialog(parent, on_dialog_shown, on_dialog_hidden)`. Reuses focus-guard `_dialog_active` flag.
+- **No linter/formatter/CI**: manual discipline; validate changes with `unittest`.
 
 ## Postmortem Summary: `data-tool-call-id` Broke Tool Card Markdown
 
@@ -188,7 +197,7 @@ When Phase 3a added `data-tool-call-id` to `<details class="tool-step-details">`
 
 ## Reference
 
-- `.hzb-agents/experience/` — 130 per-feature postmortems
-- `.omo/plans/` — 49 structured work plans
+- `.hzb-agents/experience/` — 130 per-feature postmortems (**gitignored local dir**)
+- `.omo/plans/` — 49 structured work plans (**gitignored local dir**)
 - `docs/plans/` — recent audit/refactor plans (e.g., `/fork` review, subagent monitoring)
 - `gnome-extension/AGENTS.md` — GNOME Shell extension internals
