@@ -4,6 +4,7 @@ import unittest
 
 from ai_text_utils.markdown import (
     _markdown_to_html_safe,
+    _ensure_table_blankline,
     _fix_latex,
     _escape_math,
     _unescape_math,
@@ -83,6 +84,25 @@ class TestAITextUtils(unittest.TestCase):
         html = _markdown_to_html_safe(md)
         self.assertNotIn("<table>", html)
         self.assertIn("| a | b |", html)
+
+    def test_table_blankline_code_block_end_fence(self):
+        """代码块内 | 行 + 结束 fence：不得在块内插入空行（Issue 1 回归）。
+
+        旧版（无 ``` 排除逻辑）会在代码块结束 fence 前插入多余空行，
+        此测试锁定转换结果与输入完全一致。
+        """
+        md = "```\n| a | b |\n| 1 | 2 |\n```"
+        self.assertEqual(_ensure_table_blankline(md), md)
+        html = _markdown_to_html_safe(md)
+        self.assertNotIn("<table>", html)
+
+    def test_table_blankline_adjacent_tables_no_trailing_pipe(self):
+        """相邻表格（第二表分隔行无尾管线）：仍识别为两个独立表格（H1 回归）。"""
+        md = "| A | B |\n|---|---|\n| 1 | 2 |\n| C | D |\n|---|---\n| 3 | 4 |"
+        html = _markdown_to_html_safe(md)
+        self.assertEqual(html.count("<table>"), 2, "无尾管线分隔行的相邻表格应渲染为两个独立表格")
+        self.assertIn("<th>A</th>", html)
+        self.assertIn("<th>C</th>", html)
 
     def test_strip_ai_markup(self):
         text_with_markup = 'Hello world <details class="thinking-details">internal reasoning</details>\n<div class="answer-header">Header</div>'

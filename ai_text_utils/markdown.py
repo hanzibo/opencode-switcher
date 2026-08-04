@@ -298,7 +298,10 @@ def _ensure_list_blankline(text: str) -> str:
     return '\n'.join(result)
 
 
-_TABLE_SEPARATOR_RE = re.compile(r'^\s*\|[\s:\-|]+\|\s*$')
+# 尾管线可选：Python-Markdown 的 TableProcessor 允许无尾管线的分隔行
+# （如 "|---|---"），本检测须与之对齐，否则相邻表格（第二表无尾管线）
+# 会被漏判合并为一个表格。
+_TABLE_SEPARATOR_RE = re.compile(r'^\s*\|[\s:\-|]+\|?\s*$')
 
 
 def _ensure_table_blankline(text: str) -> str:
@@ -333,8 +336,12 @@ def _ensure_table_blankline(text: str) -> str:
                       and result and result[-1].strip().startswith('|')):
                     result.append('')
             else:
-                # ③ 表格后补空行：普通文本/引用紧跟表格行
-                if result and result[-1].strip().startswith('|'):
+                # ③ 表格后补空行：普通文本/引用紧跟表格行。
+                #    排除代码块边界行：结束 ``` 切换 in_code_block 后也会进入
+                #    此分支，但其前一行若是代码内容（可能以 | 开头），
+                #    不应触发补空行（避免在代码块内插入多余空行）。
+                if (not stripped.startswith('```')
+                        and result and result[-1].strip().startswith('|')):
                     result.append('')
 
         result.append(line)
