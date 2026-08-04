@@ -127,6 +127,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_cancel_event = threading.Event()
         self._ai_cancelling = False
         self._ai_messages = []
+        self._ai_system_prompt: str = ""  # 会话级系统提示词快照（新对话从 Settings 快照，旧对话从会话记录加载）
         self._ai_conversation_id = uuid4().hex[:12]
         self._ai_history_popover = None
         self._ai_history_btn = None
@@ -730,6 +731,8 @@ class AIChatPanel(Gtk.Box):
 
     def _start_new_conversation(self, prompt_text: str):
         self._ai_messages = [{"role": "user", "content": prompt_text}]
+        # 新对话建立时快照当前 Settings 中的系统提示词；此后该对话沿用此快照，不受 Settings 热加载影响
+        self._ai_system_prompt = AISettingsStore().system_prompt
         self._ai_conversation_id = uuid4().hex[:12]
         self._ai_assistant_buffer = ""
         self._ai_current_assistant_text = ""
@@ -770,6 +773,11 @@ class AIChatPanel(Gtk.Box):
               仅在 HTTP 请求层注入，不污染 self._ai_messages
         """
         extra = []
+        if self._ai_system_prompt:
+            extra.append({
+                "role": "system",
+                "content": self._ai_system_prompt
+            })
         if self._ai_summary:
             extra.append({
                 "role": "system",
@@ -927,6 +935,9 @@ class AIChatPanel(Gtk.Box):
         self._init_streaming_state()
         # 初始化 MCP（幂等，仅首次有效）
         self._init_mcp()
+        # 空会话首条消息：快照当前 Settings 中的系统提示词（幂等；旧对话 _ai_messages 非空不会刷新）
+        if not self._ai_messages:
+            self._ai_system_prompt = AISettingsStore().system_prompt
         # Build message content with or without pending image
         if self._ai_pending_image_hash:
             content = [
@@ -3600,6 +3611,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_conversation_created_at = now
             conv = self._conversation_store.create_conversation(
                 title=local_title,
+                system_prompt=self._ai_system_prompt,
                 model_config=model_snapshot
             )
             self._ai_conversation_id = conv.id
@@ -3611,13 +3623,14 @@ class AIChatPanel(Gtk.Box):
             if conv:
                 conv.messages = [_dict_to_chat_message(m) for m in self._ai_messages]
                 conv.model_config_snapshot = model_snapshot
+                conv.system_prompt = self._ai_system_prompt
                 if not self._ai_summary_generating:
                     conv.summary = self._ai_summary
             else:
                 conv = Conversation(
                     id=self._ai_conversation_id,
                     title=local_title,
-                    system_prompt="",
+                    system_prompt=self._ai_system_prompt,
                     messages=[_dict_to_chat_message(m) for m in self._ai_messages],
                     model_config_snapshot=model_snapshot,
                     created_at=self._ai_conversation_created_at,
@@ -3663,6 +3676,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_conversation_id = conv_id
             self._ai_conversation_created_at = conv.created_at
             self._ai_summary = conv.summary if conv else ""
+            self._ai_system_prompt = conv.system_prompt if conv else ""  # 旧对话加载自身快照，不读 Settings（无热加载）
             
             cached_html = self._ai_html_cache.get(conv_id)
             if cached_html is not None:
@@ -3700,6 +3714,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_conversation_id = conv.id
             self._ai_conversation_created_at = conv.created_at
             self._ai_summary = conv.summary if conv else ""
+            self._ai_system_prompt = conv.system_prompt if conv else ""  # 旧对话加载自身快照，不读 Settings（无热加载）
             self._ai_current_assistant_text = ""
             self._ai_current_reasoning_text = ""
             self._ai_response_div_added = False
@@ -3986,6 +4001,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_entry.placeholder_text = ""
         self._last_rendered_html = ""
         self._ai_messages = []
+        # /new、/delete、Ctrl+L 等开启的全新空白会话：快照当前 Settings 中的系统提示词
+        self._ai_system_prompt = AISettingsStore().system_prompt
         self._clear_subagent_bar_instantly()
         self._refresh_subagent_bar()
         self._ai_assistant_buffer = ""

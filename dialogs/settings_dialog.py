@@ -73,6 +73,7 @@ class SettingsDialog:
             ("QQ邮箱", self._build_qq_mail_tab),
             ("Gmail", self._build_gmail_tab),
             ("AI 对话", self._build_ai_settings_tab),
+            ("系统提示词", self._build_system_prompt_tab),
             ("流式输出", self._build_streaming_tab),
             ("MCP 服务器", self._build_mcp_tab),
             ("常量配置", self._build_constants_tab),
@@ -900,6 +901,72 @@ class SettingsDialog:
             else:
                 w["check"].set_active(True)
 
+    # ── Tab: 系统提示词 ─────────────────────────────────────────────────
+
+    def _build_system_prompt_tab(self):
+        """Build the global AI system prompt configuration tab page.
+
+        用户在此编写全局系统提示词（system prompt），仅在**新建立的 AI 对话**
+        首轮请求时作为 system 消息注入。已存在的对话使用自身快照，不受此处
+        修改影响（避免 LLM prompt 前缀变化导致缓存失效、浪费 token）。
+        """
+        vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 8)
+        vbox.set_margin_start(16)
+        vbox.set_margin_end(16)
+        vbox.set_margin_top(12)
+        vbox.set_margin_bottom(12)
+
+        # ── Description ──
+        desc = Gtk.Label.new()
+        desc.set_markup(
+            "<span size='small' foreground='#888888'>"
+            "在此编写全局系统提示词（system prompt）。\n"
+            "保存后，<b>新建的 AI 对话</b>将以此作为对话开头的 system 消息。\n"
+            "已存在的对话保持创建时的快照，不受后续修改影响（保证请求前缀稳定，LLM 缓存可命中）。"
+            "</span>"
+        )
+        desc.set_xalign(0)
+        desc.set_line_wrap(True)
+        vbox.pack_start(desc, False, False, 0)
+
+        # ── Editor ──
+        editor_title = Gtk.Label.new()
+        editor_title.set_markup("<b>系统提示词内容</b>")
+        editor_title.set_xalign(0)
+        editor_title.set_margin_top(8)
+        vbox.pack_start(editor_title, False, False, 0)
+
+        scrolled = Gtk.ScrolledWindow.new()
+        scrolled.set_min_content_height(220)
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_shadow_type(Gtk.ShadowType.NONE)
+        self._system_prompt_view = Gtk.TextView.new()
+        self._system_prompt_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        self._system_prompt_view.set_monospace(True)
+        buffer = self._system_prompt_view.get_buffer()
+        buffer.set_text(self._ai_settings_store.system_prompt)
+        scrolled.add(self._system_prompt_view)
+        vbox.pack_start(scrolled, True, True, 0)
+
+        # ── Hint ──
+        hint = Gtk.Label.new()
+        hint.set_markup(
+            "<span size='small' foreground='#888888'>"
+            "留空表示不注入系统提示词（默认行为）。\n"
+            "提示：可与「AI 对话 → 摘要压缩」的历史摘要共存，系统提示词会放在消息最前。"
+            "</span>"
+        )
+        hint.set_xalign(0)
+        hint.set_margin_top(8)
+        vbox.pack_start(hint, False, False, 0)
+
+        # ── Spacer ──
+        spacer = Gtk.Box.new(Gtk.Orientation.VERTICAL, 0)
+        spacer.set_vexpand(True)
+        vbox.pack_start(spacer, True, True, 0)
+
+        return self._make_tab_scrolled_window(vbox)
+
     # ── Tab: 流式输出 ────────────────────────────────────────────────────
 
     def _build_streaming_tab(self):
@@ -1487,6 +1554,11 @@ class SettingsDialog:
         buf = self._summary_prompt_view.get_buffer()
         self._ai_settings_store.summary_prompt_template = buf.get_text(
             buf.get_start_iter(), buf.get_end_iter(), False
+        )
+        # 系统提示词
+        sp_buf = self._system_prompt_view.get_buffer()
+        self._ai_settings_store.system_prompt = sp_buf.get_text(
+            sp_buf.get_start_iter(), sp_buf.get_end_iter(), False
         )
         self._ai_settings_store.max_clipboard = int(self._clip_max_spin.get_value())
         self._ai_settings_store.max_tool_iterations = int(self._tool_iter_spin.get_value())

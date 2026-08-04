@@ -1196,6 +1196,7 @@ class AISettingsStore:
         self.summary_threshold: int = 80      # 剩余多少条消息时触发摘要
         self.summary_max_chars: int = 500     # 摘要最大字符数
         self.summary_prompt_template: str = _DEFAULT_SUMMARY_TEMPLATE
+        self.system_prompt: str = ""  # 全局 AI 对话系统提示词（新对话建立时快照注入）
         self.max_clipboard: int = 150   # 剪切板最大历史项目数
         self.max_tool_iterations: int = 25  # AI 工具调用最大次数
         self.enable_incremental_tools: bool = True  # v3 增量工具卡片
@@ -1222,6 +1223,7 @@ class AISettingsStore:
             self.summary_prompt_template = data.get(
                 "summary_prompt_template", _DEFAULT_SUMMARY_TEMPLATE
             )
+            self.system_prompt = data.get("system_prompt", "")
             self.max_clipboard = data.get("max_clipboard", 150)
             self.max_tool_iterations = data.get("max_tool_iterations", 25)
             self.enable_incremental_tools = data.get("enable_incremental_tools", True)
@@ -1241,13 +1243,14 @@ class AISettingsStore:
             fd = os.open(AI_SETTINGS_PATH, flags, 0o600)
             with os.fdopen(fd, "w") as f:
                 json.dump({
-                    "version": 4,
+                    "version": 5,
                     "soft_limit": self.soft_limit,
                     "trim_target": self.trim_target,
                     "enable_summary": self.enable_summary,
                     "summary_threshold": self.summary_threshold,
                     "summary_max_chars": self.summary_max_chars,
                     "summary_prompt_template": self.summary_prompt_template,
+                    "system_prompt": self.system_prompt,
                     "max_clipboard": self.max_clipboard,
                     "max_tool_iterations": self.max_tool_iterations,
                     "enable_incremental_tools": self.enable_incremental_tools,
