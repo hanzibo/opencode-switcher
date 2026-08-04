@@ -2205,8 +2205,15 @@ class AIChatPanel(Gtk.Box):
                 # 首次点击暂停：发信号，不销毁状态，由后台线程回调清理
                 self._ai_cancelling = True
                 active_state = self._ai_running_convs.get(self._ai_conversation_id)
-                if active_state:
+                if active_state and active_state.get("cancel_event"):
                     active_state["cancel_event"].set()
+                else:
+                    # 兜底：当前会话无活跃 state（如流属于背景会话），
+                    # 取消所有运行中的流，避免只关 response 导致 SSE 误报
+                    for st in list(self._ai_running_convs.values()):
+                        ce = st.get("cancel_event")
+                        if ce:
+                            ce.set()
                 self._llm_client.cancel_active_request()
                 self._update_send_button(False, sensitive=False)
                 self._ai_entry.placeholder_text = "正在中止..."
@@ -2404,7 +2411,17 @@ class AIChatPanel(Gtk.Box):
     def _cancel_streaming_if_active(self):
         """If a streaming response is in progress, cancel it and reset state."""
         if self._ai_streaming:
-            self._ai_cancel_event.set()
+            # 设置当前会话的 cancel_event（与暂停按钮一致），使 parse_sse_events
+            # 走静默返回而非抛 _LLMHttpError；找不到则兜底取消所有运行中的流。
+            # 注意：self._ai_cancel_event 是孤儿事件（无人读取），不得在此使用。
+            active_state = self._ai_running_convs.get(self._ai_conversation_id)
+            if active_state and active_state.get("cancel_event"):
+                active_state["cancel_event"].set()
+            else:
+                for st in list(self._ai_running_convs.values()):
+                    ce = st.get("cancel_event")
+                    if ce:
+                        ce.set()
             self._llm_client.cancel_active_request()
             # Preserve partial assistant content before resetting state
             partial = getattr(self, "_ai_current_assistant_text", "")
@@ -2446,7 +2463,11 @@ class AIChatPanel(Gtk.Box):
         """主线程：在 WebView 中渲染 LLM 请求失败/超时错误气泡。
 
         由后台线程经 GLib.idle_add 调用；文本已在此处 html.escape，杜绝注入。
+        用户主动暂停/取消（_ai_cancelling）期间不弹气泡——覆盖超时 Timer
+        与暂停竞态、以及取消路径误报等场景。
         """
+        if self._ai_cancelling:
+            return
         safe = html.escape(reason)
         self.append_html_to_webview(
             '<div class="chat-system-error">❌ ' + safe + '</div>'
