@@ -33,6 +33,8 @@ OpenCode Switcher 是一个专为 Linux GTK3 桌面环境设计的系统托盘�
 sudo apt install gir1.2-ayatanaappindicator3-0.1 python3-gi python3-gi-cairo python3-pip python3-venv wl-clipboard gir1.2-webkit2-4.1
 ```
 
+> **WebKit2GTK 版本回退**：`gir1.2-webkit2-4.1` 用于 AI 助手面板渲染，是首选版本；仅提供 4.0 的发行版（如部分 Ubuntu 22.04）可改用 `gir1.2-webkit2-4.0`。`install.sh` 会自动解析可用版本（4.1 优先、4.0 回退）后安装，应用运行时也按 4.1 → 4.0 顺序探测绑定，4.0-only 系统不会被强制安装 4.1。
+
 ---
 
 ## 🚀 安装步骤
