@@ -3540,7 +3540,7 @@ class AIChatPanel(Gtk.Box):
         prompt_payload = f"[手动触发 Skill: {skill_name}]\n\n{content}\n\n请严格按上述 Skill 指导完成任务。"
         buf = self._ai_entry.get_buffer()
         buf.set_text(prompt_payload)
-        self._on_ai_send_clicked()
+        self._on_send_clicked()
 
     def _on_ai_entry_changed(self):
         buf = self._ai_entry.get_buffer()
