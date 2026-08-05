@@ -246,29 +246,45 @@ install_system_deps() {
         return
     fi
 
-    # dpkg 路径同样先 apt update 再 resolve：apt-cache policy 必须基于新鲜
-    # 元数据判断 4.1/4.0 可用性，否则全新安装可能解析到错误候选。
-    sudo apt update -qq
-
-    local webkit_pkg
-    webkit_pkg="$(resolve_webkit_package)"
-    local pkg_list=("${SYS_PACKAGES[@]}")
-    if [ -n "$webkit_pkg" ]; then
-        pkg_list+=("$webkit_pkg")
-    fi
-
-    for pkg in "${pkg_list[@]}"; do
+    # dpkg 路径：先用 dpkg -s 探测全部基础包与任一 WebKit2 包。全部已安装时
+    # 直接跳过 apt update/resolve/install（重装场景无需刷新网络元数据）；
+    # 仅当存在缺失包时才 apt update 并解析可用 WebKit 版本后补装缺失部分。
+    for pkg in "${SYS_PACKAGES[@]}"; do
         if ! dpkg -s "$pkg" &>/dev/null; then
             missing_sys+=("$pkg")
         fi
     done
+    local webkit_installed=false
+    for pkg in "${WEBKIT_PACKAGES[@]}"; do
+        if dpkg -s "$pkg" &>/dev/null; then
+            webkit_installed=true
+            break
+        fi
+    done
 
-    if [ ${#missing_sys[@]} -gt 0 ]; then
-        info "安装系统依赖: ${missing_sys[*]}..."
-        sudo apt install -y -qq "${missing_sys[@]}" 2>&1 | tail -1
-        info "系统依赖安装完成"
-    else
+    if [ ${#missing_sys[@]} -eq 0 ] && [ "$webkit_installed" = true ]; then
         info "系统依赖已满足，无需安装。"
+    else
+        # 缺失包存在：先刷新 apt 元数据（apt-cache policy 需要新鲜候选，
+        # 否则全新安装可能解析到错误版本），再补装缺失部分。
+        sudo apt update -qq
+        local webkit_pkg
+        webkit_pkg="$(resolve_webkit_package)"
+        local pkg_list=("${SYS_PACKAGES[@]}")
+        if [ -n "$webkit_pkg" ]; then
+            pkg_list+=("$webkit_pkg")
+        fi
+        missing_sys=()
+        for pkg in "${pkg_list[@]}"; do
+            if ! dpkg -s "$pkg" &>/dev/null; then
+                missing_sys+=("$pkg")
+            fi
+        done
+        if [ ${#missing_sys[@]} -gt 0 ]; then
+            info "安装系统依赖: ${missing_sys[*]}..."
+            sudo apt install -y -qq "${missing_sys[@]}" 2>&1 | tail -1
+            info "系统依赖安装完成"
+        fi
     fi
 
     if ! python3 -m pip --version &>/dev/null; then
@@ -289,11 +305,10 @@ install_python_deps() {
     info "安装 Python 依赖..."
     mkdir -p "$INSTALL_DIR"
     python3 -m venv --system-site-packages "$INSTALL_DIR/venv"
-    # 从 requirements.txt 安装（单一事实来源）
+    # 从 requirements.txt 安装全部 Python 依赖（单一事实来源）：
+    # tiktoken 等均已由该文件声明，无需在此重复安装。
     "$INSTALL_DIR/venv/bin/pip" install --quiet \
         -r "$SCRIPT_DIR/requirements.txt"
-    # tiktoken 可选安装（token 计数更精准，安装失败不影响核心功能）
-    "$INSTALL_DIR/venv/bin/pip" install --quiet "tiktoken>=0.7" 2>/dev/null || true
     info "Python 依赖安装完成"
 }
 

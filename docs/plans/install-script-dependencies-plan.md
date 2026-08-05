@@ -58,11 +58,20 @@ Supported terminals must match `system/launcher.py`: `ptyxis`,
   against the exact `$INSTALL_DIR/main.py` — INSTALL_DIR is never expanded
   into a pgrep regex and only processes whose cmdline contains the exact
   install path are killed.
-- **apt update before WebKit resolution**: `install_system_deps()` runs
-  `sudo apt update -qq` *before* `resolve_webkit_package()` in both the
-  dpkg discovery path and the no-`dpkg` fallback. `resolve_webkit_package`
-  consults `apt-cache policy`; on fresh installs with stale apt metadata the
-  4.1/4.0 candidates are missing, so the refresh must come first.
+- **apt update only on missing packages (dpkg path)**: `install_system_deps()`
+  probes every `SYS_PACKAGES` entry plus either `WEBKIT_PACKAGES` member with
+  `dpkg -s` *before* any apt invocation. If all are present, reinstall is
+  fully offline: no `apt update`, no `resolve_webkit_package`, no `apt
+  install`. Only when something is missing does the dpkg path run `sudo apt
+  update -qq` *before* `resolve_webkit_package()` — `apt-cache policy` needs
+  fresh metadata to pick the 4.1/4.0 candidate on fresh installs — then it
+  installs only the missing packages. The no-`dpkg` fallback keeps its
+  unconditional `apt update` (it cannot probe installed state without dpkg).
+- **tiktoken via requirements.txt only**: `requirements.txt` already declares
+  `tiktoken>=0.7` (mandatory). `install_python_deps()` therefore installs
+  exactly once via `pip -r requirements.txt`; the redundant second
+  `pip install tiktoken` and its misleading "optional" comment are removed.
+  `requirements.txt` is the single source of truth for Python dependencies.
 - **Absolute INSTALL_DIR required**: after `~` expansion and trailing-slash
   stripping, `validate_install_dir()` rejects any path not starting with `/`
   (relative paths would be misinterpreted by `rm -rf`/pgrep).

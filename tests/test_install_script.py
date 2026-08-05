@@ -18,7 +18,12 @@ Per ``docs/plans/install-script-dependencies-plan.md`` the installer must:
     ``$HOME``, ``.``/``..`` components) before any install/uninstall use;
   - harden uninstall process matching: no regex expansion from INSTALL_DIR,
     verify cmdline contains the exact install path before killing;
-  - add a system-dependency + runtime-binding section to ``cmd_status``.
+  - add a system-dependency + runtime-binding section to ``cmd_status``;
+  - run ``apt update`` in the dpkg path only when a required package (base or
+    either WebKit2) is missing — a fully-present reinstall skips it — while
+    the no-``dpkg`` fallback keeps its unconditional refresh;
+  - install ``tiktoken`` solely via ``requirements.txt`` (no duplicate pip
+    install, no misleading "optional" claim).
 
 These checks are mostly static (no installer is executed): they parse
 ``install.sh`` source and run ``bash -n``. Pure helper functions
@@ -135,6 +140,73 @@ def _run_install_fn(name, argv=(), env_extra=None):
     return subprocess.run(
         [_BASH, "-c", script], capture_output=True, text=True, env=env, timeout=20
     )
+
+
+def _fake_dpkg(installed):
+    """Source for a fake ``dpkg`` reporting ``installed`` packages as present."""
+    names = "|".join(installed)
+    return (
+        "#!/usr/bin/env bash\n"
+        'pkg="$2"\n'
+        f'case "$pkg" in\n    {names})\n        exit 0 ;;\nesac\n'
+        "exit 1\n"
+    )
+
+
+def _run_install_system_deps(installed_pkgs):
+    """Execute install_system_deps with fake dpkg/apt/sudo and stub helpers.
+
+    Pure side-effect simulation, no apt/install/uninstall on the host. The
+    fake ``apt`` logs every invocation ("update -qq", "install -y -qq <pkgs>")
+    to a per-run file. Returns (returncode, stdout, stderr, log_text).
+    """
+    body = _function_body("install_system_deps")
+    resolve_body = _function_body("resolve_webkit_package")
+    if not body or not resolve_body:
+        raise AssertionError(
+            "install_system_deps/resolve_webkit_package not found in install.sh"
+        )
+    with tempfile.TemporaryDirectory() as tmp:
+        bin_dir = os.path.join(tmp, "bin")
+        log = os.path.join(tmp, "apt.log")
+        os.makedirs(bin_dir, exist_ok=True)
+        files = {
+            "dpkg": _fake_dpkg(installed_pkgs),
+            "apt": "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$LOG\"\nexit 0\n",
+            "sudo": '#!/usr/bin/env bash\nexec "$@"\n',
+            "apt-cache": "#!/usr/bin/env bash\nexit 0\n",
+            "python3": "#!/usr/bin/env bash\nexit 0\n",
+        }
+        for name, content in files.items():
+            p = os.path.join(bin_dir, name)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(content)
+            os.chmod(p, 0o755)
+        arrays = "".join(
+            f"{n}=({' '.join(items)})\n" for n, items in _top_level_arrays().items()
+        )
+        script = (
+            'info() { printf "[INFO] %s\\n" "$*"; }\n'
+            'warn() { printf "[WARN] %s\\n" "$*" >&2; }\n'
+            'error() { printf "ERR: %s\\n" "$*" >&2; }\n'
+            'check_webkit2() { return 0; }\n'
+            'detect_terminal() { return 0; }\n'
+            + arrays
+            + f"resolve_webkit_package() {{\n{resolve_body}\n}}\n"
+            + f"install_system_deps() {{\n{body}\n}}\n"
+            + "install_system_deps\n"
+        )
+        env = dict(os.environ)
+        env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+        env["LOG"] = log
+        r = subprocess.run(
+            [_BASH, "-c", script], capture_output=True, text=True, env=env, timeout=20
+        )
+        log_text = ""
+        if os.path.exists(log):
+            with open(log, encoding="utf-8") as f:
+                log_text = f.read()
+        return r.returncode, r.stdout, r.stderr, log_text
 
 
 class TestSystemPackages(unittest.TestCase):
@@ -387,6 +459,133 @@ class TestAptUpdateOrdering(unittest.TestCase):
             2,
             "apt update must run in the dpkg discovery path and the no-dpkg fallback",
         )
+
+
+class TestInstallSystemDepsAptUpdatePolicy(unittest.TestCase):
+    """apt update must only run when a required package is missing (dpkg path).
+
+    Reinstall with all system packages already present must not touch the
+    network: no apt update, no apt install, no resolve call. When something
+    is missing, apt update must precede both resolve and install.
+    """
+
+    def test_satisfied_path_skips_apt_update(self):
+        rc, out, err, log = _run_install_system_deps(
+            _SYSTEM_PACKAGES + _WEBKIT_PACKAGES
+        )
+        self.assertEqual(rc, 0, err)
+        self.assertIn("已满足", out, "satisfied path must report packages satisfied")
+        self.assertNotIn("apt update", log, "no apt update when all packages present")
+        self.assertNotIn("apt install", log, "no apt install when all packages present")
+
+    def test_missing_path_updates_before_install(self):
+        installed = [p for p in _SYSTEM_PACKAGES if p != "wl-clipboard"]
+        installed += _WEBKIT_PACKAGES
+        rc, _out, err, log = _run_install_system_deps(installed)
+        self.assertEqual(rc, 0, err)
+        lines = [line for line in log.splitlines() if line.strip()]
+        update_i = next(
+            (i for i, line in enumerate(lines) if "update" in line), -1
+        )
+        install_i = next(
+            (i for i, line in enumerate(lines) if "install" in line), -1
+        )
+        self.assertGreaterEqual(
+            update_i, 0, "missing path must run apt update"
+        )
+        self.assertGreaterEqual(
+            install_i, 0, "missing path must run apt install"
+        )
+        self.assertLess(
+            update_i, install_i, "apt update must precede apt install"
+        )
+        self.assertIn(
+            "wl-clipboard",
+            lines[install_i],
+            "only the missing package is installed",
+        )
+
+    def test_dpkg_path_apt_update_is_conditional(self):
+        # Static guarantee: the dpkg-path apt update (the last occurrence) must
+        # sit behind the satisfied/missing check, so a fully-present reinstall
+        # never reaches it. The no-dpkg fallback's apt update is unconditional
+        # by design.
+        body = _function_body("install_system_deps")
+        self.assertNotEqual(
+            body, "", "install_system_deps() must exist in install.sh"
+        )
+        code_lines = [
+            line
+            for line in body.splitlines()
+            if not line.lstrip().startswith("#")
+        ]
+        guard_idx = next(
+            (
+                i
+                for i, line in enumerate(code_lines)
+                if "-eq 0" in line and "missing_sys" in line
+            ),
+            -1,
+        )
+        self.assertGreaterEqual(
+            guard_idx, 0, "the satisfied/missing check must exist"
+        )
+        update_idxs = [
+            i for i, line in enumerate(code_lines) if "apt update" in line
+        ]
+        self.assertGreaterEqual(
+            len(update_idxs), 2, "both paths must run apt update"
+        )
+        self.assertGreater(
+            update_idxs[-1],
+            guard_idx,
+            "dpkg-path apt update must be gated behind the missing check",
+        )
+
+
+class TestTiktokenPolicy(unittest.TestCase):
+    """tiktoken must come from requirements.txt only — no dead duplicate install.
+
+    requirements.txt already declares ``tiktoken>=0.7`` (mandatory), so the
+    former second ``pip install tiktoken`` in install_python_deps was dead
+    code and its "optional" comment misleading.
+    """
+
+    def test_no_duplicate_tiktoken_install(self):
+        body = _function_body("install_python_deps")
+        self.assertNotEqual(
+            body, "", "install_python_deps() must exist in install.sh"
+        )
+        for line in body.splitlines():
+            if "pip" in line and "install" in line:
+                self.assertNotIn(
+                    "tiktoken",
+                    line,
+                    f"no pip install line may reference tiktoken: {line!r}",
+                )
+        self.assertNotIn(
+            "tiktoken>=0.7",
+            body,
+            "the redundant pinned tiktoken install must be gone",
+        )
+
+    def test_python_deps_installed_once_via_requirements(self):
+        body = _function_body("install_python_deps")
+        self.assertEqual(
+            body.count("pip"),
+            1,
+            "Python deps must be installed exactly once (pip -r requirements.txt)",
+        )
+        self.assertIn("-r", body, "install must use -r")
+        self.assertIn(
+            "requirements.txt",
+            body,
+            "requirements.txt is the single source of truth",
+        )
+
+    def test_requirements_txt_declares_tiktoken(self):
+        req = _read(os.path.join(_ROOT_DIR, "requirements.txt"))
+        self.assertIn("tiktoken", req, "requirements.txt must declare tiktoken")
 
 
 class TestSupportedTerminals(unittest.TestCase):
