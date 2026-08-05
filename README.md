@@ -30,7 +30,7 @@ OpenCode Switcher 是一个专为 Linux GTK3 桌面环境设计的系统托盘�
 
 ```bash
 # Debian/Ubuntu 及其衍生系统
-sudo apt install gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard
+sudo apt install gir1.2-ayatanaappindicator3-0.1 python3-gi python3-gi-cairo python3-pip python3-venv wl-clipboard gir1.2-webkit2-4.1
 ```
 
 ---
