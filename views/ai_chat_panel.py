@@ -1537,10 +1537,10 @@ class AIChatPanel(Gtk.Box):
                 conv = Conversation(
                     id=conv_id,
                     title=local_title,
-                    system_prompt="",
+                    system_prompt=state.get("system_prompt", ""),
                     messages=messages_objs,
                     model_config_snapshot=model_snapshot,
-                    created_at=int(time.time() * 1000),
+                    created_at=state.get("created_at", int(time.time() * 1000)),
                     updated_at=int(time.time() * 1000),
                 )
             self._conversation_store.save_conversation(conv, bump_updated_at=True)
