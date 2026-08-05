@@ -205,7 +205,9 @@ class AIChatPanel(Gtk.Box):
         self._last_rendered_html = ""
         # 已装载外壳指纹 (theme, pygments_css)，须与 ai_html_template 外壳缓存键一致；None=未装载
         self._loaded_shell_fingerprint = None
-        self._ai_conversation_created_at = 0
+        # 初始面板会话：立即锚定创建时间（不得为 0）。主路径 _send_user_message 不经过
+        # _start_new_conversation，若此处残留 0，首条消息流结束保存会把 created_at=0 落盘。
+        self._ai_conversation_created_at = int(time.time() * 1000)
         self._ai_title_generated = False
         self._ai_history_queries = []
         self._ai_history_index = -1
@@ -3204,6 +3206,11 @@ class AIChatPanel(Gtk.Box):
             self._reset_ai_panel_silent()
             return True
 
+        # Ctrl+Shift+Up/Down → 窗口级会话切换（views/panel.py:_on_window_key），
+        # 不得被输入历史导航吞掉；直接放行让事件继续传播到窗口处理器。
+        if is_ctrl and is_shift and keyname in ("Up", "KP_Up", "Down", "KP_Down"):
+            return False
+
         if keyname in ("Up", "KP_Up", "Down", "KP_Down"):
             buf = self._ai_entry.get_buffer()
             start = buf.get_start_iter()
@@ -3926,6 +3933,10 @@ class AIChatPanel(Gtk.Box):
                 if not self._ai_summary_generating:
                     conv.summary = self._ai_summary
             else:
+                # 首条消息落盘兜底：初始面板会话（主路径不经过 _start_new_conversation）
+                # 若 created_at 仍为 0/未锚定，此时必须锚定，不得把 0 写入磁盘。
+                if not self._ai_conversation_created_at:
+                    self._ai_conversation_created_at = int(time.time() * 1000)
                 conv = Conversation(
                     id=self._ai_conversation_id,
                     title=local_title,

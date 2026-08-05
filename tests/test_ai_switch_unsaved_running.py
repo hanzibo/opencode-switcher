@@ -765,5 +765,60 @@ class TestBackgroundFinishedMetadataForUnsaved(unittest.TestCase):
         )
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  (i) 初始面板会话首条消息落盘：created_at 不得为 0（核心 bug 4）
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestInitialPanelFirstMessageCreatedAt(unittest.TestCase):
+    """初始面板会话首条消息落盘不得写入 created_at=0。
+
+    bug：``__init__`` 生成 ``_ai_conversation_id`` 时 ``_ai_conversation_created_at``
+    保持 0；首条消息主路径 ``_send_user_message`` 不经过 ``_start_new_conversation``，
+    流结束保存走 ``_save_current_conversation`` 的 ``conv is None`` 分支，把
+    ``created_at=0`` 直接落盘。
+    """
+
+    def test_first_save_of_initial_panel_conversation_anchors_created_at(self):
+        """初始面板状态（id 已生成、created_at=0）首条消息落盘：created_at 必须非 0。
+
+        走真实 ``_save_current_conversation`` + 记录型 store：conv 未落盘（与初始
+        面板一致），``conv is None`` 分支新建 Conversation 时不得带 0 写入磁盘。
+        """
+        panel = _make_panel()
+        panel._ai_conversation_id = "panel-initial-id"  # 同 __init__ 生成的 id
+        panel._ai_conversation_created_at = 0           # 未锚定（默认值）
+        panel._ai_system_prompt = "初始快照"
+        panel._ai_messages = [{"role": "user", "content": "面板创建后的第一条消息"}]
+        panel._ai_html_cache = {}
+        # 绑定真实保存方法（同 (f) 的 __get__ 模式）
+        panel._save_current_conversation = (
+            AIChatPanel._save_current_conversation.__get__(panel, AIChatPanel)
+        )
+        store = _RecordingConversationStore({})  # 磁盘无此会话 → conv is None 分支
+        panel._conversation_store = store
+
+        AIChatPanel._save_current_conversation(panel, {"alias": "Default"})
+
+        saved = [c for c in store.saved if getattr(c, "id", None) == "panel-initial-id"]
+        self.assertEqual(
+            len(saved), 1,
+            "初始面板会话首条消息必须真实落盘",
+        )
+        self.assertNotEqual(
+            saved[0].created_at, 0,
+            "初始面板会话首条消息落盘不得写入 created_at=0（当前 → FAIL）",
+        )
+        now = int(time.time() * 1000)
+        self.assertGreaterEqual(
+            saved[0].created_at, now - 10000,
+            "锚定的 created_at 必须接近当前时间",
+        )
+        self.assertLessEqual(
+            saved[0].created_at, now,
+            "锚定的 created_at 不得晚于当前时间",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

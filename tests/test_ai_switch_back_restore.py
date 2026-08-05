@@ -34,6 +34,9 @@ from unittest import mock
 
 os.environ.setdefault("GDK_BACKEND", "dummy")  # 无头环境导入 GTK
 
+import gi
+gi.require_version("Gdk", "3.0")  # 与 ai_chat_panel 保持一致，先于仓库加载
+from gi.repository import Gdk
 from system.event_types import (
     ToolCallData,
     reasoning_delta,
@@ -688,6 +691,113 @@ class TestBlockingToolCompletion(unittest.TestCase):
         self.assertFalse(st["streaming"])
         # 面板侧：真实 _handle_stream_end 链（req_id 当前）应保存会话
         panel._save_current_conversation.assert_called_once()
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  输入历史键处理：Ctrl+Shift+Up/Down 必须放行给窗口级会话切换
+#  （views/panel.py:_on_window_key），不得被输入历史导航吞掉。
+# ═══════════════════════════════════════════════════════════════════
+
+
+class _FakeKeyBufferIter:
+    def get_line(self):
+        return 0
+
+
+class _FakeKeyBuffer:
+    """带文本/迭代语义的假 Entry buffer（_FakeTextBuffer 对键处理太薄）。"""
+
+    def __init__(self, text=""):
+        self.text = text
+
+    def get_start_iter(self):
+        return _FakeKeyBufferIter()
+
+    def get_end_iter(self):
+        return _FakeKeyBufferIter()
+
+    def get_insert(self):
+        return None
+
+    def get_iter_at_mark(self, mark):
+        return _FakeKeyBufferIter()
+
+    def get_text(self, start, end, include_hidden):
+        return self.text
+
+    def set_text(self, text):
+        self.text = text
+
+    def place_cursor(self, it):
+        pass
+
+    def get_line_count(self):
+        return 1
+
+
+class _FakeKeyEntry:
+    def __init__(self, text=""):
+        self._buffer = _FakeKeyBuffer(text)
+
+    def get_buffer(self):
+        return self._buffer
+
+
+def _key_event(keyval, ctrl=False, shift=False):
+    state = 0
+    if ctrl:
+        state |= Gdk.ModifierType.CONTROL_MASK
+    if shift:
+        state |= Gdk.ModifierType.SHIFT_MASK
+    return SimpleNamespace(keyval=keyval, state=state)
+
+
+class TestAiEntryKeyCtrlShiftNavigation(unittest.TestCase):
+    """_on_ai_entry_key_press 的 Ctrl+Shift+Up/Down 回归覆盖。
+
+    bug：_on_ai_entry_key_press 在 _ai_history_queries 非空时吞掉 Up/Down，
+    窗口级 _on_window_key 永远收不到 Ctrl+Shift+Up/Down → 会话切换失效。
+    """
+
+    def _make_panel(self, history=("q1", "q2"), history_index=-1):
+        entry = _FakeKeyEntry("draft")
+        panel = _make_panel(_ai_entry=entry, _ai_cmd_popover=None)
+        panel._ai_history_queries = list(history)
+        panel._ai_history_index = history_index
+        panel._ai_current_draft = ""
+        return panel, entry
+
+    def test_ctrl_shift_up_with_history_not_consumed(self):
+        panel, entry = self._make_panel()
+        ret = panel._on_ai_entry_key_press(
+            entry, _key_event(Gdk.KEY_Up, ctrl=True, shift=True)
+        )
+        self.assertIs(ret, False, "Ctrl+Shift+Up 必须放行给窗口级会话切换")
+        self.assertEqual(panel._ai_history_index, -1, "不应推进输入历史索引")
+        self.assertEqual(entry._buffer.text, "draft", "不应改写输入框内容")
+
+    def test_ctrl_shift_down_with_history_not_consumed(self):
+        panel, entry = self._make_panel()
+        ret = panel._on_ai_entry_key_press(
+            entry, _key_event(Gdk.KEY_Down, ctrl=True, shift=True)
+        )
+        self.assertIs(ret, False, "Ctrl+Shift+Down 必须放行给窗口级会话切换")
+        self.assertEqual(panel._ai_history_index, -1)
+        self.assertEqual(entry._buffer.text, "draft")
+
+    def test_plain_up_still_navigates_history(self):
+        panel, entry = self._make_panel()
+        ret = panel._on_ai_entry_key_press(entry, _key_event(Gdk.KEY_Up))
+        self.assertIs(ret, True, "普通 Up 仍应由输入历史消费")
+        self.assertEqual(panel._ai_history_index, 1, "Up 应回退到最近一条历史")
+        self.assertEqual(entry._buffer.text, "q2")
+
+    def test_plain_down_still_navigates_history(self):
+        panel, entry = self._make_panel(history_index=0)
+        ret = panel._on_ai_entry_key_press(entry, _key_event(Gdk.KEY_Down))
+        self.assertIs(ret, True, "普通 Down 仍应由输入历史消费")
+        self.assertEqual(panel._ai_history_index, 1, "Down 应前进到更新一条历史")
+        self.assertEqual(entry._buffer.text, "q2")
 
 
 if __name__ == "__main__":
