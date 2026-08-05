@@ -16,6 +16,7 @@ from system.hotkey import HotkeyManager
 from views.panel import SearchPanel
 from stores.session_store import get_sessions, delete_session, rename_session
 from stores.delete_queue import DeleteQueue
+from stores.session_refresh import run_rename_refresh
 from system.launcher import launch_session, launch_new_session, launch_session_pure
 # ponytail: removed PromptStore import
 from stores.clipboard_store import ClipboardStore, CategoryStore
@@ -302,12 +303,33 @@ class App:
         dialog.show_all()
 
     def _on_rename_session(self, session_id: str, new_title: str):
-        err = rename_session(session_id, new_title)
-        if err:
-            GLib.idle_add(lambda: self._show_error(err))
-        else:
-            sessions = get_sessions()
-            self._panel.load_sessions(sessions)
+        """重命名：DB 写入 + 列表刷新全部移入后台线程，不阻塞 GTK 主线程。
+
+        先递增 _session_load_seq 使在途后台加载失效（防旧标题覆盖新列表），
+        再派发后台线程执行 rename_session + get_sessions（含 pgrep /proc
+        扫描，代价高）。UI 更新经 run_rename_refresh 内部 GLib.idle_add
+        切回主线程，apply 前校验 seq，防止乱序/快速连改覆盖
+        （与 _schedule_refresh_after_delete 同一套约定）。
+        """
+        self._session_load_seq = getattr(self, "_session_load_seq", 0) + 1
+        seq = self._session_load_seq
+
+        threading.Thread(
+            target=run_rename_refresh,
+            kwargs={
+                "session_id": session_id,
+                "new_title": new_title,
+                "rename_fn": rename_session,
+                "load_fn": get_sessions,
+                "seq": seq,
+                "get_seq": lambda: self._session_load_seq,
+                "schedule": GLib.idle_add,
+                "apply_fn": self._panel.load_sessions,
+                "show_error_fn": self._show_error,
+                "log_error": lambda msg: print(msg, flush=True),
+            },
+            daemon=True,
+        ).start()
 
 
 if __name__ == "__main__":
@@ -323,6 +345,15 @@ if __name__ == "__main__":
     except (IOError, OSError):
         print("opencode-switcher: another instance is already running", flush=True)
         sys.exit(0)
+
+    # Startup permission sweep: tighten known sensitive files to 0o600 and
+    # private data dirs to 0o700 (legacy 0644 clipboard/conversation/memory/
+    # todo files). Best-effort only — a failure must never block startup.
+    try:
+        from system.utils import sweep_sensitive_permissions
+        sweep_sensitive_permissions()
+    except Exception as e:
+        print(f"opencode-switcher: permission sweep failed: {e}", flush=True)
 
     app = App()
     try:

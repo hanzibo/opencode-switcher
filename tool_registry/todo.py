@@ -6,6 +6,8 @@ import os
 import uuid
 from typing import Any, Dict, Final, List, Optional
 
+from system.utils import write_json_private
+
 
 STATUS_EMOJI: Final[Dict[str, str]] = {
     "pending": "⏳",
@@ -42,10 +44,8 @@ def _load_todos() -> Dict[str, Any]:
 
 
 def _save_todos(data: Dict[str, Any]) -> None:
-    """Save todos to disk."""
-    os.makedirs(_TODO_DIR, exist_ok=True)
-    with open(_TODO_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    """Save todos to disk with user-private permissions (0o600)."""
+    write_json_private(_TODO_PATH, data)
 
 
 def _find_todo(todos: List[Dict[str, Any]], todo_id: str) -> Optional[Dict[str, Any]]:
