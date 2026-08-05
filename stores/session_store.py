@@ -1,9 +1,11 @@
+import copy
 import sqlite3
 import json
 import os
 import shutil
 import time
 import subprocess
+import threading
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
 
@@ -97,9 +99,69 @@ def _connect_db() -> sqlite3.Connection:
     return conn
 
 
+# ---- 会话列表缓存（短 TTL + single-flight） ----
+# 面板打开/删除/重命名刷新都会调用 get_sessions()，每次全量 SQLite 查询 +
+# pgrep /proc 扫描代价高。TTL 内重复调用直接复用；并发未命中共享一次计算。
+_SESSIONS_CACHE_TTL = 2.0  # 秒
+
+_cache_lock = threading.Lock()
+_cache: Dict[int, Tuple[float, List[Session]]] = {}  # limit -> (monotonic 时间戳, 结果)
+_inflight: Dict[int, threading.Event] = {}           # limit -> 计算完成事件（single-flight）
+_epoch = 0  # 失效世代：计算期间被 invalidate 则丢弃计算结果
+
+
+def invalidate_sessions_cache() -> None:
+    """显式失效缓存：重命名/删除等写操作后调用，下一次 get_sessions() 重新计算。"""
+    global _epoch
+    with _cache_lock:
+        _epoch += 1
+        _cache.clear()
+
+
 def get_sessions(limit: int = 100) -> List[Session]:
+    """带短 TTL + single-flight 的会话列表读取。
+
+    - TTL 内命中：直接返回副本，不触碰 SQLite / pgrep / /proc。
+    - 并发未命中：同一 limit 只允许一个线程计算，其余线程等待复用其结果。
+    - 返回浅拷贝（Session 字段均为 str/int，拷贝即隔离），调用方修改
+      返回值不会污染缓存。
+    """
     if not os.path.isfile(DB_PATH):
         return []
+    while True:
+        now = time.monotonic()
+        with _cache_lock:
+            entry = _cache.get(limit)
+            if entry is not None and now - entry[0] < _SESSIONS_CACHE_TTL:
+                return [copy.copy(s) for s in entry[1]]
+            pending = _inflight.get(limit)
+            if pending is not None:
+                mine = False
+            else:
+                pending = threading.Event()
+                _inflight[limit] = pending
+                epoch = _epoch
+                mine = True
+        if mine:
+            # 计算阶段在锁外执行：SQLite 查询 + pgrep /proc 扫描不占用 _cache_lock
+            try:
+                results = _compute_sessions(limit)
+            finally:
+                # 必须先摘除 inflight 再 set，保证被唤醒的等待者看不到过期条目
+                with _cache_lock:
+                    _inflight.pop(limit, None)
+                pending.set()
+            with _cache_lock:
+                if _epoch == epoch:
+                    _cache[limit] = (time.monotonic(), results)
+            return [copy.copy(s) for s in results]
+        # 等待计算完成（锁外等待：若持锁等待，计算线程 finally 无法取锁 set，互相死锁）
+        pending.wait()
+        continue
+
+
+def _compute_sessions(limit: int) -> List[Session]:
+    """无缓存原始实现：SQLite 查询 + 活体检测（仅由 get_sessions 单次计算调用）。"""
     conn = _connect_db()
     conn.row_factory = sqlite3.Row
     try:
@@ -206,6 +268,7 @@ def _soft_delete(session_id: str) -> Optional[str]:
             conn.commit()
             if cur.rowcount == 0:
                 return "session 不存在或已被删除（UPDATE 影响 0 行）"
+            invalidate_sessions_cache()
             return None
         finally:
             conn.close()
@@ -230,7 +293,8 @@ def delete_session(session_id: str) -> Optional[str]:
             )
             if proc.returncode == 0:
                 if not _session_exists(session_id):
-                    return None  # 交叉验证通过：彻底删除
+                    invalidate_sessions_cache()  # 交叉验证通过：彻底删除
+                    return None
                 hard_err = "CLI 返回成功但 session 仍存在"
             else:
                 hard_err = (proc.stderr or proc.stdout or "").strip()[:200]
@@ -256,6 +320,7 @@ def rename_session(session_id: str, new_title: str) -> Optional[str]:
                 (new_title, now, session_id),
             )
             conn.commit()
+            invalidate_sessions_cache()
             return None
         finally:
             conn.close()

@@ -4,6 +4,8 @@ import shutil
 import sqlite3
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -17,6 +19,11 @@ CREATE TABLE session (
     time_created INTEGER,
     time_updated INTEGER,
     time_archived INTEGER
+);
+CREATE TABLE part (
+    session_id TEXT,
+    data TEXT,
+    time_created INTEGER
 );
 """
 
@@ -134,6 +141,129 @@ class TestDeleteSession(unittest.TestCase):
         self.assertIn("CLI 返回成功但 session 仍存在", err)
         self.assertTrue(self._exists())
         self.assertIsNotNone(self._archived())
+
+
+class TestSessionCache(unittest.TestCase):
+    """get_sessions 短 TTL 缓存 + single-flight + 显式失效 API。"""
+
+    def setUp(self):
+        self._tmpdir = tempfile.mkdtemp()
+        self._projdir = os.path.join(self._tmpdir, "proj")
+        os.makedirs(self._projdir)
+        self._db = os.path.join(self._tmpdir, "opencode.db")
+        conn = sqlite3.connect(self._db)
+        conn.executescript(SCHEMA)
+        conn.execute(
+            "INSERT INTO session (id, title, directory, time_created, time_updated) "
+            "VALUES ('ses_cache1', 'Cache Session', ?, 1000, 2000)",
+            (self._projdir,),
+        )
+        conn.commit()
+        conn.close()
+        self._patcher = patch.object(session_store, "DB_PATH", self._db)
+        self._patcher.start()
+        session_store.invalidate_sessions_cache()  # 隔离前序用例的缓存残留
+
+    def tearDown(self):
+        session_store.invalidate_sessions_cache()
+        self._patcher.stop()
+        shutil.rmtree(self._tmpdir, ignore_errors=True)
+
+    def _count_computes(self, slow=False):
+        """统计 _compute_sessions 真实调用次数（可选加延时放大并发竞争）。"""
+        counter = {"n": 0}
+        original = session_store._compute_sessions
+
+        def counting(limit):
+            counter["n"] += 1
+            if slow:
+                time.sleep(0.1)
+            return original(limit)
+
+        patcher = patch.object(session_store, "_compute_sessions", side_effect=counting)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return counter
+
+    def test_ttl_hit_reuses_result(self):
+        counter = self._count_computes()
+        first = session_store.get_sessions()
+        second = session_store.get_sessions()
+        self.assertEqual(counter["n"], 1)  # TTL 内第二次调用复用缓存
+        self.assertEqual([s.id for s in first], [s.id for s in second])
+        self.assertIsNot(first, second)  # 返回副本而非缓存对象本身
+
+    def test_ttl_expiry_recomputes(self):
+        counter = self._count_computes()
+        session_store.get_sessions()
+        # 把缓存条目时间戳拨回 TTL 之前，模拟过期
+        with session_store._cache_lock:
+            entry = session_store._cache[100]
+            session_store._cache[100] = (time.monotonic() - 10, entry[1])
+        again = session_store.get_sessions()
+        self.assertEqual(counter["n"], 2)  # 过期后重新计算
+        self.assertEqual([s.id for s in again], ["ses_cache1"])
+
+    def test_invalidate_api_forces_recompute(self):
+        counter = self._count_computes()
+        session_store.get_sessions()
+        session_store.invalidate_sessions_cache()
+        session_store.get_sessions()
+        self.assertEqual(counter["n"], 2)
+
+    def test_rename_invalidates_cache(self):
+        counter = self._count_computes()
+        titles = [s.title for s in session_store.get_sessions()]
+        self.assertEqual(titles, ["Cache Session"])
+        self.assertIsNone(session_store.rename_session("ses_cache1", "Renamed"))
+        titles = [s.title for s in session_store.get_sessions()]
+        self.assertEqual(titles, ["Renamed"])  # 缓存已失效 → 读到新标题
+        self.assertEqual(counter["n"], 2)
+
+    def test_delete_invalidates_cache(self):
+        counter = self._count_computes()
+        self.assertEqual(len(session_store.get_sessions()), 1)
+        with patch.object(session_store.shutil, "which", return_value=None):
+            err = session_store.delete_session("ses_cache1")
+        self.assertIsNotNone(err)  # opencode 缺失 → 软删兜底，行被归档
+        self.assertEqual(session_store.get_sessions(), [])  # 缓存已失效 → 空列表
+        self.assertEqual(counter["n"], 2)
+
+    def test_concurrent_misses_share_one_computation(self):
+        counter = self._count_computes(slow=True)
+        barrier = threading.Barrier(2)
+        results = []
+
+        def worker():
+            barrier.wait()  # 两个线程同时发起冷缓存请求
+            results.append(session_store.get_sessions())
+
+        threads = [threading.Thread(target=worker) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        self.assertEqual(counter["n"], 1)  # single-flight：两次未命中共享一次计算
+        self.assertEqual([s.id for s in results[0]], [s.id for s in results[1]])
+
+    def test_returned_state_is_isolated_from_cache(self):
+        counter = self._count_computes()
+        first = session_store.get_sessions()
+        first[0].title = "CORRUPTED"  # 调用方改写返回值的字段
+        first.append(session_store.Session(  # 以及增删列表元素
+            id="fake", title="x", directory="", project_name="",
+            status="closed", snippet="", started_at=0, updated_at=0))
+        del first[0]
+        second = session_store.get_sessions()  # TTL 内仍命中缓存
+        self.assertEqual(counter["n"], 1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(second[0].title, "Cache Session")  # 缓存未被污染
+
+    def test_limit_is_cached_separately(self):
+        counter = self._count_computes()
+        session_store.get_sessions(limit=50)
+        session_store.get_sessions(limit=100)
+        self.assertEqual(counter["n"], 2)  # 不同 limit 不共享缓存条目
 
 
 if __name__ == "__main__":
