@@ -302,17 +302,71 @@ class ClipboardStore:
         with self._lock:
             self._load()
 
+    def _read_items(self, path) -> Optional[List[ClipboardItem]]:
+        """Parse a history file into ClipboardItems, or None if missing/corrupt."""
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+            return [ClipboardItem(**d) for d in data[-self._max_clipboard:]]
+        except (json.JSONDecodeError, TypeError):
+            return None
+
     def _load(self):
         with self._lock:
-            if not os.path.isfile(CLIPBOARD_PATH):
-                return
-            try:
-                with open(CLIPBOARD_PATH, "r") as f:
-                    data = json.load(f)
-                self._items = [ClipboardItem(**d) for d in data[-self._max_clipboard:]]
-            except (json.JSONDecodeError, TypeError):
-                self._items = []
+            items = self._read_items(CLIPBOARD_PATH)
+            if items is not None:
+                # Valid primary: leave it untouched (never overwrite a valid file).
+                self._items = items
+            else:
+                # Primary is missing or corrupt — try the backup before giving up,
+                # so valid history is not silently lost.
+                backup = self._read_items(CLIPBOARD_PATH + ".backup")
+                if backup is not None:
+                    self._items = backup
+                    # Heal: atomically rewrite the primary from the recovered
+                    # data. Only reached when the primary was invalid.
+                    self._write_items_to(CLIPBOARD_PATH, backup)
+                # else: both missing/corrupt — keep the existing in-memory state
+                # (empty on startup, matching the previous empty-history fallback).
             self._delete_orphan_images()
+
+    @staticmethod
+    def _fsync_dir(path):
+        """Best-effort fsync of the containing directory to persist the rename."""
+        try:
+            dir_fd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _write_items_to(path, items):
+        """Atomically write items to path via a same-directory temp file.
+
+        Readers never observe a partially-written file: the temp file is fully
+        written, flushed and fsynced before os.replace() swaps it into place.
+        On any failure the temp file is removed so no partial state lingers.
+        """
+        tmp_path = path + ".tmp"
+        try:
+            with open(tmp_path, "w") as f:
+                json.dump([asdict(i) for i in items], f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+            ClipboardStore._fsync_dir(path)
+        finally:
+            # Clean up the temp file on failure (or no-op after a successful replace).
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
 
     def _delete_orphan_images(self):
         img_dir = os.path.join(CONFIG_DIR, "images")
@@ -331,8 +385,14 @@ class ClipboardStore:
     def _save(self):
         with self._lock:
             os.makedirs(CONFIG_DIR, exist_ok=True)
-            with open(CLIPBOARD_PATH, "w") as f:
-                json.dump([asdict(i) for i in self._items], f)
+            self._write_items_to(CLIPBOARD_PATH, self._items)
+            # Keep a copy of the freshly written state as the backup so a
+            # later corrupt/missing primary can be fully recovered. Best-effort:
+            # the primary write above is already complete and durable.
+            try:
+                self._write_items_to(CLIPBOARD_PATH + ".backup", self._items)
+            except Exception:
+                pass
 
     def classify_text(self, text: str) -> str:
         return classify_text(text)
