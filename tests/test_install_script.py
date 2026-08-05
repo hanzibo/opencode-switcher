@@ -56,6 +56,14 @@ _WEBKIT_PACKAGES = ["gir1.2-webkit2-4.1", "gir1.2-webkit2-4.0"]
 
 _SUPPORTED_TERMINALS = ["ptyxis", "gnome-terminal", "kgx", "blackbox"]
 
+# 受保护的系统目录：INSTALL_DIR 精确命中即拒绝（保护为精确匹配，/tmp/test
+# 这类子路径仍合法）。与 install.sh 的 PROTECTED_INSTALL_DIRS 保持一致。
+_PROTECTED_DIRS = [
+    "/tmp", "/usr", "/var", "/etc", "/opt", "/srv", "/bin", "/sbin",
+    "/lib", "/boot", "/dev", "/proc", "/sys", "/run", "/mnt", "/media",
+    "/root",
+]
+
 _BASH = shutil.which("bash") or "bash"
 
 _TOP_LEVEL_ARRAY_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=\(([^)]*)\)\s*$", re.M)
@@ -771,6 +779,7 @@ class TestValidateInstallDirBehavior(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.home = os.path.join(cls.tmp.name, "home")
+        os.makedirs(cls.home, exist_ok=True)
 
     @classmethod
     def tearDownClass(cls):
@@ -909,6 +918,50 @@ class TestValidateInstallDirBehavior(unittest.TestCase):
         self.assertNotEqual(self._validate(self.home + "/").returncode, 0)
         self.assertNotEqual(self._validate("~").returncode, 0)
 
+    def test_rejects_symlink_to_home(self):
+        # 源码树外的符号链接指向 $HOME 时，字面量 HOME 检查无法拦截（只比较
+        # 展开前的值）；物理路径解析后 INSTALL_DIR 变为 $HOME，必须被拒绝，
+        # 否则 uninstall 的 rm -rf 会清空整个主目录。
+        link = os.path.join(self.tmp.name, "home-link")
+        os.symlink(self.home, link)
+        r = self._validate(link)
+        self.assertNotEqual(
+            r.returncode, 0, "symlink resolving to HOME must be rejected"
+        )
+
+    def test_rejects_protected_system_dirs(self):
+        # 精确命中系统目录（含尾斜杠变体）必须被拒绝；rm -rf 误配置会清空
+        # 系统挂载点。保护检查在物理路径解析之前和之后各执行一次，字面值
+        # 与指向这些目录的符号链接均无法绕过。
+        for path in _PROTECTED_DIRS:
+            self.assertNotEqual(
+                self._validate(path).returncode, 0, f"must reject protected {path!r}"
+            )
+            self.assertNotEqual(
+                self._validate(path + "/").returncode,
+                0,
+                f"must reject trailing-slash variant {path + '/'!r}",
+            )
+
+    def test_rejects_symlink_to_protected_system_dir(self):
+        # 指向受保护目录的符号链接经物理路径解析后命中保护列表。
+        link = os.path.join(self.tmp.name, "etc-link")
+        os.symlink("/etc", link)
+        r = self._validate(link)
+        self.assertNotEqual(
+            r.returncode, 0, "symlink resolving to a protected dir must be rejected"
+        )
+
+    def test_accepts_child_of_protected_dir(self):
+        # /tmp 本身被拒绝，但 /tmp 下的子路径必须仍然可用（保护是精确匹配）。
+        child = tempfile.mkdtemp(prefix="opencode-switcher-child-", dir="/tmp")
+        try:
+            r = self._validate(child)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout, os.path.realpath(child))
+        finally:
+            os.rmdir(child)
+
     def test_rejects_relative_paths(self):
         # ~ 展开后必须是绝对路径：相对路径会被误用于 rm -rf / pgrep
         for path in ("tmp/test", "relative/path", "install", "foo", "a/b/c"):
@@ -956,6 +1009,37 @@ class TestInstallDirValidationDispatch(unittest.TestCase):
             body,
             "validate_install_dir must reject INSTALL_DIR equal to SCRIPT_DIR",
         )
+
+    def test_home_rechecked_after_normalization(self):
+        # 字面量 HOME 检查只比较展开前的值；符号链接解析后 INSTALL_DIR 可能
+        # 变成 $HOME，必须在物理路径规范化之后再检查一次。
+        body = _function_body("validate_install_dir")
+        self.assertGreaterEqual(
+            body.count("${HOME%/}"),
+            2,
+            "HOME equality must be checked before and after physical-path normalization",
+        )
+
+    def test_protected_system_dirs_checked(self):
+        # 保护目录列表来自共享数组（单一事实来源）；函数体须在物理路径解析
+        # 前后各引用一次（字面值检查 + 解析后检查），且数组须覆盖全部目录。
+        arrays = _top_level_arrays()
+        protected_names = [
+            name
+            for name, items in arrays.items()
+            if set(_PROTECTED_DIRS).issubset(set(items))
+        ]
+        self.assertTrue(
+            protected_names,
+            "install.sh must define an array covering all protected system dirs",
+        )
+        body = _function_body("validate_install_dir")
+        for name in protected_names:
+            self.assertGreaterEqual(
+                body.count(name),
+                2,
+                f"{name} must be consulted before and after physical-path normalization",
+            )
 
     def test_validate_before_install_and_uninstall(self):
         text = _install_sh()

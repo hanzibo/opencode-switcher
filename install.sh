@@ -44,6 +44,11 @@ WEBKIT_PACKAGES=(gir1.2-webkit2-4.1 gir1.2-webkit2-4.0)
 # 支持的终端（必须与 system/launcher.py 的 _TERMINALS 保持一致）
 TERMINALS=(ptyxis gnome-terminal kgx blackbox)
 
+# 受保护的系统目录：INSTALL_DIR 精确命中这些路径时直接拒绝（含 merged-usr
+# 解析目标，如 /bin → /usr/bin）。由 validate_install_dir 在物理路径解析前后
+# 各检查一次。
+PROTECTED_INSTALL_DIRS=(/tmp /usr /var /etc /opt /srv /bin /sbin /lib /boot /dev /proc /sys /run /mnt /media /root /usr/bin /usr/sbin /usr/lib)
+
 # 检测已安装的第一个受支持终端
 detect_terminal() {
     for term in "${TERMINALS[@]}"; do
@@ -139,6 +144,14 @@ validate_install_dir() {
         error "INSTALL_DIR 不能是主目录 ($HOME)"
         exit 1
     fi
+    # 受保护的系统目录字面量检查（物理路径解析前）：merged-usr 系统上
+    # /bin → /usr/bin 的符号链接在解析后会变成其它路径，必须先按字面值拒绝。
+    for _prot in "${PROTECTED_INSTALL_DIRS[@]}"; do
+        if [ "$INSTALL_DIR" = "$_prot" ]; then
+            error "INSTALL_DIR 不能是系统目录: $_prot"
+            exit 1
+        fi
+    done
     case "$INSTALL_DIR" in
         *"/../"*|*"/.."|".."|"../"*|*"/./"*|*"/."|"."|"./"*)
             error "INSTALL_DIR 不能包含 . 或 .. 路径分量: $INSTALL_DIR"
@@ -164,6 +177,23 @@ validate_install_dir() {
         error "INSTALL_DIR 不能是根目录 /"
         exit 1
     fi
+    # 符号链接解析后可能落到 $HOME：上面的字面量检查只校验展开前的值，
+    # 源码树外的符号链接（链接到 $HOME）可以绕过主目录检查，uninstall 的
+    # rm -rf 会清空整个主目录。物理路径解析之后必须重复检查一次。
+    if [ "$INSTALL_DIR" = "${HOME%/}" ]; then
+        error "INSTALL_DIR 不能是主目录 ($HOME)"
+        exit 1
+    fi
+    # 受保护的系统目录：操作员误配置 INSTALL_DIR=/tmp 等精确路径时，
+    # uninstall/清理块的 rm -rf 会清空系统挂载点。精确匹配即可——/tmp/test
+    # 这类子路径不受影响。必须放在物理路径解析之后，否则指向 /etc 等目录的
+    # 符号链接可以绕过字面量校验。
+    for _prot in "${PROTECTED_INSTALL_DIRS[@]}"; do
+        if [ "$INSTALL_DIR" = "$_prot" ]; then
+            error "INSTALL_DIR 不能是系统目录: $_prot"
+            exit 1
+        fi
+    done
     if [ "$INSTALL_DIR" = "$SCRIPT_DIR" ]; then
         error "INSTALL_DIR 不能等于脚本源码目录 (SCRIPT_DIR): $SCRIPT_DIR"
         exit 1

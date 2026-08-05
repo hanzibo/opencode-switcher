@@ -53,6 +53,23 @@ Supported terminals must match `system/launcher.py`: `ptyxis`,
   and rejects empty values, `/`, `$HOME`, `.`/`..` path components, and any
   character outside `[A-Za-z0-9._/+_-]`. Valid custom paths such as
   `~/.local/share/opencode-switcher` and `/tmp/test` are preserved.
+- **HOME check repeated after symlink resolution**: the literal `$HOME`
+  equality check only sees the pre-resolution value. A symlink placed
+  outside the source tree (e.g. in a checkout elsewhere) that points at
+  `$HOME` would resolve past it, and `cmd_uninstall`'s `rm -rf` would wipe
+  the home directory. The check is therefore repeated after physical-path
+  normalization (`cd -P && pwd -P`).
+- **Protected system directories**: `PROTECTED_INSTALL_DIRS` (a single shared
+  array) lists `/tmp /usr /var /etc /opt /srv /bin /sbin /lib /boot /dev
+  /proc /sys /run /mnt /media /root` plus the merged-usr resolution targets
+  `/usr/bin /usr/sbin /usr/lib` (on Debian/Ubuntu `/bin`→`/usr/bin` etc.).
+  `validate_install_dir()` rejects exact matches — also catching trailing-slash
+  variants — both before physical-path normalization (the literal value, which
+  on merged-usr systems would otherwise resolve to a different path) and after
+  it (a symlink pointing into a system directory). Operator misconfiguration or
+  symlinks resolving to a system mount point can therefore never feed
+  `rm -rf`. The match is exact — safe children such as `/tmp/test` stay
+  accepted.
 - **Uninstall process matching**: candidate PIDs come from a fixed safe
   pgrep pattern, then each `/proc/<pid>/cmdline` is matched with `grep -F`
   against the exact `$INSTALL_DIR/main.py` — INSTALL_DIR is never expanded
