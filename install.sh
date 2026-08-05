@@ -158,8 +158,29 @@ validate_install_dir() {
         INSTALL_DIR="$(cd -P "$INSTALL_DIR" && pwd -P)"
     fi
     SCRIPT_DIR="$(cd -P "$SCRIPT_DIR" && pwd -P)"
+    # 符号链接解析后可能落到 /（上面的字面量检查只校验展开前的值），
+    # rm -rf / 必须杜绝。
+    if [ "$INSTALL_DIR" = "/" ]; then
+        error "INSTALL_DIR 不能是根目录 /"
+        exit 1
+    fi
     if [ "$INSTALL_DIR" = "$SCRIPT_DIR" ]; then
         error "INSTALL_DIR 不能等于脚本源码目录 (SCRIPT_DIR): $SCRIPT_DIR"
+        exit 1
+    fi
+    # 仅比较相等还不够：INSTALL_DIR 是 SCRIPT_DIR 的祖先或后代同样致命。
+    # - INSTALL_DIR=/parent 而 SCRIPT_DIR=/parent/opencode-switcher 时，
+    #   cmd_uninstall 的 rm -rf "$INSTALL_DIR" 会把源码树一起删掉。
+    # - INSTALL_DIR=$SCRIPT_DIR/subdir 时，install_files 的清理块会在源码
+    #   树内部反复清理/拷贝，破坏源码布局。
+    # 用斜杠分隔的前缀匹配双向检查：${var#"$prefix"/} 要求整段前缀后紧跟 /，
+    # 不会把 /tmp/prefixdir 误判为 /tmp/prefixdirx 的祖先/后代。
+    if [ "${SCRIPT_DIR#"$INSTALL_DIR"/}" != "$SCRIPT_DIR" ]; then
+        error "INSTALL_DIR 不能是脚本源码目录 (SCRIPT_DIR) 的祖先: $INSTALL_DIR"
+        exit 1
+    fi
+    if [ "${INSTALL_DIR#"$SCRIPT_DIR"/}" != "$INSTALL_DIR" ]; then
+        error "INSTALL_DIR 不能位于脚本源码目录 (SCRIPT_DIR) 之下: $SCRIPT_DIR"
         exit 1
     fi
     return 0

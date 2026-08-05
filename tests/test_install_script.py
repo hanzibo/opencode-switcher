@@ -776,11 +776,12 @@ class TestValidateInstallDirBehavior(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def _validate(self, install_dir):
-        return _run_install_fn(
-            "validate_install_dir",
-            env_extra={"HOME": self.home, "INSTALL_DIR": install_dir},
-        )
+    def _validate(self, install_dir, script_dir=None):
+        env_extra = {"HOME": self.home, "INSTALL_DIR": install_dir}
+        if script_dir is not None:
+            # 覆盖默认 SCRIPT_DIR（_ROOT_DIR），用于构造共享前缀的兄弟目录场景。
+            env_extra["SCRIPT_DIR"] = script_dir
+        return _run_install_fn("validate_install_dir", env_extra=env_extra)
 
     def test_accepts_tmp_test(self):
         r = self._validate("/tmp/test")
@@ -842,6 +843,66 @@ class TestValidateInstallDirBehavior(unittest.TestCase):
                 0,
                 "symlink resolving to SCRIPT_DIR must be rejected",
             )
+
+    def test_rejects_script_source_dir_parent(self):
+        # INSTALL_DIR 是 SCRIPT_DIR 的祖先：cmd_uninstall 的 rm -rf
+        # "$INSTALL_DIR" 会把整个源码目录一并删除。
+        r = self._validate(os.path.dirname(_ROOT_DIR))
+        self.assertNotEqual(
+            r.returncode, 0, "INSTALL_DIR ancestor of SCRIPT_DIR must be rejected"
+        )
+
+    def test_rejects_script_source_dir_child(self):
+        # INSTALL_DIR 位于 SCRIPT_DIR 之下（即使尚不存在）：install_files 的
+        # 清理块会在源码树内部反复清理/拷贝，破坏源码布局。
+        r = self._validate(os.path.join(_ROOT_DIR, "__install_script_child__"))
+        self.assertNotEqual(
+            r.returncode, 0, "INSTALL_DIR descendant of SCRIPT_DIR must be rejected"
+        )
+
+    def test_rejects_script_source_dir_parent_via_symlink(self):
+        # 解析后成为 SCRIPT_DIR 祖先的符号链接同样被拒绝（包括解析为 / 时）。
+        with tempfile.TemporaryDirectory() as d:
+            link = os.path.join(d, "repo-parent-link")
+            os.symlink(os.path.dirname(_ROOT_DIR), link)
+            r = self._validate(link)
+            self.assertNotEqual(
+                r.returncode,
+                0,
+                "symlink resolving to SCRIPT_DIR ancestor must be rejected",
+            )
+
+    def test_rejects_script_source_dir_child_via_symlink(self):
+        # 指向 SCRIPT_DIR 内子目录的符号链接解析为物理路径后被拒绝。
+        with tempfile.TemporaryDirectory() as d:
+            link = os.path.join(d, "repo-child-link")
+            os.symlink(os.path.join(_ROOT_DIR, "views"), link)
+            r = self._validate(link)
+            self.assertNotEqual(
+                r.returncode,
+                0,
+                "symlink resolving into SCRIPT_DIR must be rejected",
+            )
+
+    def test_accepts_existing_unrelated_dir(self):
+        # 与源码树无关的已存在绝对路径仍然可用。
+        target = os.path.join(self.tmp.name, "unrelated-target")
+        os.makedirs(target, exist_ok=True)
+        r = self._validate(target)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, os.path.realpath(target))
+
+    def test_accepts_sibling_prefix_dir(self):
+        # 斜杠分隔前缀：/tmp/prefixdir 与 /tmp/prefixdirx 是共享前缀的兄弟
+        # 目录，不是祖先/后代关系，必须被接受。
+        with tempfile.TemporaryDirectory() as d:
+            base = os.path.join(d, "prefixdir")
+            sibling = os.path.join(d, "prefixdirx")
+            os.makedirs(base)
+            os.makedirs(sibling)
+            r = self._validate(sibling, script_dir=base)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(r.stdout, os.path.realpath(sibling))
 
     def test_rejects_home_dir(self):
         self.assertNotEqual(self._validate(self.home).returncode, 0)
