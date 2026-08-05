@@ -24,6 +24,48 @@ info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERR]${NC} $*"; }
 
+# ── 共享系统配置 ──────────────────────────────
+# 系统运行依赖（Debian/Ubuntu 包名）— 单一事实来源：
+# 安装、检测、status 报告均基于此数组。
+SYS_PACKAGES=(
+    gir1.2-ayatanaappindicator3-0.1
+    python3-gi
+    python3-gi-cairo
+    python3-pip
+    python3-venv
+    wl-clipboard
+    gir1.2-webkit2-4.1
+)
+
+# 支持的终端（必须与 system/launcher.py 的 _TERMINALS 保持一致）
+TERMINALS=(ptyxis gnome-terminal kgx blackbox)
+
+# 检测已安装的第一个受支持终端
+detect_terminal() {
+    for term in "${TERMINALS[@]}"; do
+        if command -v "$term" &>/dev/null; then
+            echo "$term"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 检查 WebKit2 运行时绑定（与应用使用相同的 4.1 → 4.0 回退逻辑）
+check_webkit2() {
+    if python3 -c "import gi; gi.require_version('WebKit2', '4.1'); from gi.repository import WebKit2" 2>/dev/null; then
+        echo "4.1"
+        return 0
+    fi
+    if python3 -c "import gi; gi.require_version('WebKit2', '4.0'); from gi.repository import WebKit2" 2>/dev/null; then
+        echo "4.0"
+        return 0
+    fi
+    warn "WebKit2 运行时绑定缺失，AI 助手面板将无法正常使用"
+    warn "请安装: sudo apt install gir1.2-webkit2-4.1"
+    return 1
+}
+
 # ── Help ──────────────────────────────────────
 usage() {
     cat <<EOF
@@ -49,13 +91,13 @@ check_deps() {
         missing+=("python3")
     fi
 
-    if ! command -v ptyxis &>/dev/null && ! command -v gnome-terminal &>/dev/null; then
-        warn "未找到 ptyxis 或 gnome-terminal，请安装其中之一"
+    if ! detect_terminal &>/dev/null; then
+        warn "未找到受支持的终端 (ptyxis / gnome-terminal / kgx / blackbox)，请安装其中之一: sudo apt install ptyxis"
     fi
 
     if [ ${#missing[@]} -gt 0 ]; then
         error "缺少系统依赖: ${missing[*]}"
-        echo "请安装: sudo apt install ${missing[*]} gir1.2-ayatanaappindicator3-0.1 python3-gi-cairo"
+        echo "请安装: sudo apt install ${missing[*]} ${SYS_PACKAGES[*]}"
         exit 1
     fi
 
@@ -90,11 +132,11 @@ install_system_deps() {
     local missing_sys=()
     if ! command -v dpkg &>/dev/null; then
         info "未检测到 dpkg，正在尝试直接执行安装程序..."
-        sudo apt update -qq && sudo apt install -y -qq gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard 2>&1 | tail -1
+        sudo apt update -qq && sudo apt install -y -qq "${SYS_PACKAGES[@]}" 2>&1 | tail -1
         return
     fi
 
-    for pkg in gir1.2-ayatanaappindicator3-0.1 python3-gi python3-pip python3-venv wl-clipboard; do
+    for pkg in "${SYS_PACKAGES[@]}"; do
         if ! dpkg -s "$pkg" &>/dev/null; then
             missing_sys+=("$pkg")
         fi
@@ -114,8 +156,11 @@ install_system_deps() {
         exit 1
     fi
 
-    if ! command -v ptyxis &>/dev/null && ! command -v gnome-terminal &>/dev/null; then
-        warn "未检测到 ptyxis 或 gnome-terminal，请安装一个: sudo apt install ptyxis"
+    # WebKit2 运行时绑定检查（AI 面板必需，缺失时打印 apt 提示）
+    check_webkit2 || true
+
+    if ! detect_terminal &>/dev/null; then
+        warn "未检测到受支持的终端 (ptyxis / gnome-terminal / kgx / blackbox)，请安装一个: sudo apt install ptyxis"
     fi
 }
 
@@ -384,6 +429,42 @@ cmd_status() {
         echo -e "  触发脚本: ${GREEN}已安装${NC}"
     else
         echo -e "  触发脚本: ${RED}未安装${NC}"
+    fi
+
+    # Check supported terminal
+    if term=$(detect_terminal); then
+        echo -e "  终端: ${GREEN}$term${NC} (ptyxis / gnome-terminal / kgx / blackbox)"
+    else
+        echo -e "  终端: ${YELLOW}未检测到受支持的终端${NC} (ptyxis / gnome-terminal / kgx / blackbox)"
+    fi
+
+    # Check system dependencies (shared package array)
+    echo ""
+    echo "  ── 系统依赖 ──"
+    if command -v dpkg &>/dev/null; then
+        for pkg in "${SYS_PACKAGES[@]}"; do
+            if dpkg -s "$pkg" &>/dev/null; then
+                echo -e "    ${GREEN}✔${NC} $pkg"
+            else
+                echo -e "    ${RED}✘${NC} $pkg (缺失)"
+            fi
+        done
+    else
+        echo -e "    ${YELLOW}无法检查（未检测到 dpkg）${NC}"
+    fi
+
+    # Runtime binding checks (gi / cairo / WebKit2)
+    for mod in gi cairo; do
+        if python3 -c "import $mod" 2>/dev/null; then
+            echo -e "    ${GREEN}✔${NC} python 模块: $mod"
+        else
+            echo -e "    ${RED}✘${NC} python 模块: $mod (缺失)"
+        fi
+    done
+    if wk=$(check_webkit2 2>/dev/null); then
+        echo -e "    ${GREEN}✔${NC} WebKit2 运行时绑定 (${wk})"
+    else
+        echo -e "    ${RED}✘${NC} WebKit2 运行时绑定 缺失 — 运行: sudo apt install gir1.2-webkit2-4.1"
     fi
 
     # Check Python dependencies
