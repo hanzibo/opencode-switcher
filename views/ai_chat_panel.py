@@ -857,10 +857,25 @@ class AIChatPanel(Gtk.Box):
         self._last_flushed_len = 0
         self._streaming_container_created = False
 
+    def _active_stream_req_id(self) -> int:
+        """当前可见会话绑定流的 req_id（容器/增量 flush/最终渲染共用的 id 源）。
+
+        A→B→A 切回后全局 ``_ai_request_id`` 已随每次切换递增，与可见会话仍在运行
+        的流实例的 ``req_id`` 不同。``msg-<id>`` 容器、``appendStreamToken``、
+        ``appendStreamReasoning`` 与最终 ``updateMessageContainer`` 必须全部落到
+        同一 id 上，否则会出现重复空容器且最终渲染指向错误/不存在的 id。流状态已
+        弹出（收尾中）时回退到全局 ``_ai_request_id``，维持原有单流行为。
+        """
+        if self._ai_conversation_id:
+            active_st = self._ai_running_convs.get(self._ai_conversation_id)
+            if active_st and active_st.get("req_id") is not None:
+                return active_st["req_id"]
+        return getattr(self, "_ai_request_id", 0)
+
     def _ensure_streaming_container(self) -> bool:
         """确保流式消息容器已创建，若未创建则发送 appendMessageContainer JS。"""
         if not self._streaming_container_created and hasattr(self, "_ai_webview") and self._ai_webview:
-            req_id = getattr(self, "_ai_request_id", 0)
+            req_id = self._active_stream_req_id()
             msg_id = f"msg-{req_id}"
             self._ai_webview.run_javascript(f"appendMessageContainer('{msg_id}');", None, None)
             self._streaming_container_created = True
@@ -1438,7 +1453,7 @@ class AIChatPanel(Gtk.Box):
 
         self._ai_running_convs.pop(conv_id, None)
         self._ai_cancelling = False
-        self._handle_stream_end(req_id)
+        self._handle_stream_end(req_id, conv_id)
 
     def _handle_ask_user_question(self, tool_call: dict) -> str:
         try:
@@ -1545,8 +1560,14 @@ class AIChatPanel(Gtk.Box):
         except Exception as e:
             print(f"Error saving background finished conversation: {e}", flush=True)
 
-    def _finalize_streaming_render(self):
-        """流结束时 flush 剩余 buffer，触发前端最终 HTML 渲染（仅当前可见对话）。"""
+    def _finalize_streaming_render(self, req_id: Optional[int] = None):
+        """流结束时 flush 剩余 buffer，触发前端最终 HTML 渲染（仅当前可见对话）。
+
+        ``req_id`` 为被终结流的实例 id：A→B→A 切回后它与全局 ``_ai_request_id``
+        不同，必须用它定位容器，最终 ``updateMessageContainer`` 才能命中流式渲染
+        期间的 ``msg-<req_id>`` 容器（而非递增后的空 id）。缺省时回退到全局
+        ``_ai_request_id``（无切换的单流行为不变）。
+        """
 
         # 0. 取消所有排期的 60ms 定时器，防止 _flush_reasoning_buffer 在 finalize 之前
         #    向 JS 队列插入 appendStreamReasoning 导致不必要的状态切换
@@ -1571,7 +1592,8 @@ class AIChatPanel(Gtk.Box):
             self._flush_token_buffer()
 
         # 2. 构建最终 HTML
-        req_id = getattr(self, "_ai_request_id", 0)
+        if req_id is None:
+            req_id = getattr(self, "_ai_request_id", 0)
         msg_id = f"msg-{req_id}"
         turn_msgs = self._get_turn_messages()
         output = render_turn(TurnRenderInput(
@@ -1630,11 +1652,30 @@ class AIChatPanel(Gtk.Box):
         self._reasoning_flush_source_id = 0
         self._streaming_container_created = False
 
-    def _handle_stream_end(self, req_id: int):
-        """Common cleanup after a conversation turn ends (save, prune, title gen)."""
-        if getattr(self, "_ai_request_id", 0) != req_id:
+    def _handle_stream_end(self, req_id: int, conv_id: Optional[str] = None):
+        """Common cleanup after a conversation turn ends (save, prune, title gen).
+
+        判定该流是否属于当前可见会话：流状态按 ``conv_id`` 存放
+        （``_ai_running_convs[conv_id]["req_id"]``），会话切换会递增全局
+        ``_ai_request_id``，因此不能用它与 ``req_id`` 判等——A→B→A 切回后旧流的
+        ``req_id`` 与新的全局值不同，但该流仍属于当前会话，必须照常收尾保存。
+        ``conv_id`` 由 ``_on_llm_api_finished``/``_finalize_after_tool_loop``
+        解析后传入（此时状态已从 ``_ai_running_convs`` 弹出）；未传入（直接调用/
+        测试）时反查 ``_ai_running_convs``。过期/背景会话的流结束一律不终结当前
+        可见会话。
+        """
+        if conv_id is None:
+            for cid, st in list(getattr(self, "_ai_running_convs", {}).items()):
+                if st.get("req_id") == req_id:
+                    conv_id = cid
+                    break
+        if conv_id is not None and conv_id != getattr(self, "_ai_conversation_id", None):
             return
-        self._finalize_streaming_render()
+        # 防御：归属无法解析且当前无可见会话（孤儿/陈旧完成）→ 无可终结/保存的目标。
+        # 注意：A→B→A 切回后流仍属当前会话，conv_id 必可解析，不受此分支影响。
+        if conv_id is None and getattr(self, "_ai_conversation_id", None) is None:
+            return
+        self._finalize_streaming_render(req_id)
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript("_scrollToBottom();", None, None)
         self._ai_streaming = False
@@ -1743,6 +1784,30 @@ class AIChatPanel(Gtk.Box):
         active_st = self._ai_running_convs.get(self._ai_conversation_id) if self._ai_conversation_id else None
         if active_st:
             active_st["response_div_added"] = False
+
+    def _rebind_active_stream(self, st: dict) -> None:
+        """A→B→A 切回后重新绑定当前可见的流式会话。
+
+        ``_switch_to_conversation`` 对**正在流式**的会话用 ``updateContent`` 原地
+        重建 ``#content``，流式消息容器与回复 div 均不复存在，但
+        ``st["response_div_added"]``/``_streaming_container_created`` 仍保留切走前
+        的 True——导致下一次渲染 tick 跳过 ``appendMessageContainer``，增量更新落到
+        已被销毁的 DOM 节点上（更新丢失）。
+
+        本方法复位这些陈旧 DOM 标记，并以目标状态流的 ``req_id`` 调度下一次渲染
+        tick（``_render_current_assistant_message``，沿用 _apply_theme 恢复路径的
+        ``GLib.idle_add`` 模式），使 WebView 重建 ``appendMessageContainer`` 并增量
+        更新累积的推理/工具调用/工具结果状态。
+
+        注意：不修改全局 ``_ai_request_id``——它随会话切换递增；流结束的归属判定由
+        ``_handle_stream_end`` 按 ``conv_id`` 完成（见其 docstring）。
+        """
+        self._streaming_container_created = False
+        self._ai_response_div_added = False
+        st["response_div_added"] = False
+        req_id = st.get("req_id")
+        if req_id is not None:
+            GLib.idle_add(self._render_current_assistant_message, req_id)
 
     def _load_webview_html(self, initial_html: str = "", *, force: bool = False) -> None:
         """将 ``initial_html`` 装载进 WebView。
@@ -1864,7 +1929,7 @@ class AIChatPanel(Gtk.Box):
 
         self._ai_running_convs.pop(conv_id, None)
         self._ai_cancelling = False
-        self._handle_stream_end(req_id)
+        self._handle_stream_end(req_id, conv_id)
 
     def _adjust_ai_entry_height(self):
         buf = self._ai_entry.get_buffer()
@@ -3916,6 +3981,11 @@ class AIChatPanel(Gtk.Box):
             self._ai_entry.placeholder_text = "等待回复中..."
             self._ai_spinner.show()
             self._ai_spinner.start()
+            
+            # A→B→A 切回：updateContent 已重建 #content，流式容器/回复 div 不复存在。
+            # 复位陈旧 DOM 标记并调度下一次渲染 tick 重建容器（流结束的归属判定
+            # 由 _handle_stream_end 按 conv_id 完成，见其 docstring）。
+            self._rebind_active_stream(st)
             
         else:
             self._ai_messages = []
