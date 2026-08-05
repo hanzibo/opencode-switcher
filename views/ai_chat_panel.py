@@ -240,6 +240,10 @@ class AIChatPanel(Gtk.Box):
         self._reasoning_flush_scheduled = False
         self._last_flushed_len = 0
         self._streaming_container_created = False
+        # A→B→A 切回 / DOM 重建后，JS 端 _reasoningCache 已被 updateContent 的
+        # resetReasoning() 清空；置位本标记让下一次流式容器 append 时用 Python 端
+        # 累积的 current_reasoning_text 重新播种（一次性消费，普通流式不受影响）。
+        self._reseed_reasoning_on_container = False
 
         # Callback hooks
         self.on_dialog_shown = None
@@ -860,6 +864,7 @@ class AIChatPanel(Gtk.Box):
         self._reasoning_flush_source_id = 0
         self._last_flushed_len = 0
         self._streaming_container_created = False
+        self._reseed_reasoning_on_container = False
 
     def _active_stream_req_id(self) -> int:
         """当前可见会话绑定流的 req_id（容器/增量 flush/最终渲染共用的 id 源）。
@@ -1775,6 +1780,21 @@ class AIChatPanel(Gtk.Box):
             if self._ai_conversation_id == conv_id:
                 self._ai_response_div_added = True
 
+            # A→B→A 切回 / DOM 重建：updateContent 已调用 chat.js resetReasoning()
+            # 清空 JS 端 _reasoningCache，而流式期间 _render_reasoning_html 返回空串，
+            # updateMessageContainer 不会重建推理区域 → 必须用 appendStreamReasoning
+            # 重新播种累积推理；工具阶段已开始时再 finishReasoning 切换为 Thought badge。
+            # 一次性消费：标志只在切回/重建路径置位，普通流式增量不受影响。
+            if getattr(self, "_reseed_reasoning_on_container", False):
+                reasoning_text = st.get("current_reasoning_text", "")
+                if reasoning_text:
+                    self._ai_webview.run_javascript(
+                        f"appendStreamReasoning({json.dumps(reasoning_text)});", None, None
+                    )
+                    if self._turn_has_tool_phase(turn_msgs):
+                        self._ai_webview.run_javascript("finishReasoning();", None, None)
+                self._reseed_reasoning_on_container = False
+
         output = render_turn(TurnRenderInput(
             turn_messages=turn_msgs,
             all_messages=self._ai_messages,
@@ -1785,6 +1805,15 @@ class AIChatPanel(Gtk.Box):
         ))
         js_update = build_update_js(msg_id, output)
         self._ai_webview.run_javascript(js_update, None, None)
+
+    def _turn_has_tool_phase(self, turn_msgs: List[Dict]) -> bool:
+        """当前轮是否已进入工具阶段（未解决的 tool_calls 或已有 tool 结果消息）。"""
+        for msg in turn_msgs:
+            if msg.get("role") == "tool":
+                return True
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                return True
+        return False
 
     def _get_pygments_css(self, theme: str) -> str:
         return _get_pygments_css(theme, self._pygments_css_cache)
@@ -1809,6 +1838,9 @@ class AIChatPanel(Gtk.Box):
         active_st = self._ai_running_convs.get(self._ai_conversation_id) if self._ai_conversation_id else None
         if active_st:
             active_st["response_div_added"] = False
+        # DOM 重建经 updateContent→resetReasoning() 清空 JS 推理缓存，且流式期间
+        # _render_reasoning_html 返回空串 → 下一次流式容器 append 须重新播种累积推理。
+        self._reseed_reasoning_on_container = True
 
     def _rebind_active_stream(self, st: dict) -> None:
         """A→B→A 切回后重新绑定当前可见的流式会话。
@@ -1830,6 +1862,10 @@ class AIChatPanel(Gtk.Box):
         self._streaming_container_created = False
         self._ai_response_div_added = False
         st["response_div_added"] = False
+        # updateContent 已重建 #content 并 resetReasoning 清空 JS 推理缓存：
+        # 下一次流式容器 append 时须用累积推理重新播种（一次性，见
+        # _render_current_assistant_message）。
+        self._reseed_reasoning_on_container = True
         req_id = st.get("req_id")
         if req_id is not None:
             GLib.idle_add(self._render_current_assistant_message, req_id)

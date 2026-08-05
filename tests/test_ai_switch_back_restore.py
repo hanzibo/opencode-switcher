@@ -422,6 +422,70 @@ class TestSwitchBackRebindsStreamingDom(unittest.TestCase):
         self.assertNotIn("msg-7", js, "不得出现递增后全局 id 的容器")
         self.assertEqual(panel._token_buffer, "", "flush 后 buffer 应清空")
 
+    def test_switch_back_reseeds_reasoning_cache_for_tool_phase(self):
+        """切回后必须用 appendStreamReasoning + finishReasoning 重新播种累积推理。
+
+        bug（RED）：``_switch_to_conversation`` 切回正在流式的会话时用
+        ``updateContent`` 重建 ``#content``，而 ``updateContent()`` 调用 chat.js
+        ``resetReasoning()`` 清空 JS 端 ``_reasoningCache``；同时流式期间
+        ``_render_reasoning_html`` 因 ``is_streaming=True`` 返回空串 → 工具卡片
+        重新渲染（``updateMessageContainer``）时推理区域为空且 JS 推理缓存未被
+        重新播种，Thought 内容从此消失。
+
+        本测试固定工具阶段已开始的前提（累积 ``current_reasoning_text`` 非空
+        + 未解决的 ``tool_calls``），断言切回后的渲染 tick 必须通过
+        ``appendStreamReasoning(<转义后的累积推理>)`` 重新播种 JS 缓存并以
+        ``finishReasoning()`` 结束思考状态（当前：缺失 → FAIL）。
+        """
+        panel = _make_panel()
+        st = _streaming_state(req_id=5)
+        panel._ai_running_convs = {"convA": st}
+        panel._ai_conversation_id = "convA"
+        panel._ai_messages = st["messages"]
+        panel._ai_request_id = 5
+        panel._ai_streaming = True
+        panel._streaming_container_created = True  # 切走前已建容器（陈旧）
+        panel._ai_response_div_added = True
+        panel._ai_html_cache = {
+            "convA": "<div id='content'>A 的部分流式渲染</div>",
+            "convB": "<div id='content'>B 的历史消息</div>",
+        }
+        panel._conversation_store = _FakeConversationStore({
+            "convA": {"messages": st["messages"]},
+            "convB": {"messages": [{"role": "user", "content": "B 的问题"}]},
+        })
+
+        # 用户切到 B，再切回正在流式的 A（updateContent 已重建 #content → resetReasoning）
+        AIChatPanel._switch_to_conversation(panel, "convB")
+        AIChatPanel._switch_to_conversation(panel, "convA")
+        self.assertIn("updateContent", panel._ai_webview.js_calls[-1])
+
+        # 后台流的下一次渲染 tick（工具阶段已开始：累积推理 + tool_calls）
+        AIChatPanel._render_current_assistant_message(panel, st["req_id"])
+
+        js = "\n".join(panel._ai_webview.js_calls)
+        # 流实例容器与增量更新必须保留（既有断言）
+        self.assertIn(
+            f"appendMessageContainer('msg-{st["req_id"]}')", js,
+            "切回后未重新挂载流式消息容器",
+        )
+        self.assertIn(
+            f"updateMessageContainer('msg-{st["req_id"]}'", js,
+            "切回后未对目标 req_id 请求 updateMessageContainer",
+        )
+        # 关键回归：JS 推理缓存必须被重新播种（updateContent 已 resetReasoning）
+        self.assertIn(
+            f"appendStreamReasoning({json.dumps(st['current_reasoning_text'])});",
+            js,
+            "切回后未用 appendStreamReasoning 重新播种累积推理内容"
+            "（updateContent 已调用 chat.js resetReasoning 清空 JS 缓存）",
+        )
+        self.assertIn(
+            "finishReasoning();",
+            js,
+            "切回后未用 finishReasoning 结束思考状态并切换为 Thought badge",
+        )
+
 
 
 # ═══════════════════════════════════════════════════════════════════
