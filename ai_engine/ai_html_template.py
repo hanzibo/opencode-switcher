@@ -7,6 +7,7 @@ CSS and JS are loaded from ``html_templates/chat.css`` and ``chat.js`` at
 import time. Missing files produce a warning but do not crash the app.
 """
 
+import functools
 import os
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -100,6 +101,90 @@ _SHARED_WEB_CONTEXT = None
 _MPS = None
 
 
+# ── HTML shell cache ──────────────────────────────────────────────────────────
+
+# Marker substituted with ``initial_html`` after shell retrieval. Must never
+# appear inside any embedded asset; checked once at import time below.
+_INITIAL_HTML_MARKER = "__INITIAL_HTML_SLOT__"
+
+# Bound for the shell LRU. Real keys are (theme_name, pygments_css) with a
+# handful of combinations (dark/light × monokai/friendly/empty), so 16 entries
+# is far beyond the working set while still bounding memory.
+_HTML_SHELL_CACHE_MAX = 16
+
+for _asset in (_KATEX_INLINE_CSS, _KATEX_INLINE_JS, _KATEX_AUTO_RENDER_JS,
+               _CHAT_CSS, _CHAT_JS):
+    if _INITIAL_HTML_MARKER in _asset:
+        print(
+            f"Warning: {_INITIAL_HTML_MARKER} found in an embedded asset; "
+            "content substitution would corrupt the shell",
+            flush=True,
+        )
+
+
+@functools.lru_cache(maxsize=_HTML_SHELL_CACHE_MAX)
+def _get_html_shell(theme_name: str, pygments_css: str) -> str:
+    """Build the static WebView shell (head assets, body frame) for a
+    ``(theme_name, pygments_css)`` variant.
+
+    The shell is expensive to assemble (large KaTeX/CSS/JS embedding plus 13
+    theme-variable CSS replacements) but does not depend on the conversation
+    content, so it is cached keyed by theme and pygments CSS. The returned
+    string contains exactly one ``_INITIAL_HTML_MARKER`` occurrence inside
+    ``#content``, substituted by ``get_html_template()`` on retrieval.
+    """
+    from stores.theme_config import get_web_css_vars
+    css_vars = get_web_css_vars(theme_name)
+    css_content = _CHAT_CSS
+    for key, value in css_vars.items():
+        css_content = css_content.replace("{" + key + "}", value)
+    if pygments_css:
+        css_content += f"\n/* Pygments syntax highlighting */\n{pygments_css}"
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>{_KATEX_INLINE_CSS}</style>
+    <script>{_KATEX_INLINE_JS}</script>
+    <script>{_KATEX_AUTO_RENDER_JS}</script>
+    <style>{css_content}</style>
+    <script>{_CHAT_JS}</script>
+</head>
+<body class="{theme_name}">
+    <div id="show-older-bar" class="show-older-bar" style="display:none">
+        <button onclick="showOlderBatch()">
+            ↑ 显示更早的消息（
+            <span id="hidden-count" class="hidden-count">0</span>
+            轮已隐藏）
+        </button>
+        &nbsp;
+        <button onclick="showAllMessages()" style="font-size:12px; opacity:0.7;">
+            显示全部
+        </button>
+    </div>
+    <div id="content">{_INITIAL_HTML_MARKER}</div>
+    <div id="lightbox" class="lightbox-overlay">
+        <img id="lightbox-img" class="lightbox-img">
+    </div>
+    <div id="round-nav">
+        <button id="round-top" class="nav-btn" onclick="_scrollToTopForce()" title="跳至最顶端">⤴</button>
+        <button id="round-prev" class="nav-btn" onclick="_prevRound()">◀</button>
+        <span id="round-indicator" class="round-indicator">1/1</span>
+        <button id="round-next" class="nav-btn" onclick="_nextRound()">▶</button>
+        <button id="round-bottom" class="nav-btn" onclick="_scrollToBottomForce()" title="跳至最底部">⤵</button>
+    </div>
+    <script>
+        addCopyButtons();
+        _renderMath(document.getElementById('content'));
+        _throttledWindowing();
+        _scrollToBottom();
+        _initRoundNav();
+    </script>
+</body>
+</html>"""
+
+
 def get_shared_web_context():
     """Return singleton WebKit2.WebContext shared across WebViews to avoid duplicate WebKitNet processes."""
     global _SHARED_WEB_CONTEXT, _MPS
@@ -142,54 +227,11 @@ def get_html_template(theme_name: str, initial_html: str = "",
     pygments_css : str
         Syntax-highlighting CSS from ``_get_pygments_css`` (caller-computed
         to allow caching). Pass empty string to omit highlighting.
-    """
-    from stores.theme_config import get_web_css_vars
-    css_vars = get_web_css_vars(theme_name)
-    css_content = _CHAT_CSS
-    for key, value in css_vars.items():
-        css_content = css_content.replace("{" + key + "}", value)
-    if pygments_css:
-        css_content += f"\n/* Pygments syntax highlighting */\n{pygments_css}"
 
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <style>{_KATEX_INLINE_CSS}</style>
-    <script>{_KATEX_INLINE_JS}</script>
-    <script>{_KATEX_AUTO_RENDER_JS}</script>
-    <style>{css_content}</style>
-    <script>{_CHAT_JS}</script>
-</head>
-<body class="{theme_name}">
-    <div id="show-older-bar" class="show-older-bar" style="display:none">
-        <button onclick="showOlderBatch()">
-            ↑ 显示更早的消息（
-            <span id="hidden-count" class="hidden-count">0</span>
-            轮已隐藏）
-        </button>
-        &nbsp;
-        <button onclick="showAllMessages()" style="font-size:12px; opacity:0.7;">
-            显示全部
-        </button>
-    </div>
-    <div id="content">{initial_html}</div>
-    <div id="lightbox" class="lightbox-overlay">
-        <img id="lightbox-img" class="lightbox-img">
-    </div>
-    <div id="round-nav">
-        <button id="round-top" class="nav-btn" onclick="_scrollToTopForce()" title="跳至最顶端">⤴</button>
-        <button id="round-prev" class="nav-btn" onclick="_prevRound()">◀</button>
-        <span id="round-indicator" class="round-indicator">1/1</span>
-        <button id="round-next" class="nav-btn" onclick="_nextRound()">▶</button>
-        <button id="round-bottom" class="nav-btn" onclick="_scrollToBottomForce()" title="跳至最底部">⤵</button>
-    </div>
-    <script>
-        addCopyButtons();
-        _renderMath(document.getElementById('content'));
-        _throttledWindowing();
-        _scrollToBottom();
-        _initRoundNav();
-    </script>
-</body>
-</html>"""
+    The static shell (KaTeX CSS/JS, themed CSS, chat JS, body frame) is
+    assembled once per ``(theme_name, pygments_css)`` variant and cached in
+    ``_get_html_shell``; only the variable ``initial_html`` is substituted
+    here, so repeated loads skip the expensive rebuild.
+    """
+    shell = _get_html_shell(theme_name, pygments_css)
+    return shell.replace(_INITIAL_HTML_MARKER, initial_html)
