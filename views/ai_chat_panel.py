@@ -874,10 +874,16 @@ class AIChatPanel(Gtk.Box):
                 return active_st["req_id"]
         return getattr(self, "_ai_request_id", 0)
 
-    def _ensure_streaming_container(self) -> bool:
-        """确保流式消息容器已创建，若未创建则发送 appendMessageContainer JS。"""
+    def _ensure_streaming_container(self, req_id: Optional[int] = None) -> bool:
+        """确保流式消息容器已创建，若未创建则发送 appendMessageContainer JS。
+
+        ``req_id`` 显式传入时优先使用（finalize 阶段流状态已弹出、
+        ``_active_stream_req_id`` 会回退到全局 id），缺省时沿用
+        ``_active_stream_req_id()`` 的既有单流/切回语义。
+        """
         if not self._streaming_container_created and hasattr(self, "_ai_webview") and self._ai_webview:
-            req_id = self._active_stream_req_id()
+            if req_id is None:
+                req_id = self._active_stream_req_id()
             msg_id = f"msg-{req_id}"
             self._ai_webview.run_javascript(f"appendMessageContainer('{msg_id}');", None, None)
             self._streaming_container_created = True
@@ -897,8 +903,12 @@ class AIChatPanel(Gtk.Box):
             self._flush_scheduled = True
             self._flush_source_id = GLib.timeout_add(self._BATCH_FLUSH_MS, self._flush_token_buffer)
 
-    def _flush_token_buffer(self) -> bool:
-        """60ms 定时器回调：将累积的 token 文本批量 flush 到 WebView。"""
+    def _flush_token_buffer(self, req_id: Optional[int] = None) -> bool:
+        """60ms 定时器回调：将累积的 token 文本批量 flush 到 WebView。
+
+        ``req_id`` 显式传入时透传给 ``_ensure_streaming_container``（finalize 阶
+        段定位流实例容器）；定时器调用（无参）时缺省走 ``_active_stream_req_id``。
+        """
         if not self._ai_streaming:
             self._token_buffer = ""
             self._flush_scheduled = False
@@ -912,7 +922,7 @@ class AIChatPanel(Gtk.Box):
         if not self._token_buffer:
             return False
 
-        self._ensure_streaming_container()
+        self._ensure_streaming_container(req_id)
 
         js_code = f"appendStreamToken({json.dumps(self._token_buffer)});"
         if hasattr(self, "_ai_webview") and self._ai_webview:
@@ -1592,9 +1602,9 @@ class AIChatPanel(Gtk.Box):
             if hasattr(self, "_ai_webview") and self._ai_webview:
                 self._ai_webview.run_javascript(js_code, None, None)
             self._reasoning_buffer = ""
-        # token buffer：正常 flush
+        # token buffer：正常 flush（显式传入 req_id，避免流状态已弹出后回退全局 id）
         if self._token_buffer:
-            self._flush_token_buffer()
+            self._flush_token_buffer(req_id)
 
         # 2. 构建最终 HTML
         if req_id is None:

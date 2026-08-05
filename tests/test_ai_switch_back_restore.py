@@ -503,6 +503,82 @@ class TestStreamEndPersistenceAfterRebind(unittest.TestCase):
         self.assertFalse(panel._ai_streaming)
         panel._save_current_conversation.assert_called_once()
 
+    def test_finalize_flush_targets_stream_req_id_after_rebind(self):
+        """切回后流结束的 token flush 必须以流实例 req_id 建容器（非全局递增 id）。
+
+        bug：``_finalize_streaming_render`` 在流状态已从 ``_ai_running_convs``
+        弹出后调用 ``_flush_token_buffer()``（未传 req_id），
+        ``_active_stream_req_id`` 因此回退到全局 ``_ai_request_id`` → 创建
+        ``msg-7`` 残留容器并把残余 token ``appendStreamToken`` 写入错误 id，
+        而最终 ``updateMessageContainer('msg-5')`` 指向流实例容器（当前：msg-7
+        残留 → FAIL）。空 buffer 时 ``_flush_token_buffer`` 被跳过，故必须用
+        非空 ``_token_buffer`` 触发该路径。
+        """
+        panel = _make_panel()
+        # 覆盖 mock：用真实 _finalize_streaming_render 捕获残余 token flush 的 msg-id
+        panel._finalize_streaming_render = AIChatPanel._finalize_streaming_render.__get__(panel, AIChatPanel)
+        st = _streaming_state(req_id=5)
+        panel._ai_running_convs = {"convA": st}
+        panel._ai_conversation_id = "convA"
+        panel._ai_messages = st["messages"]
+        panel._ai_request_id = 7  # 期间 A→B→A，面板全局 req_id 已递增
+        panel._ai_streaming = True
+        panel._streaming_container_created = False  # 容器未建 → flush 会触发 append
+        panel._ai_html_cache = {}
+        panel._last_rendered_html = ""
+        panel._ai_markdown_text = st["ai_markdown_text"]
+        panel._token_buffer = "残余 token"
+        panel._reasoning_buffer = ""
+        panel._flush_scheduled = False
+        panel._flush_source_id = 0
+        panel._reasoning_flush_scheduled = False
+        panel._reasoning_flush_source_id = 0
+
+        # 真实收尾链：状态先被弹出，再按 conv_id 收尾（模拟 _on_llm_api_finished）
+        panel._ai_running_convs.pop("convA", None)
+        AIChatPanel._handle_stream_end(panel, 5, "convA")
+
+        js = "\n".join(panel._ai_webview.js_calls)
+        self.assertIn(
+            "appendMessageContainer('msg-5');", js,
+            "finalize 的 token flush 必须用流实例 msg-5 建立容器（不得回退全局 id）",
+        )
+        self.assertIn(f"appendStreamToken({json.dumps('残余 token')});", js)
+        self.assertNotIn(
+            "msg-7", js,
+            "不得用递增后的全局 id 创建残留容器/渲染错误 id",
+        )
+        self.assertIn(
+            "updateMessageContainer('msg-5',", js,
+            "最终渲染必须落到流实例 msg-5 容器",
+        )
+        self.assertEqual(panel._token_buffer, "", "finalize 后 token buffer 应清空")
+        self.assertFalse(panel._ai_streaming)
+        panel._save_current_conversation.assert_called_once()
+
+    def test_non_streaming_flush_discards_buffer_without_append(self):
+        """守卫：非流式状态下 flush 直接丢弃残留 buffer，不发送任何 append JS。
+
+        当 ``_ai_streaming`` 已为 False（流已结束/收尾前置非流式），
+        ``_flush_token_buffer`` 必须静默清空 buffer，不得再
+        ``appendMessageContainer`` / ``appendStreamToken`` —— 否则会在流结束后
+        重建残留容器并向 DOM 写入过期 token。
+        """
+        panel = _make_panel()
+        panel._ai_streaming = False
+        panel._streaming_container_created = False
+        panel._token_buffer = "残留 token"
+        panel._flush_scheduled = False
+        panel._flush_source_id = 0
+
+        AIChatPanel._flush_token_buffer(panel)
+
+        self.assertEqual(panel._token_buffer, "", "非流式状态下 buffer 应被丢弃清空")
+        self.assertFalse(panel._flush_scheduled)
+        js = "\n".join(panel._ai_webview.js_calls)
+        self.assertNotIn("appendMessageContainer", js, "非流式不得创建新容器")
+        self.assertNotIn("appendStreamToken", js, "非流式不得向 JS 追加 token")
+
     def test_unknown_stream_end_without_visible_conversation_is_noop(self):
         """防御：归属无法解析且无可见会话的孤儿流结束不得执行收尾/保存。"""
         panel = _make_panel()
