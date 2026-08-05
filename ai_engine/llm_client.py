@@ -320,17 +320,27 @@ class _LLMHttpError(Exception):
 #  HTTP 客户端
 # ═══════════════════════════════════════════════════════════════════
 
+# 取消逻辑区分"键不存在"与"键存在但值未就绪（连接阶段占位）"的哨兵
+_MISSING = object()
+
 
 class _LLMHttpClient:
     """LLM HTTP 客户端。
 
     封装与 OpenAI-compatible API 的 HTTP 通信。
     支持流式与非流式两种模式。
+
+    并发安全：活动流式响应按 ``request_key`` 分别登记在
+    ``_active_responses`` 字典中（连接阶段暂存 None 占位），取消与清理均
+    按键操作，互不覆盖。未传键的旧调用方自动获得唯一键。
     """
 
     def __init__(self):
         self._session = requests.Session()
-        self._active_response = None
+        # request_key -> 活动流式响应；连接阶段（response 尚未返回）暂存 None 占位
+        self._active_responses: Dict[Any, Any] = {}
+        self._lock = threading.Lock()
+        self._next_auto_key = 0
         self._connect_timeout = 4
         self._init_session_retry()
 
@@ -346,6 +356,26 @@ class _LLMHttpClient:
         adapter = requests.adapters.HTTPAdapter(max_retries=retry_strategy)
         self._session.mount("https://", adapter)
         self._session.mount("http://", adapter)
+
+    def _new_request_key(self) -> Any:
+        """为未显式指定 request_key 的流式调用生成唯一键。
+
+        ("auto", n) 元组而非整型，避免与调用方显式传入的字符串键冲突。
+        """
+        with self._lock:
+            self._next_auto_key += 1
+            return ("auto", self._next_auto_key)
+
+    def _swap_session_locked(self) -> requests.Session:
+        """持有 _lock 时调用：发布全新 session 并返回旧 session（须在锁外关闭）。
+
+        切换与取消决策在同一临界区内完成，保证重建之后注册的任何新请求
+        必然引用新 session，不会被旧 session 的关闭误伤。
+        """
+        old = self._session
+        self._session = requests.Session()
+        self._init_session_retry()
+        return old
 
     def _build_request(self, config: LLMRequestConfig, messages: list, stream: bool):
         """构建 HTTP 请求的 url、headers 和 body。
@@ -454,12 +484,14 @@ class _LLMHttpClient:
         return url, headers, body
 
     def _active_response_check_cancel(self, cancel_event) -> bool:
-        """Clean up active response and check if user requested cancellation.
+        """Check if user requested cancellation.
 
         Returns True if caller should return silently (user cancelled).
         Returns False if caller should continue (raise as normal error).
+
+        活动响应清理统一由 ``stream_chat_completion`` 的 finally 按 request_key
+        完成；此处不再触碰状态字典，避免并发下误清其他请求。
         """
-        self._active_response = None
         return bool(cancel_event and cancel_event.is_set())
 
     # ── 流式请求 ────────────────────────────────────────────────
@@ -469,6 +501,7 @@ class _LLMHttpClient:
         config: LLMRequestConfig,
         messages: list,
         cancel_event: Optional[threading.Event] = None,
+        request_key: Any = None,
     ):
         """SSE streaming. Yields StreamEvent instances.
 
@@ -480,6 +513,9 @@ class _LLMHttpClient:
             对话消息列表。
         cancel_event : threading.Event, optional
             取消事件。
+        request_key : hashable, optional
+            本请求的标识键。同一客户端上的并发流必须使用不同键，
+            否则取消/清理会互相覆盖。省略时自动生成唯一键，旧调用方无需改动。
 
         Yields
         ------
@@ -487,16 +523,28 @@ class _LLMHttpClient:
             文本增量、推理增量或工具调用事件。
         """
         url, headers, body = self._build_request(config, messages, stream=True)
+        key = request_key if request_key is not None else self._new_request_key()
 
         try:
-            with self._session.post(
+            with self._lock:
+                if key in self._active_responses:
+                    raise ValueError(
+                        f"request_key {key!r} 已被占用：同一键不可并发复用"
+                    )
+                # 连接阶段占位：response 尚未返回，取消时据此判断是否需重建 session
+                self._active_responses[key] = None
+                # 锁内捕获 session：session 重建后新注册的请求立即绑定新会话
+                session = self._session
+
+            with session.post(
                 url,
                 json=body,
                 headers=headers,
                 stream=True,
                 timeout=(self._connect_timeout, config.timeout),
             ) as response:
-                self._active_response = response
+                with self._lock:
+                    self._active_responses[key] = response
                 response.raise_for_status()
                 response.encoding = "utf-8"
 
@@ -522,22 +570,55 @@ class _LLMHttpClient:
             err_msg = _extract_http_error_details(e) if getattr(e, "response", None) is not None else str(e)
             raise _LLMHttpError(f"请求异常：{err_msg}")
         finally:
-            # 任何路径（正常结束/异常/GeneratorExit/取消）均清理悬挂引用（🟡-3）：
-            # 生成器在 yield 处被消费方提前 break 时，with 块后的代码不会执行，
-            # 若不在此清理，cancel_active_request 会误判"无 response"走错分支。
-            self._active_response = None
+            # 任何路径（正常结束/异常/GeneratorExit/取消）均按 key 清理本请求的
+            # 悬挂引用，绝不误清其他并发请求的响应（🟡-3 并发安全版）
+            with self._lock:
+                self._active_responses.pop(key, None)
 
-    def cancel_active_request(self):
-        """Close the active HTTP response to unblock the SSE streaming thread.
-        If no response exists yet (blocked in connect phase), close the
-        entire connection pool to interrupt the connect attempt."""
-        if self._active_response is not None:
-            self._active_response.close()
-            self._active_response = None
-        else:
-            self._session.close()
-            self._session = requests.Session()
-            self._init_session_retry()
+    def cancel_active_request(self, request_key: Any = None):
+        """取消一个或多个活动的流式请求。
+
+        Parameters
+        ----------
+        request_key : hashable, optional
+            仅取消该键对应的流式请求：关闭其 HTTP 响应以解除 SSE 读取阻塞。
+            若目标请求仍处于连接阶段（尚无响应对象）且没有其他活动请求，
+            则重建 session 来中断其连接；存在其他活动请求时不重建，避免误伤
+            并发流。session 切换与"无其他活动请求"判定在同一临界区内完成，
+            因此重建之后新注册的请求必然拿到新 session。
+            省略时取消所有活动流（旧语义的超集，原先只关闭单个响应）。
+        """
+        to_close = []
+        old_session = None
+
+        with self._lock:
+            if request_key is not None:
+                resp = self._active_responses.pop(request_key, _MISSING)
+                if resp is _MISSING:
+                    return  # 该请求已结束或键不存在：无操作
+                if resp is not None:
+                    to_close.append(resp)
+                elif not self._active_responses:
+                    # 目标仍在连接阶段且无其他活动请求：可安全重建 session
+                    old_session = self._swap_session_locked()
+            else:
+                for k in list(self._active_responses.keys()):
+                    resp = self._active_responses.pop(k)
+                    if resp is not None:
+                        to_close.append(resp)
+                if not self._active_responses:
+                    old_session = self._swap_session_locked()
+
+        for resp in to_close:
+            try:
+                resp.close()
+            except Exception as e:
+                logger.warning("关闭流式响应失败 (request_key=%r): %s", request_key, e)
+        if old_session is not None:
+            try:
+                old_session.close()
+            except Exception as e:
+                logger.warning("关闭旧 HTTP session 失败: %s", e)
 
     # ── 同步请求 ────────────────────────────────────────────────
 
