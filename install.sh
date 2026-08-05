@@ -27,6 +27,8 @@ error() { echo -e "${RED}[ERR]${NC} $*"; }
 # ── 共享系统配置 ──────────────────────────────
 # 系统运行依赖（Debian/Ubuntu 包名）— 单一事实来源：
 # 安装、检测、status 报告均基于此数组。
+# 注意：WebKit2GTK 不在强制列表中——4.1/4.0 由 resolve_webkit_package 动态解析，
+# 4.0-only 系统不应被强制安装 4.1。
 SYS_PACKAGES=(
     gir1.2-ayatanaappindicator3-0.1
     python3-gi
@@ -34,8 +36,10 @@ SYS_PACKAGES=(
     python3-pip
     python3-venv
     wl-clipboard
-    gir1.2-webkit2-4.1
 )
+
+# WebKit2GTK 绑定包：4.1 优先，仅提供 4.0 的发行版回退到 4.0
+WEBKIT_PACKAGES=(gir1.2-webkit2-4.1 gir1.2-webkit2-4.0)
 
 # 支持的终端（必须与 system/launcher.py 的 _TERMINALS 保持一致）
 TERMINALS=(ptyxis gnome-terminal kgx blackbox)
@@ -62,8 +66,82 @@ check_webkit2() {
         return 0
     fi
     warn "WebKit2 运行时绑定缺失，AI 助手面板将无法正常使用"
-    warn "请安装: sudo apt install gir1.2-webkit2-4.1"
+    warn "请安装: sudo apt install gir1.2-webkit2-4.1（4.0-only 系统请改用 gir1.2-webkit2-4.0）"
     return 1
+}
+
+# 解析可用的 WebKit2 包：优先 4.1，回退 4.0；任一版本已安装时输出空串
+# （安装、dpkg 探测与无 dpkg 回退路径均以此为准，避免 4.0-only 系统被强制装 4.1）
+resolve_webkit_package() {
+    local pkg
+    for pkg in "${WEBKIT_PACKAGES[@]}"; do
+        if command -v dpkg &>/dev/null && dpkg -s "$pkg" &>/dev/null; then
+            echo ""
+            return 0
+        fi
+    done
+    if command -v apt-cache &>/dev/null; then
+        for pkg in "${WEBKIT_PACKAGES[@]}"; do
+            if apt-cache policy "$pkg" 2>/dev/null | grep -q "Candidate: [0-9]"; then
+                echo "$pkg"
+                return 0
+            fi
+        done
+    fi
+    echo "gir1.2-webkit2-4.1"
+    return 0
+}
+
+# 安全检查 Python 模块可导入性：模块名经 argv 传给 importlib，
+# 绝不拼入 python -c 源码（防止 requirements.txt 内容注入）
+py_import_ok() {
+    local pybin="$1"
+    local mod="$2"
+    case "$mod" in
+        [A-Za-z_][A-Za-z0-9_.]*)
+            "$pybin" -c "import importlib, sys; importlib.import_module(sys.argv[1])" "$mod" 2>/dev/null
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# 校验 INSTALL_DIR：展开开头的 ~、去除尾部斜杠；拒绝空值、根目录 /、
+# 主目录 $HOME、含 . / .. 路径分量的值以及非法字符。
+# 必须在任何 install/uninstall 使用之前调用（防止 rm -rf / pgrep 等误伤）。
+validate_install_dir() {
+    case "$INSTALL_DIR" in
+        "~"|"~/"*)
+            INSTALL_DIR="$HOME${INSTALL_DIR#\~}"
+            ;;
+    esac
+    while [ "$INSTALL_DIR" != "/" ] && [ "${INSTALL_DIR%/}" != "$INSTALL_DIR" ]; do
+        INSTALL_DIR="${INSTALL_DIR%/}"
+    done
+    if [ -z "$INSTALL_DIR" ]; then
+        error "INSTALL_DIR 不能为空"
+        exit 1
+    fi
+    if [ "$INSTALL_DIR" = "/" ]; then
+        error "INSTALL_DIR 不能是根目录 /"
+        exit 1
+    fi
+    if [ "$INSTALL_DIR" = "${HOME%/}" ]; then
+        error "INSTALL_DIR 不能是主目录 ($HOME)"
+        exit 1
+    fi
+    case "$INSTALL_DIR" in
+        *"/../"*|*"/.."|".."|"../"*|*"/./"*|*"/."|"."|"./"*)
+            error "INSTALL_DIR 不能包含 . 或 .. 路径分量: $INSTALL_DIR"
+            exit 1
+            ;;
+        *[!A-Za-z0-9._/+_-]*)
+            error "INSTALL_DIR 包含非法字符: $INSTALL_DIR"
+            exit 1
+            ;;
+    esac
+    return 0
 }
 
 # ── Help ──────────────────────────────────────
@@ -104,7 +182,7 @@ check_deps() {
     # Check Python packages
     local py_missing=()
     for mod in gi cairo; do
-        if ! python3 -c "import $mod" 2>/dev/null; then
+        if ! py_import_ok python3 "$mod"; then
             py_missing+=("$mod")
         fi
     done
@@ -130,13 +208,21 @@ check_deps() {
 # ── Install system deps ───────────────────────
 install_system_deps() {
     local missing_sys=()
+    # 先解析 WebKit2 包（4.1 优先、4.0 回退），dpkg 探测与回退安装共用
+    local webkit_pkg
+    webkit_pkg="$(resolve_webkit_package)"
+    local pkg_list=("${SYS_PACKAGES[@]}")
+    if [ -n "$webkit_pkg" ]; then
+        pkg_list+=("$webkit_pkg")
+    fi
+
     if ! command -v dpkg &>/dev/null; then
         info "未检测到 dpkg，正在尝试直接执行安装程序..."
-        sudo apt update -qq && sudo apt install -y -qq "${SYS_PACKAGES[@]}" 2>&1 | tail -1
+        sudo apt update -qq && sudo apt install -y -qq "${pkg_list[@]}" 2>&1 | tail -1
         return
     fi
 
-    for pkg in "${SYS_PACKAGES[@]}"; do
+    for pkg in "${pkg_list[@]}"; do
         if ! dpkg -s "$pkg" &>/dev/null; then
             missing_sys+=("$pkg")
         fi
@@ -321,11 +407,16 @@ cmd_uninstall() {
     fi
     systemctl --user daemon-reload
 
-    # Kill any manually started processes (not managed by systemd)
+    # 终止手动启动的进程（非 systemd 管理）。先粗筛候选 PID，再用固定字符串
+    # 核对 /proc cmdline 是否包含精确的安装路径，避免 INSTALL_DIR 中的
+    # 正则元字符（. + 等）被 pgrep -f 展开或误杀同名路径的进程。
     local running_pids=()
     while IFS='' read -r pid; do
-        running_pids+=("$pid")
-    done < <(pgrep -f "$INSTALL_DIR/main.py" 2>/dev/null || true)
+        if [ -r "/proc/$pid/cmdline" ] && \
+           tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -Fq -- "$INSTALL_DIR/main.py"; then
+            running_pids+=("$pid")
+        fi
+    done < <(pgrep -f "python" 2>/dev/null || true)
     if [ ${#running_pids[@]} -gt 0 ]; then
         info "检测到手动启动的进程 (PID: ${running_pids[*]})，正在终止..."
         kill "${running_pids[@]}" 2>/dev/null || true
@@ -449,13 +540,21 @@ cmd_status() {
                 echo -e "    ${RED}✘${NC} $pkg (缺失)"
             fi
         done
+        # WebKit2 包：4.1 优先，4.0 回退
+        if dpkg -s gir1.2-webkit2-4.1 &>/dev/null; then
+            echo -e "    ${GREEN}✔${NC} gir1.2-webkit2-4.1"
+        elif dpkg -s gir1.2-webkit2-4.0 &>/dev/null; then
+            echo -e "    ${GREEN}✔${NC} gir1.2-webkit2-4.0"
+        else
+            echo -e "    ${RED}✘${NC} WebKit2 包缺失 (gir1.2-webkit2-4.1 或 gir1.2-webkit2-4.0)"
+        fi
     else
         echo -e "    ${YELLOW}无法检查（未检测到 dpkg）${NC}"
     fi
 
     # Runtime binding checks (gi / cairo / WebKit2)
     for mod in gi cairo; do
-        if python3 -c "import $mod" 2>/dev/null; then
+        if py_import_ok python3 "$mod"; then
             echo -e "    ${GREEN}✔${NC} python 模块: $mod"
         else
             echo -e "    ${RED}✘${NC} python 模块: $mod (缺失)"
@@ -495,12 +594,20 @@ cmd_status() {
                 "google-auth-oauthlib") import_name="google_auth_oauthlib" ;;
                 "google-auth-httplib2") import_name="google_auth_httplib2" ;;
             esac
-            if "$PYTHON_BIN" -c "import $import_name" 2>/dev/null; then
-                echo -e "    ${GREEN}✔${NC} $pkg_name"
-            else
-                echo -e "    ${RED}✘${NC} $pkg_name (缺失)"
-                all_ok=false
-            fi
+            # 只校验合法导入名；模块名经 argv 传入 importlib，绝不拼入 python 源码
+            case "$import_name" in
+                [A-Za-z_][A-Za-z0-9_.]*)
+                    if py_import_ok "$PYTHON_BIN" "$import_name"; then
+                        echo -e "    ${GREEN}✔${NC} $pkg_name"
+                    else
+                        echo -e "    ${RED}✘${NC} $pkg_name (缺失)"
+                        all_ok=false
+                    fi
+                    ;;
+                *)
+                    warn "跳过依赖检查: $pkg_name (非法导入名: $import_name)"
+                    ;;
+            esac
         done < "$SCRIPT_DIR/requirements.txt"
         if [ "$all_ok" = true ]; then
             echo -e "    ${GREEN}全部依赖已安装${NC}"
@@ -514,8 +621,8 @@ cmd_status() {
 
 # ── Main ──────────────────────────────────────
 case "${1:-install}" in
-    install)   cmd_install ;;
-    uninstall) cmd_uninstall ;;
+    install)   validate_install_dir; cmd_install ;;
+    uninstall) validate_install_dir; cmd_uninstall ;;
     status)    cmd_status ;;
     help|--help|-h) usage ;;
     *)
