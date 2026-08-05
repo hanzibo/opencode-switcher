@@ -1789,17 +1789,29 @@ class AIChatPanel(Gtk.Box):
             unregister_subagent_status_listener(self._on_subagent_status_changed)
         except Exception:
             pass
-        # 关闭 MCP 连接
-        if self._mcp_client_mgr is not None and self._mcp_bridge is not None:
-            try:
-                self._mcp_bridge.call_async(self._mcp_client_mgr.disconnect_all())
-            except Exception:
-                pass
-        if self._mcp_bridge is not None:
-            try:
-                self._mcp_bridge.stop()
-            except Exception:
-                pass
+        # 关闭 MCP 连接并停止 asyncio 桥接器（先断开全部 Server，再停桥）
+        self.shutdown_mcp()
+
+    def shutdown_mcp(self) -> None:
+        """关闭 MCP 连接并停止 asyncio 桥接器（幂等，有界阻塞）。
+
+        供面板 destroy 与应用退出路径调用：
+        - 将 client_manager.shutdown()（内部为 disconnect_all）提交到桥接器
+          事件循环并等待其完成，再停止事件循环/线程，确保 stdio 子进程
+          被终止并回收，不遗留孤立 MCP 子进程。
+        - 桥接器未启动 / 已停止 / 清理失败时安全返回（异常记录日志）。
+        """
+        if self._mcp_bridge is None:
+            return
+        try:
+            if self._mcp_client_mgr is not None:
+                self._mcp_bridge.shutdown(
+                    cleanup=self._mcp_client_mgr.shutdown(),
+                )
+            else:
+                self._mcp_bridge.shutdown()
+        except Exception as e:
+            print(f"[MCP] 关闭 MCP 连接时异常: {e}", flush=True)
 
     def _on_decide_policy(self, webview, decision, decision_type):
         """处理 WebView 导航策略：opencode:// URI 和外部链接。"""

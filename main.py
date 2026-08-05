@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 import os
 import fcntl
+import signal
 import subprocess
 import sys
 import threading
@@ -39,6 +40,7 @@ class App:
         self._panel.set_theme(self._theme)
 
         clip_panel = ClipboardPanel(self._clip_store, self._cat_store)
+        self._clip_panel = clip_panel
         clip_panel.on_copy_clipboard = self._on_clipboard_copied
         clip_panel.on_hide_request = lambda: GLib.idle_add(self._panel.hide)
         self._panel.set_clipboard_panel(clip_panel, self._clip_store, self._cat_store)
@@ -62,6 +64,13 @@ class App:
             on_refresh=lambda: self._schedule_refresh_after_delete(),
             on_batch_done=lambda errs: GLib.idle_add(self._show_delete_summary, errs),
         )
+
+        # SIGTERM（systemd stop）→ 通过主循环安全退出，触发 _shutdown_mcp 清理，
+        # 避免 KillMode=process 下 MCP 子进程被孤立
+        try:
+            signal.signal(signal.SIGTERM, self._on_sigterm)
+        except (ValueError, AttributeError):
+            pass
 
     def _build_indicator(self):
         ind = AyatanaAppIndicator3.Indicator.new(
@@ -147,11 +156,30 @@ class App:
         self._hotkey.start()
         Gtk.main()
 
+    def _on_sigterm(self, signum, frame):
+        """SIGTERM 保守处理：仅调度主循环退出，不在信号上下文直接执行复杂清理。"""
+        GLib.idle_add(self.stop)
+
+    def _shutdown_mcp(self):
+        """退出路径：关闭 MCP 连接并停止 asyncio 桥接器（幂等）。
+
+        Ctrl+C / SIGTERM / Quit / Restart 路径仅调用 Gtk.main_quit()，
+        不保证触发 widget destroy，因此需显式清理，避免孤立 MCP 子进程。
+        """
+        panel = getattr(self, "_clip_panel", None)
+        if panel is None:
+            return
+        try:
+            panel.shutdown_mcp()
+        except Exception as e:
+            print(f"opencode-switcher: MCP shutdown error: {e}", flush=True)
+
     def stop(self):
         self._running = False
         self._hotkey.stop()
         self._indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.PASSIVE)
         self._indicator = None
+        self._shutdown_mcp()
         Gtk.main_quit()
 
     def _on_panel_opened(self):
