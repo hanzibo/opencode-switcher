@@ -129,6 +129,36 @@ def _textview_draw_placeholder(widget, cr):
     return False
 
 
+def _capture_image_worker(store, on_done=None):
+    """Run clipboard image capture off the GTK main thread.
+
+    `capture_clipboard_once` shells out to `wl-paste`, which can block for up
+    to ~1.5s; running it on a Gio file-monitor callback would stall the main
+    loop. The capture + store write happen on a daemon worker (ClipboardStore
+    is RLock-guarded, so the store write is thread-safe), and `on_done` (the
+    UI reload) is marshalled back to the main loop via GLib.idle_add so no
+    widget mutation ever happens off-loop.
+    """
+    try:
+        capture_clipboard_once(store)
+    except Exception as exc:
+        # capture_clipboard_once swallows its own failures, but never let a
+        # worker error go completely unnoticed (surfaces in run.log).
+        print(f"clipboard image capture worker error: {exc}", flush=True)
+    finally:
+        if on_done is not None:
+            GLib.idle_add(on_done)
+
+
+def _spawn_image_capture_thread(store, on_done=None):
+    thread = threading.Thread(
+        target=_capture_image_worker,
+        args=(store, on_done),
+        daemon=True,
+    )
+    thread.start()
+    return thread
+
 
 class ClipboardPanel(Gtk.Box):
     # Slash commands available in the AI chat input box (command, description)
@@ -1328,6 +1358,12 @@ class ClipboardPanel(Gtk.Box):
     def hide_ai_panel(self):
         self._ai_chat_panel.hide_panel()
 
+    def shutdown_mcp(self):
+        """退出路径：转发到 AI 面板的 MCP 关闭（幂等）。"""
+        panel = getattr(self, "_ai_chat_panel", None)
+        if panel is not None and hasattr(panel, "shutdown_mcp"):
+            panel.shutdown_mcp()
+
     def is_ai_panel_visible(self) -> bool:
         return self._ai_chat_panel.is_visible()
 
@@ -1581,6 +1617,9 @@ class ClipboardPanel(Gtk.Box):
         except Exception:
             pass
 
+    def _schedule_image_capture(self):
+        _spawn_image_capture_thread(self._clip_store, self._finish_load)
+
     def _on_marker_changed(self, monitor, gfile, other_file, event):
         if event == Gio.FileMonitorEvent.CHANGES_DONE_HINT:
             return
@@ -1618,15 +1657,15 @@ class ClipboardPanel(Gtk.Box):
                 # Defer capture to allow Wayland compositor to fully release the grab
                 def do_deferred_capture():
                     if is_image:
-                        capture_clipboard_once(self._clip_store)
-                    GLib.idle_add(self._finish_load)
+                        self._schedule_image_capture()
+                    else:
+                        GLib.idle_add(self._finish_load)
                     return False
                 GLib.timeout_add(150, do_deferred_capture)
                 return
 
             if is_image:
-                capture_clipboard_once(self._clip_store)
-                GLib.idle_add(self._finish_load)
+                self._schedule_image_capture()
             else:
                 GLib.idle_add(self._finish_load)
 
