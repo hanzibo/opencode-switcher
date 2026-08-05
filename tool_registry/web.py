@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
+from .url_safety import validate_public_http_url
+
 
 # Max characters in a single tool result (to prevent token overflow)
 MAX_TOOL_RESULT_CHARS = 20000
@@ -21,7 +23,7 @@ _TOOL_CANCELLED = "工具调用已被用户取消"
 
 
 def _run_request_cancellable(url, headers, timeout, cancel_event,
-                             result_validator=None):
+                             result_validator=None, **kwargs):
     """Run requests.get with cancel_event support.
     Returns (response, False) on success, or (None, True) if cancelled.
     Raises requests.RequestException on HTTP errors."""
@@ -29,7 +31,7 @@ def _run_request_cancellable(url, headers, timeout, cancel_event,
     exc_box = []
     def _do():
         try:
-            resp = requests.get(url, headers=headers, timeout=timeout)
+            resp = requests.get(url, headers=headers, timeout=timeout, **kwargs)
             resp.raise_for_status()
             result_box.append(resp)
         except requests.RequestException as e:
@@ -66,6 +68,47 @@ def _run_subprocess_cancellable(args, cancel_event, timeout, **kwargs):
         if process.returncode is None:
             process.kill()
             process.wait()
+
+
+class WebFetchValidationError(requests.RequestException):
+    """A URL (or redirect hop) failed the SSRF guard.
+
+    Kept distinct from generic RequestException so _try_requests_fetch can
+    re-raise it: a rejected redirect must NOT silently fall through to the
+    Obscura browser fallback.
+    """
+
+
+_REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
+_MAX_REDIRECTS = 10
+
+
+def _requests_get_safe(url, headers, timeout, cancel_event):
+    """GET url following redirects manually, validating every hop with the
+    SSRF guard BEFORE that hop's request is sent.
+
+    Returns (response, cancelled). Raises WebFetchValidationError when a
+    redirect target is not a public http(s) URL, requests.TooManyRedirects
+    when the chain exceeds _MAX_REDIRECTS.
+    """
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        resp, cancelled = _run_request_cancellable(
+            current, headers, timeout, cancel_event, allow_redirects=False)
+        if cancelled:
+            return None, True
+        if resp.status_code not in _REDIRECT_STATUS_CODES:
+            return resp, False
+        location = resp.headers.get("Location")
+        if not location:
+            return resp, False
+        next_url = urllib.parse.urljoin(current, location)
+        err = validate_public_http_url(next_url)
+        if err is not None:
+            raise WebFetchValidationError(f"重定向目标被拒绝：{err}")
+        current = next_url
+    raise requests.TooManyRedirects(f"超过最大重定向次数（{_MAX_REDIRECTS}）")
+
 
 # Obscura headless browser binary (pre-installed)
 _OBSCURA_BIN = os.environ.get("OBSCURA_BIN") or os.path.expanduser("~/.local/bin/obscura")
@@ -343,9 +386,12 @@ def _try_requests_fetch(url: str, max_chars: int, timeout: int = 20,
                        "Chrome/145.0.0.0 Safari/537.36")
     }
     try:
-        resp, cancelled = _run_request_cancellable(url, headers, timeout, cancel_event)
+        resp, cancelled = _requests_get_safe(url, headers, timeout, cancel_event)
         if cancelled:
             return None
+    except WebFetchValidationError:
+        # SSRF guard — propagate, do NOT fall through to the Obscura path.
+        raise
     except requests.RequestException:
         return None
 
@@ -375,6 +421,11 @@ def _try_requests_fetch(url: str, max_chars: int, timeout: int = 20,
 
 def _try_obscura_fetch(url: str, max_chars: int, timeout: int = 20,
                        cancel_event: Optional[threading.Event] = None) -> str:
+    # SSRF guard — never hand an unsafe target to the browser subprocess
+    # (its internal redirects cannot be intercepted, unlike the requests path).
+    err = validate_public_http_url(url)
+    if err is not None:
+        return f"获取页面失败：{err}"
     if not os.path.isfile(_OBSCURA_BIN):
         return "获取页面失败：Obscura 不可用"
     obs_timeout = max(10, timeout)
@@ -402,15 +453,26 @@ def _try_obscura_fetch(url: str, max_chars: int, timeout: int = 20,
 def execute_web_fetch(url: str, max_chars: int = 5000, timeout: int = 20,
                       cancel_event: Optional[threading.Event] = None) -> str:
     """Fetch a page's content as plain text.
-    Tries plain HTTP requests fast first; falls back to Obscura headless browser."""
+    Tries plain HTTP requests fast first; falls back to Obscura headless browser.
+    Only public http(s) URLs are accepted — private/local targets are rejected
+    before any cache lookup, HTTP request, or subprocess spawn."""
     max_chars = max(500, min(20000, max_chars))
     timeout = max(5, min(60, timeout))
+
+    err = validate_public_http_url(url)
+    if err is not None:
+        return f"获取页面失败：{err}"
 
     cached = _get_cached_fetch(url)
     if cached is not None:
         return cached
 
-    result = _try_requests_fetch(url, max_chars, timeout, cancel_event=cancel_event)
+    try:
+        result = _try_requests_fetch(url, max_chars, timeout, cancel_event=cancel_event)
+    except WebFetchValidationError as e:
+        # A redirect hop pointed at a private/local target — reject without
+        # consulting the cache or trying the Obscura fallback.
+        return f"获取页面失败：{e}"
     if result is not None:
         _set_cached_fetch(url, result)
         return result
@@ -442,7 +504,7 @@ TOOL_SCHEMAS = [
         "type": "function",
         "function": {
             "name": "web_fetch",
-            "description": "获取指定 URL 页面的内容。优先使用 HTTP 直连（轻量快速），页面含反爬或需 JS 渲染时自动回退到 Obscura 无头浏览器。结果缓存 5 分钟。不适用于泛泛搜索未知资料（应使用 web_search）。",
+            "description": "获取指定 URL 页面的内容。优先使用 HTTP 直连（轻量快速），页面含反爬或需 JS 渲染时自动回退到 Obscura 无头浏览器。结果缓存 5 分钟。仅允许公网 http/https 地址，禁止本地/内网地址。不适用于泛泛搜索未知资料（应使用 web_search）。",
             "parameters": {
                 "type": "object",
                 "properties": {
