@@ -1123,7 +1123,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_spinner.show()
         self._ai_spinner.start()
 
-        base_url, api_key, model_name, _, temperature, max_tokens, top_p, _, _ = self._read_model_config(
+        base_url, api_key, model_name, _, temperature, max_tokens, top_p, thinking_enabled, reasoning_effort = self._read_model_config(
             self._ai_last_prompt_obj,
             getattr(self, "_ai_active_model_info", None)
         )
@@ -1150,7 +1150,7 @@ class AIChatPanel(Gtk.Box):
             target=self._run_llm_api_request,
             args=(base_url, api_key, model_name, msgs_for_llm, current_req_id,
                   temperature, max_tokens, top_p, self._ai_markdown_text,
-                  self._ai_conversation_id, extra_sys),
+                  self._ai_conversation_id, extra_sys, thinking_enabled, reasoning_effort),
             daemon=True
         ).start()
     def _retry_response(self, assistant_index: int):
@@ -1201,7 +1201,7 @@ class AIChatPanel(Gtk.Box):
         self._update_send_button(True)
         self._ai_entry.placeholder_text = "等待回复中..."
 
-        base_url, api_key, model_name, _, temperature, max_tokens, top_p, _, _ = self._read_model_config(
+        base_url, api_key, model_name, _, temperature, max_tokens, top_p, thinking_enabled, reasoning_effort = self._read_model_config(
             self._ai_last_prompt_obj,
             getattr(self, "_ai_active_model_info", None)
         )
@@ -1210,7 +1210,7 @@ class AIChatPanel(Gtk.Box):
             target=self._run_llm_api_request,
             args=(base_url, api_key, model_name, msgs_for_llm, current_req_id,
                   temperature, max_tokens, top_p, self._ai_markdown_text,
-                  self._ai_conversation_id, extra_sys),
+                  self._ai_conversation_id, extra_sys, thinking_enabled, reasoning_effort),
             daemon=True
         ).start()
 
