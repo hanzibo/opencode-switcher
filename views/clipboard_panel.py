@@ -8,7 +8,13 @@ import tool_registry
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
-gi.require_version("WebKit2", "4.1")
+try:
+    gi.require_version("WebKit2", "4.1")
+except ValueError:
+    try:
+        gi.require_version("WebKit2", "4.0")
+    except ValueError:
+        pass
 gi.require_version("PangoCairo", "1.0")
 import sys
 import hashlib
