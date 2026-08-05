@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from mcp.types import CallToolResult, Tool
+
 
 def _get_val(obj: Any, camel_key: str, snake_key: str, default: Any = None) -> Any:
     if isinstance(obj, dict):

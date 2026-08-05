@@ -7,7 +7,7 @@ TOOL_EXECUTORS (dispatch dict), and re-exports all public symbols.
 """
 
 import json
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from . import common
 from . import todo
