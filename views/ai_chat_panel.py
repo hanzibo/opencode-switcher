@@ -972,9 +972,28 @@ class AIChatPanel(Gtk.Box):
         return False
 
     def _on_tool_calls_started(self, req_id: int):
-        """工具调用开始时：停止推理状态，通知 JS 端结束 thinking 动画。"""
+        """工具调用开始时：停止推理状态，通知 JS 端结束 thinking 动画。
+
+        归属守卫：反查 ``_ai_running_convs`` 定位回调 ``req_id`` 的归属会话，仅当
+        归属会话就是当前可见会话且状态仍在流式运行时，才允许取消 flush 定时器
+        并发送 ``finishReasoning()``——背景会话、未知/被取代的 ``req_id`` 一律
+        no-op，避免后台流取消可见流的 flush 定时器或提前终结可见流的 thinking
+        动画（见 docs/plans/ai-streaming-quality-phase1-plan.md 第 2 项）。
+        """
         if self._STREAM_PERF_LOG:
             print(f"[perf] tool_calls_started: req={req_id}", flush=True)
+
+        # 归属守卫：反查运行态 → 归属会话必须等于当前可见会话且仍在流式运行
+        conv_id = None
+        for cid, st in list(getattr(self, "_ai_running_convs", {}).items()):
+            if st.get("req_id") == req_id:
+                conv_id = cid
+                break
+        if not conv_id or conv_id != getattr(self, "_ai_conversation_id", None):
+            return
+        st = getattr(self, "_ai_running_convs", {}).get(conv_id)
+        if not st or not st.get("streaming", False):
+            return
 
         # 取消排期定时器 + 发送 finishReasoning 到 JS
         if hasattr(self, "_ai_webview") and self._ai_webview:
@@ -1006,8 +1025,21 @@ class AIChatPanel(Gtk.Box):
                 or not self._ai_settings_store.enable_incremental_tools):
             return
 
-        # 确保是当前可见对话
-        if req_id != getattr(self, "_ai_request_id", 0):
+        # 归属守卫：反查运行态定位回调 req_id 的归属会话，仅当归属会话就是
+        # 当前可见会话且该流仍在流式运行时，才接受工具结果更新工具卡片。
+        # 不能用全局 _ai_request_id 与 req_id 判等——A→B→A 切回后全局计数器已
+        # 递增，而可见会话仍在运行的流 req_id 未变 → 合法前台结果会被误丢弃
+        # （见 docs/plans/ai-streaming-quality-phase1-plan.md 第 3 项）。
+        # 背景会话、未知/被取代的 req_id、非流式状态一律拒绝。
+        conv_id = None
+        for cid, st in list(getattr(self, "_ai_running_convs", {}).items()):
+            if st.get("req_id") == req_id:
+                conv_id = cid
+                break
+        if not conv_id or conv_id != getattr(self, "_ai_conversation_id", None):
+            return
+        st = getattr(self, "_ai_running_convs", {}).get(conv_id)
+        if not st or not st.get("streaming", False):
             return
 
         if not hasattr(self, "_ai_webview") or not self._ai_webview:
