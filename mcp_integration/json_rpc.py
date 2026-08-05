@@ -195,6 +195,8 @@ class JsonRpcSession:
             请求超时。
         JsonRpcDisconnectedError
             连接已断开。
+        asyncio.CancelledError
+            协程被外部取消；对应的挂起请求已在重新抛出前从 _pending 清理。
         """
         if self._closed:
             raise JsonRpcDisconnectedError()
@@ -206,15 +208,25 @@ class JsonRpcSession:
         self._pending[req_id] = fut
 
         msg = JsonRpcRequest(req_id, method, params)
-        await self._send_line(msg.to_dict())
+
+        # 在 try 前初始化：_send_line 自身也可能抛出 asyncio.TimeoutError，
+        # 若在 try 内才赋值，except 处理程序将引用未绑定变量（UnboundLocalError）。
+        timeout_val = timeout if timeout is not None else self._request_timeout
 
         try:
-            timeout_val = timeout if timeout is not None else self._request_timeout
+            await self._send_line(msg.to_dict())
             response = await asyncio.wait_for(fut, timeout=timeout_val)
             return response
         except asyncio.TimeoutError:
             self._pending.pop(req_id, None)
             raise JsonRpcTimeoutError(method, timeout_val)
+        except asyncio.CancelledError:
+            # 取消传播：外部取消（用户取消 / 会话关闭）到达此协程。
+            # 主动取消内部 future（若在 wait_for 之前被取消，fut 仍挂起未取消；
+            # 对已完成的 future 为 no-op），并从挂起表移除对应请求后重新抛出。
+            fut.cancel()
+            self._pending.pop(req_id, None)
+            raise
 
     async def notify(
         self,

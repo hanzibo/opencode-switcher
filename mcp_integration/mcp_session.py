@@ -31,6 +31,10 @@ DEFAULT_CLIENT_INFO = {
     "version": "1.0",
 }
 
+# 工具调用默认超时（有界默认，秒）：覆盖底层 JsonRpcSession.request_timeout，
+# 防止服务器挂起时工具调用无限等待。
+MCP_TOOL_CALL_TIMEOUT_SEC = 60.0
+
 
 # ═══════════════════════════════════════════════════════════════════
 #  协议协商
@@ -178,7 +182,12 @@ class MCPSession:
 
     # ── 工具调用 ────────────────────────────────────────────────
 
-    async def call_tool(self, name: str, arguments: dict) -> str:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict,
+        timeout: Optional[float] = None,
+    ) -> str:
         """调用工具并返回文本结果。
 
         Parameters
@@ -187,16 +196,21 @@ class MCPSession:
             工具名称。
         arguments : dict
             工具参数。
+        timeout : float, optional
+            超时秒数，默认使用 MCP_TOOL_CALL_TIMEOUT_SEC（60s）。
+            传入 None 表示使用有界默认值，传入显式值则覆盖。
 
         Returns
         -------
         str
             工具结果的文本表示。
         """
-        result = await self._jrpc.request("tools/call", {
-            "name": name,
-            "arguments": arguments,
-        })
+        timeout_val = timeout if timeout is not None else MCP_TOOL_CALL_TIMEOUT_SEC
+        result = await self._jrpc.request(
+            "tools/call",
+            {"name": name, "arguments": arguments},
+            timeout=timeout_val,
+        )
         content = result.get("content", [])
         is_error = result.get("isError", False)
 
