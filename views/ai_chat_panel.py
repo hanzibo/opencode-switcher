@@ -79,6 +79,53 @@ def _to_chat_messages(msgs: List[Dict]) -> List[ChatMessage]:
                         reasoning_content=m.get("reasoning_content")) for m in msgs]
 
 
+def _ai_stream_request_key(conv_id: str, req_id: int) -> tuple:
+    """为一次主 ReAct 流生成稳定请求键。
+
+    键 = (conv_id, req_id)，跨 ReAct 多轮迭代复用同一个键；重试/新请求会
+    递增 req_id 得到新键，不与被取消的旧流冲突。并行会话键互不相同，
+    取消一个不会误伤另一个。
+    """
+    return ("ai", conv_id, req_id)
+
+
+def _ai_summary_request_key(conv_id: str) -> tuple:
+    """为摘要流生成稳定请求键（同一会话的摘要流全局唯一，可被定向取消）。"""
+    return ("summary", conv_id)
+
+
+def _webview_shell_fingerprint(theme_name: str, pygments_css: str) -> tuple:
+    """WebView 外壳指纹：(theme, pygments_css)。
+
+    与 ``ai_engine.ai_html_template._get_html_shell`` 的 LRU 缓存键完全一致——
+    主题或代码高亮样式任一变化，指纹即变化，此时必须完整重载外壳。
+    """
+    return (theme_name, pygments_css)
+
+
+def _should_full_reload_webview(loaded_fingerprint, requested_fingerprint,
+                                webview_live: bool, webview_suspended: bool,
+                                webview_ready: bool) -> bool:
+    """决定是否需要完整 ``load_html`` 而非 in-place ``updateContent`` 换内容。
+
+    任一条件命中都必须完整重载（指纹守卫绝不能吞掉这些必需的重载）：
+    - WebView 未构建或 DOM 不可用（webview_live=False）
+    - Web 进程已被 suspend 主动终止（webview_suspended=True，恢复必须重建 DOM）
+    - 文档尚未就绪（webview_ready=False）——上一轮 load_html 还在装载中，
+      in-place JS 可能打到未加载完的文档而静默失败
+    - 请求的外壳（主题/pygments CSS）与当前已加载的不一致
+
+    仅当 DOM 存活、文档就绪且外壳指纹一致时返回 False —— 此时内容可原地替换。
+    """
+    if not webview_live:
+        return True
+    if webview_suspended:
+        return True
+    if not webview_ready:
+        return True
+    return loaded_fingerprint != requested_fingerprint
+
+
 class AIChatPanel(Gtk.Box):
     # Slash commands available in the AI chat input box (command, description)
     _AI_COMMANDS = [
@@ -156,6 +203,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_html_cache = {}
         self._ai_running_convs = {}
         self._last_rendered_html = ""
+        # 已装载外壳指纹 (theme, pygments_css)，须与 ai_html_template 外壳缓存键一致；None=未装载
+        self._loaded_shell_fingerprint = None
         self._ai_conversation_created_at = 0
         self._ai_title_generated = False
         self._ai_history_queries = []
@@ -178,6 +227,9 @@ class AIChatPanel(Gtk.Box):
         self._ai_pending_title_notification = False
         self._webview_suspended = False
         self._suspend_timeout_id = 0
+        # 文档装载状态：仅当 load-changed FINISHED 后为 True。load_html 一发出
+        # 即置 False——装载完成前禁止 in-place updateContent（会打到未就绪文档）
+        self._webview_ready = False
 
         # ── Streaming: Token batching state ──
         self._token_buffer = ""
@@ -338,11 +390,13 @@ class AIChatPanel(Gtk.Box):
         # Allow file:// page to load file:// subresources (KaTeX CSS/JS/fonts)
         settings.set_allow_file_access_from_file_urls(True)
 
-        self._ai_webview.load_html(self.get_html_template("dark"), "file:///")
+        # 首次装载：用真实主题（而非写死 "dark"），避免启动期 set_theme 二次整页重载
+        self._load_webview_html("", force=True)
 
         self._ai_webview.connect("decide-policy", self._on_decide_policy)
         self._ai_webview.connect("context-menu", lambda *_: True)
         self._ai_webview.connect("web-process-terminated", self._on_webview_crashed)
+        self._ai_webview.connect("load-changed", self._on_webview_load_changed)
         ai_scrolled.add(self._ai_webview)
 
         # Synchronize background colors to prevent Wayland resize flickering/leaks
@@ -764,7 +818,9 @@ class AIChatPanel(Gtk.Box):
                 f'</div>'
             )
         )
-        self._ai_webview.load_html(self.get_html_template(self._theme, user_html), "file:///")
+        # 记录本次完整渲染结果，供主题重建/crash 恢复使用最新快照
+        self._last_rendered_html = user_html
+        self._load_webview_html(user_html)
 
     def _build_llm_messages(self) -> tuple:
         """构建发送给 LLM 的消息列表和额外 system 消息。
@@ -1036,9 +1092,10 @@ class AIChatPanel(Gtk.Box):
         if self._ai_streaming:
             active_state = self._ai_running_convs.get(self._ai_conversation_id)
             if active_state:
-                active_state["cancel_event"].set()
+                self._cancel_streams_for_conversation(self._ai_conversation_id)
                 self._ai_running_convs.pop(self._ai_conversation_id, None)
-            self._llm_client.cancel_active_request()
+            else:
+                self._llm_client.cancel_active_request()
             self._update_send_button(False)
             self._ai_streaming = False
             self._ai_spinner.stop()
@@ -1156,7 +1213,8 @@ class AIChatPanel(Gtk.Box):
                 error_msg,
                 fallback_content=f"<p style='color: #f43f5e; font-weight: bold;'>{error_msg}</p>"
             )
-            self._ai_webview.load_html(self.get_html_template(self._theme, html), "file:///")
+            self._last_rendered_html = html
+            self._load_webview_html(html)
             return
 
         self._update_send_button(True)
@@ -1177,7 +1235,9 @@ class AIChatPanel(Gtk.Box):
         """Start the ReAct loop by delegating execution to the run_llm_react_loop orchestrator."""
         # 等待 MCP 工具缓存就绪（异步预取可能还未完成，但后续迭代会拿到）
         cancel_event = threading.Event()
-        
+        # 主 ReAct 流稳定请求键：(conv_id, req_id)，跨迭代复用；重试递增 req_id 得新键
+        request_key = _ai_stream_request_key(conv_id, req_id)
+
         # Initialize conversation background state
         state = {
             "streaming": True,
@@ -1188,6 +1248,7 @@ class AIChatPanel(Gtk.Box):
             "response_div_added": False,
             "ai_markdown_text": markdown_text,
             "req_id": req_id,
+            "request_key": request_key,
         }
         self._ai_running_convs[conv_id] = state
 
@@ -1319,6 +1380,7 @@ class AIChatPanel(Gtk.Box):
             mcp_tool_definitions=getattr(self, "_cached_mcp_tools", None),
             mcp_client_manager=getattr(self, "_mcp_client_mgr", None),
             disabled_tools=getattr(self._ai_settings_store, "disabled_tools", []),
+            request_key=request_key,
         )
 
         run_llm_react_loop(
@@ -1665,6 +1727,58 @@ class AIChatPanel(Gtk.Box):
         pygments_css = self._get_pygments_css(theme_name)
         return get_html_template(theme_name, initial_html, pygments_css)
 
+    def _webview_dom_live(self) -> bool:
+        """WebView 是否存在且 DOM 可用（未被 suspend 主动终止）。"""
+        if not (hasattr(self, "_ai_webview") and self._ai_webview):
+            return False
+        if getattr(self, "_webview_suspended", False):
+            return False
+        return True
+
+    def _reset_streaming_dom_state(self) -> None:
+        """DOM 被整体替换（load_html 或 updateContent 重建 #content）后，
+        流式容器与回复 div 均不复存在，须在下一轮渲染时重建。"""
+        self._streaming_container_created = False
+        self._ai_response_div_added = False
+        active_st = self._ai_running_convs.get(self._ai_conversation_id) if self._ai_conversation_id else None
+        if active_st:
+            active_st["response_div_added"] = False
+
+    def _load_webview_html(self, initial_html: str = "", *, force: bool = False) -> None:
+        """将 ``initial_html`` 装载进 WebView。
+
+        当 DOM 存活且外壳指纹（theme, pygments_css）未变时，用 in-place
+        ``updateContent`` 替换内容，跳过整页 ``load_html``（避免无谓的
+        外壳重解析/重排版）；否则完整重载并记录新指纹。
+
+        ``force=True`` 用于初始化 / crash 恢复 / suspend 恢复 / 主题变更——
+        这些路径必须完整重载，指纹守卫不会抑制它们。
+        """
+        fingerprint = _webview_shell_fingerprint(self._theme, self._get_pygments_css(self._theme))
+        if not force and not _should_full_reload_webview(
+                self._loaded_shell_fingerprint, fingerprint,
+                self._webview_dom_live(),
+                getattr(self, "_webview_suspended", False),
+                getattr(self, "_webview_ready", False)):
+            js_code = f"updateContent({json.dumps(initial_html)});"
+            self._ai_webview.run_javascript(js_code, None, None)
+            self._reset_streaming_dom_state()
+            return
+        if getattr(self, "_webview_suspended", False):
+            # 重新装载使 Web 进程复活，suspend 标记不再成立（避免恢复路径二次重载）
+            self._webview_suspended = False
+        self._loaded_shell_fingerprint = fingerprint
+        self._webview_ready = False  # 装载已发出，FINISHED 前 in-place 更新一律禁止
+        self._ai_webview.load_html(self.get_html_template(self._theme, initial_html), "file:///")
+        self._reset_streaming_dom_state()
+
+    def _on_webview_load_changed(self, webview, event):
+        """跟踪文档装载状态：FINISHED → 就绪；其余事件（PROVISIONAL/COMMITTED/失败）→ 装载中。"""
+        if event == WebKit2.LoadEvent.FINISHED:
+            self._webview_ready = True
+        else:
+            self._webview_ready = False
+
     def _render_markdown(self, text: str):
         if not text:
             js_code = "updateContent('');"
@@ -1919,11 +2033,9 @@ class AIChatPanel(Gtk.Box):
         settings.enable_html5_database = False
         settings.enable_html5_local_storage = False
 
-        self._ai_webview.load_html(
-            self.get_html_template(self._theme, current_html if current_html else ""),
-            "file:///"
-        )
-        self._streaming_container_created = False  # DOM 已重建，流式容器需重新创建
+        # 进程已死，DOM 必须整页重建；_load_webview_html(force=True) 同时重置
+        # 流式容器状态（DOM 已重建，流式容器需重新创建）
+        self._load_webview_html(current_html if current_html else "", force=True)
 
         if parent:
             def _reparent_webview():
@@ -1940,6 +2052,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_webview.connect("web-process-terminated", self._on_webview_crashed)
         self._ai_webview.connect("decide-policy", self._on_decide_policy)
         self._ai_webview.connect("context-menu", lambda *_: True)
+        self._ai_webview.connect("load-changed", self._on_webview_load_changed)
 
     def _on_subagent_status_changed(self, sid: str, info: Optional[dict]):
         """Event-driven callback triggered when a subagent's status changes."""
@@ -2231,7 +2344,8 @@ class AIChatPanel(Gtk.Box):
                 self._ai_cancelling = True
                 active_state = self._ai_running_convs.get(self._ai_conversation_id)
                 if active_state and active_state.get("cancel_event"):
-                    active_state["cancel_event"].set()
+                    # 定向取消当前会话（主流 + 摘要），并行会话不受影响
+                    self._cancel_streams_for_conversation(self._ai_conversation_id)
                 else:
                     # 兜底：当前会话无活跃 state（如流属于背景会话），
                     # 取消所有运行中的流，避免只关 response 导致 SSE 误报
@@ -2239,7 +2353,7 @@ class AIChatPanel(Gtk.Box):
                         ce = st.get("cancel_event")
                         if ce:
                             ce.set()
-                self._llm_client.cancel_active_request()
+                    self._llm_client.cancel_active_request()
                 self._update_send_button(False, sensitive=False)
                 self._ai_entry.placeholder_text = "正在中止..."
                 # 看门狗：10 秒后若线程未响应则强制清理
@@ -2433,6 +2547,31 @@ class AIChatPanel(Gtk.Box):
         )
         self.append_html_to_webview(notice_html)
 
+    def _cancel_streams_for_conversation(self, conv_id: str) -> bool:
+        """定向取消某个会话的活跃流（主 ReAct 流 + 摘要流），不触碰其他会话。
+
+        看门狗/用户取消均经此路径。主 ReAct 流与摘要流各自持有稳定
+        request_key，取消时按键精确中止；并行会话键不同，互不误伤。
+
+        Returns
+        -------
+        bool
+            True 表示该会话确有活跃主流（已置 cancel_event 并按键中止），
+            False 表示没有（调用方应回退到旧的无键取消全部语义）。
+        """
+        st = self._ai_running_convs.get(conv_id)
+        if not st:
+            return False
+        ce = st.get("cancel_event")
+        if ce:
+            ce.set()
+        request_key = st.get("request_key")
+        if request_key is not None:
+            self._llm_client.cancel_active_request(request_key)
+        if conv_id:
+            self._llm_client.cancel_active_request(_ai_summary_request_key(conv_id))
+        return True
+
     def _cancel_streaming_if_active(self):
         """If a streaming response is in progress, cancel it and reset state."""
         if self._ai_streaming:
@@ -2440,7 +2579,7 @@ class AIChatPanel(Gtk.Box):
             # 走静默返回而非抛 _LLMHttpError；找不到则兜底取消所有运行中的流。
             active_state = self._ai_running_convs.get(self._ai_conversation_id)
             if active_state and active_state.get("cancel_event"):
-                active_state["cancel_event"].set()
+                self._cancel_streams_for_conversation(self._ai_conversation_id)
                 # L-2：清空流式缓存。partial 由 _on_llm_api_finished 统一追加
                 # （此处不手动追加），避免同一段文本在后台收尾时被重复写入历史。
                 active_state["current_assistant_text"] = ""
@@ -2450,7 +2589,7 @@ class AIChatPanel(Gtk.Box):
                     ce = st.get("cancel_event")
                     if ce:
                         ce.set()
-            self._llm_client.cancel_active_request()
+                self._llm_client.cancel_active_request()
             self._update_send_button(False)
             self._ai_streaming = False
             self._ai_cancelling = False
@@ -3435,13 +3574,23 @@ class AIChatPanel(Gtk.Box):
         """
         save_summary = False
         cancel_event = threading.Event()
+        summary_key = _ai_summary_request_key(self._ai_conversation_id)
         idle_timeout_sec = 25  # 流式停顿超时（秒），收到 token 则重置
         total_timeout_sec = 120  # 总超时硬限制（防止无限等待）
         failure_reason = None
         has_received_token = False  # 是否已收到首个 token
 
+        def _cancel_summary_stream():
+            """摘要看门狗：置位取消标志并按 request_key 强关本会话摘要流。
+
+            与主 ReAct 流 _fire_timeout 的双通道取消一致；按键精确中止，
+            不误伤并行会话的其他流。流已结束时按键不存在为无操作。
+            """
+            cancel_event.set()
+            self._llm_client.cancel_active_request(summary_key)
+
         # 总超时硬限制（从调用开始算）
-        total_timer = threading.Timer(total_timeout_sec, cancel_event.set)
+        total_timer = threading.Timer(total_timeout_sec, _cancel_summary_stream)
         total_timer.daemon = True
         total_timer.start()
 
@@ -3451,7 +3600,7 @@ class AIChatPanel(Gtk.Box):
             nonlocal idle_timer
             if idle_timer:
                 idle_timer.cancel()
-            idle_timer = threading.Timer(idle_timeout_sec, cancel_event.set)
+            idle_timer = threading.Timer(idle_timeout_sec, _cancel_summary_stream)
             idle_timer.daemon = True
             idle_timer.start()
 
@@ -3511,6 +3660,7 @@ class AIChatPanel(Gtk.Box):
                 summary_config,
                 [{"role": "user", "content": prompt}],
                 cancel_event=cancel_event,
+                request_key=summary_key,
             ):
                 if cancel_event.is_set():
                     break
@@ -4017,9 +4167,8 @@ class AIChatPanel(Gtk.Box):
         if getattr(self, "_webview_suspended", False):
             self._webview_suspended = False
             cached_html = self._ai_html_cache.get(self._ai_conversation_id)
-            html = self.get_html_template(self._theme, cached_html or "")
-            self._ai_webview.load_html(html, "file:///")
-            self._streaming_container_created = False  # DOM 已重建，流式容器需重新创建
+            # 进程已终止，必须整页重建；force=True 防止指纹守卫抑制恢复重载
+            self._load_webview_html(cached_html or "", force=True)
             print("[AI] WebView restored from suspension.", flush=True)
         self._ai_entry.grab_focus()
 
@@ -4079,7 +4228,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
         self._ai_assistant_html_base = ""
-        self._ai_webview.load_html(self.get_html_template(self._theme), "file:///")
+        self._load_webview_html("")
         self._ai_entry.get_buffer().set_text("")
         _, _, _, display_name, _, _, _, _, _ = self._read_model_config(None, None)
         self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
@@ -4226,7 +4375,6 @@ class AIChatPanel(Gtk.Box):
 
     def set_theme(self, name):
         self._theme = name
-        self._ai_html_cache.clear()
 
         # Update GTK widget background colors to match the new theme
         c = self._get_gtk_colors(name)
@@ -4250,10 +4398,28 @@ class AIChatPanel(Gtk.Box):
         if self._ai_webview:
             self._ai_webview.set_background_color(c["bg"])
 
-        # Rebuild HTML and reload webview
-        pygments_css = self._get_pygments_css(name)
-        html_content = ""
-        if self._ai_markdown_text:
+        # WebView 外壳重建守卫：DOM 已存活且外壳指纹（theme + pygments）未变时，
+        # 无任何内容需要重载——直接跳过整页重建。
+        requested = _webview_shell_fingerprint(name, self._get_pygments_css(name))
+        if self._webview_dom_live() and self._loaded_shell_fingerprint == requested:
+            return
+
+        if not self._webview_dom_live():
+            # suspend/crash 场景：恢复路径（on_panel_shown / crash 重建）会以
+            # self._theme + _ai_html_cache 整页重建；此处只需保证缓存持有最新内容。
+            if self._ai_conversation_id:
+                self._ai_html_cache[self._ai_conversation_id] = getattr(self, "_last_rendered_html", "")
+            return
+
+        # 外壳变化 → 整页重建。内容源必须是最近一次完整渲染快照
+        # _last_rendered_html（含流式/JS 增量后的最终状态），而不是可能滞后的
+        # _ai_markdown_text（不含工具卡片、流式容器等 DOM 增量）。
+        html_content = self._last_rendered_html
+        if not html_content and self._ai_markdown_text:
             html_content = _markdown_to_html_safe(self._ai_markdown_text)
-        html = get_html_template(name, html_content, pygments_css)
-        self._ai_webview.load_html(html, "file:///")
+        self._load_webview_html(html_content, force=True)
+
+        # 流式进行中的会话：重建后 DOM 回到快照，立即重绘当前回合恢复流式显示
+        active_st = self._ai_running_convs.get(self._ai_conversation_id) if self._ai_conversation_id else None
+        if active_st and active_st.get("streaming") and active_st.get("req_id") is not None:
+            GLib.idle_add(self._render_current_assistant_message, active_st["req_id"])

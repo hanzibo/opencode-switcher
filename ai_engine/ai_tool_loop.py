@@ -82,6 +82,10 @@ class ToolLoopContext:
     mcp_tool_definitions: Optional[list] = None
     mcp_client_manager: Optional['MCPClientManager'] = None
     disabled_tools: list[str] = field(default_factory=list)
+    # 本循环所有 LLM 流共用的稳定请求键（跨迭代复用同一个键，避免每次调用
+    # 自动生成新键导致看门狗/外部取消无法定位本会话）。省略时回退到旧行为：
+    # stream_chat_completion 自动键 + 看门狗无键取消全部活动流。
+    request_key: Optional[Any] = None
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -263,7 +267,12 @@ def _perform_llm_call(
         logger.warning("LLM 流式调用超时中止: %s (req_id=%s)", reason, ctx.req_id)
         if ctx.cancel_event:
             ctx.cancel_event.set()          # ① 协作式取消标志
-        llm_client.cancel_active_request()  # ② 强关响应，解除 iter_lines 阻塞
+        if ctx.request_key is not None:
+            # ② 按 request_key 强关本会话响应，解除 iter_lines 阻塞；
+            #    只影响本会话，不误伤并行会话的其他流（Wave2 接线）
+            llm_client.cancel_active_request(ctx.request_key)
+        else:
+            llm_client.cancel_active_request()  # ② 无键回退：旧语义，取消全部活动流
 
     def _on_activity():
         """收到任何流事件（文本/推理/工具调用）即视为模型在工作：撤总超时、重置停顿超时。"""
@@ -307,6 +316,7 @@ def _perform_llm_call(
         for event in llm_client.stream_chat_completion(
             call_config, cleaned_msgs,
             cancel_event=ctx.cancel_event,
+            request_key=ctx.request_key,
         ):
             if ctx.get_current_request_id_fn() != ctx.req_id:
                 # ⚠️ 死代码（既有问题，未修）：get_current_request_id_fn 恒返回本请求的
