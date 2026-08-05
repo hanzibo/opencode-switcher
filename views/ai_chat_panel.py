@@ -3948,17 +3948,20 @@ class AIChatPanel(Gtk.Box):
             GLib.source_remove(self._ai_render_timeout_id)
             self._ai_render_timeout_id = 0
 
+        # 先解析运行态：未落盘的正在流式会话（磁盘不存在）也能恢复
+        st = self._ai_running_convs.get(conv_id)
+
         # Load target conversation
         conv = self._conversation_store.load_conversation(conv_id)
-        if not conv:
+        if not conv and not (st and st.get("streaming")):
             return
 
         # Restore state from loaded conversation (preserve tool call fields)
-        st = self._ai_running_convs.get(conv_id)
         if st and st.get("streaming"):
             self._ai_messages = st["messages"]
             self._ai_conversation_id = conv_id
-            self._ai_conversation_created_at = conv.created_at
+            if conv:
+                self._ai_conversation_created_at = conv.created_at
             self._ai_summary = conv.summary if conv else ""
             self._ai_system_prompt = conv.system_prompt if conv else ""  # 旧对话加载自身快照，不读 Settings（无热加载）
             
