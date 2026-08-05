@@ -51,7 +51,7 @@ from dataclasses import dataclass, asdict
 from typing import Optional, List, Dict, Any, Union
 from uuid import uuid4
 
-from system.utils import CONVERSATIONS_DIR
+from system.utils import CONVERSATIONS_DIR, write_json_private
 
 CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
 CLIPBOARD_PATH = os.path.join(CONFIG_DIR, "clipboard_history.json")
@@ -351,10 +351,14 @@ class ClipboardStore:
         Readers never observe a partially-written file: the temp file is fully
         written, flushed and fsynced before os.replace() swaps it into place.
         On any failure the temp file is removed so no partial state lingers.
+        The temp file is created with mode 0o600, and os.replace() preserves
+        that mode, so clipboard history (and its backup) is user-private.
         """
         tmp_path = path + ".tmp"
         try:
-            with open(tmp_path, "w") as f:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            fd = os.open(tmp_path, flags, 0o600)
+            with os.fdopen(fd, "w") as f:
                 json.dump([asdict(i) for i in items], f)
                 f.flush()
                 os.fsync(f.fileno())
@@ -765,12 +769,190 @@ class Conversation:
 
 
 class ConversationStore:
+    """Persists AI conversations as JSON files in ``CONVERSATIONS_DIR``.
+
+    A compact metadata index (``.conversations.index`` inside the same
+    directory) lets ``list_conversations()`` avoid parsing every full
+    conversation JSON on each refresh. The index is maintained on every
+    create/save/delete/fork, reconciled against the directory on each list
+    (missing / unindexed / mtime-changed files), and rebuilt from a full
+    scan when corrupt or absent.
+    """
+
+    _INDEX_FILENAME = ".conversations.index"
+
     def __init__(self):
         self._dir = CONVERSATIONS_DIR
         os.makedirs(self._dir, exist_ok=True)
+        self._lock = threading.RLock()
+        self._index: Optional[Dict[str, Dict[str, Any]]] = None
+
+    @property
+    def _index_path(self) -> str:
+        # Property (not cached at init) so tests that redirect ``_dir``
+        # automatically redirect the index file as well.
+        return os.path.join(self._dir, self._INDEX_FILENAME)
 
     def _path(self, conv_id: str) -> str:
         return os.path.join(self._dir, f"{conv_id}.json")
+
+    # ── Metadata index ──────────────────────────────────────────────────────
+
+    def _load_index(self) -> Dict[str, Dict[str, Any]]:
+        """Load the metadata index from disk (lazily). Caller holds ``_lock``.
+
+        A missing or corrupt index file yields an empty index, which the next
+        list_conversations() call rebuilds from a full scan.
+        """
+        if self._index is not None:
+            return self._index
+        index = {}
+        try:
+            with open(self._index_path) as f:
+                data = json.load(f)
+            raw = data.get("conversations") if isinstance(data, dict) else None
+            if isinstance(raw, dict):
+                for conv_id, entry in raw.items():
+                    if not isinstance(entry, dict):
+                        continue
+                    try:
+                        index[str(conv_id)] = {
+                            "id": str(entry.get("id") or conv_id),
+                            "title": str(entry.get("title") or "(untitled)"),
+                            "summary": str(entry.get("summary") or ""),
+                            "message_count": int(entry.get("message_count") or 0),
+                            "updated_at": int(entry.get("updated_at") or 0),
+                            "mtime": float(entry.get("mtime") or 0.0),
+                        }
+                    except (TypeError, ValueError):
+                        # Per-entry corruption: skip it; the next list heals it
+                        # by re-parsing the conversation file.
+                        continue
+        except (OSError, ValueError):
+            # Missing or unparseable index file -> rebuilt from a full scan.
+            index = {}
+        self._index = index
+        return index
+
+    def _write_index(self) -> None:
+        """Atomically persist the in-memory index. Caller holds ``_lock``.
+
+        Same-dir temp file, flushed and fsynced before ``os.replace()`` swaps
+        it into place (P0 pattern from ClipboardStore._write_items_to), so
+        readers never observe a partially-written index.
+        """
+        if self._index is None:
+            return
+        tmp_path = self._index_path + ".tmp"
+        try:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            fd = os.open(tmp_path, flags, 0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump({"version": 1, "conversations": self._index}, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self._index_path)
+            try:
+                dir_fd = os.open(self._dir, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass
+        finally:
+            # Clean up the temp file on failure (or no-op after a successful replace).
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
+                pass
+
+    def _set_index_entry(self, entry: Dict[str, Any]) -> None:
+        """Insert/update one metadata entry in the index and persist it."""
+        with self._lock:
+            index = self._load_index()
+            if index.get(entry["id"]) == entry:
+                return  # identical entry: skip the redundant durable write
+            index[entry["id"]] = entry
+            try:
+                self._write_index()
+            except OSError:
+                pass  # durable write failed; mtime reconciliation heals later
+
+    def _drop_index_entry(self, conv_id: str) -> None:
+        """Remove one metadata entry from the index and persist it."""
+        with self._lock:
+            index = self._load_index()
+            if conv_id not in index:
+                return
+            del index[conv_id]
+            try:
+                self._write_index()
+            except OSError:
+                pass
+
+    @staticmethod
+    def _entry_from_conversation(conv: Conversation, mtime: float) -> Dict[str, Any]:
+        """Build an index entry from a live Conversation object."""
+        return {
+            "id": conv.id,
+            "title": conv.title or "(untitled)",
+            "summary": conv.summary or "",
+            "message_count": len(conv.messages),
+            "updated_at": conv.updated_at,
+            "mtime": mtime,
+        }
+
+    @staticmethod
+    def _entry_from_data(data: Any, mtime: float) -> Optional[Dict[str, Any]]:
+        """Build an index entry from a parsed conversation JSON dict (fallback)."""
+        if not isinstance(data, dict):
+            return None
+        conv_id = data.get("id")
+        if not isinstance(conv_id, str) or not conv_id:
+            return None
+        messages = data.get("messages")
+        message_count = len(messages) if isinstance(messages, list) else 0
+        try:
+            updated_at = int(data.get("updated_at") or 0)
+        except (TypeError, ValueError):
+            updated_at = 0
+        return {
+            "id": conv_id,
+            "title": data.get("title") or "(untitled)",
+            "summary": data.get("summary") or "",
+            "message_count": message_count,
+            "updated_at": updated_at,
+            "mtime": mtime,
+        }
+
+    @staticmethod
+    def _parse_meta(path: str) -> Optional[Dict[str, Any]]:
+        """Extract metadata from a single conversation JSON file."""
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            return ConversationStore._entry_from_data(data, os.path.getmtime(path))
+        except Exception:
+            return None
+
+    def _full_scan(self) -> Dict[str, Dict[str, Any]]:
+        """Rebuild the whole index by parsing every conversation file.
+
+        This is the original list_conversations() scan, kept as the fallback
+        for missing/corrupt/unindexed states.
+        """
+        index = {}
+        if not os.path.isdir(self._dir):
+            return index
+        for fname in sorted(os.listdir(self._dir), reverse=True):
+            if not fname.endswith(".json"):
+                continue
+            entry = self._parse_meta(os.path.join(self._dir, fname))
+            if entry is not None:
+                index[entry["id"]] = entry
+        return index
 
     def create_conversation(self, title: str = "", system_prompt: str = "",
                             model_config: Optional[Dict[str, str]] = None) -> Conversation:
@@ -791,17 +973,23 @@ class ConversationStore:
         if bump_updated_at:
             conv.updated_at = int(time.time() * 1000)
         path = self._path(conv.id)
-        with open(path, "w") as f:
-            json.dump({
-                "id": conv.id,
-                "title": conv.title,
-                "system_prompt": conv.system_prompt,
-                "messages": [asdict(m) for m in conv.messages],
-                "summary": conv.summary,
-                "model_config_snapshot": conv.model_config_snapshot,
-                "created_at": conv.created_at,
-                "updated_at": conv.updated_at,
-            }, f, indent=2, ensure_ascii=False)
+        write_json_private(path, {
+            "id": conv.id,
+            "title": conv.title,
+            "system_prompt": conv.system_prompt,
+            "messages": [asdict(m) for m in conv.messages],
+            "summary": conv.summary,
+            "model_config_snapshot": conv.model_config_snapshot,
+            "created_at": conv.created_at,
+            "updated_at": conv.updated_at,
+        }, indent=2)
+        # Maintain the metadata index after a successful file write. Best-effort:
+        # a failed index write is healed by mtime reconciliation on the next list.
+        try:
+            entry = self._entry_from_conversation(conv, os.path.getmtime(path))
+            self._set_index_entry(entry)
+        except OSError:
+            pass
 
     def load_conversation(self, conv_id: str) -> Optional[Conversation]:
         path = self._path(conv_id)
@@ -834,6 +1022,7 @@ class ConversationStore:
                 os.remove(path)
         except OSError:
             pass
+        self._drop_index_entry(conv_id)
 
     def fork_conversation(self, src_conv_id: str, new_title: Optional[str] = None) -> Optional[Conversation]:
         """Create a complete copy of an existing conversation with a new conversation ID."""
@@ -861,26 +1050,76 @@ class ConversationStore:
             return None
 
     def list_conversations(self) -> List[Dict[str, Any]]:
-        summaries = []
+        """List conversation metadata, served from the durable index.
+
+        Steady state (warm index): one directory listing + one stat per
+        conversation file, no JSON parsing. Files that are missing, unindexed
+        or modified on disk since the last index write are reconciled
+        individually; a corrupt/missing index triggers a full-scan rebuild.
+        Returns the same {"id","title","summary","message_count","updated_at"}
+        dicts as before, ordered by updated_at descending.
+        """
         if not os.path.isdir(self._dir):
-            return summaries
-        for fname in sorted(os.listdir(self._dir), reverse=True):
-            if not fname.endswith(".json"):
-                continue
-            path = os.path.join(self._dir, fname)
-            try:
-                with open(path) as f:
-                    data = json.load(f)
-                summaries.append({
-                    "id": data.get("id", ""),
-                    "title": data.get("title", "(untitled)"),
-                    "summary": data.get("summary", ""),
-                    "message_count": len(data.get("messages", [])),
-                    "updated_at": data.get("updated_at", 0),
-                })
-            except Exception:
-                pass
-        return summaries
+            return []
+        with self._lock:
+            index = self._load_index()
+            conv_files = {}
+            for fname in os.listdir(self._dir):
+                if not fname.endswith(".json"):
+                    continue
+                path = os.path.join(self._dir, fname)
+                if os.path.isfile(path):
+                    conv_files[fname[:-5]] = path
+            file_ids = set(conv_files)
+            changed = False
+
+            # Drop index entries whose conversation file no longer exists —
+            # never return stale metadata for a missing conversation.
+            for conv_id in list(index):
+                if conv_id not in file_ids:
+                    del index[conv_id]
+                    changed = True
+
+            # Re-read files that are unindexed (external create) or modified
+            # since the last index write (external edit / crash between file
+            # and index writes). stat-only in the common case.
+            stale = set()
+            for conv_id, path in conv_files.items():
+                try:
+                    mtime = os.path.getmtime(path)
+                except OSError:
+                    continue
+                entry = index.get(conv_id)
+                if entry is None or abs((entry.get("mtime") or 0.0) - mtime) > 1e-6:
+                    stale.add(conv_id)
+            if stale:
+                for conv_id in stale:
+                    entry = self._parse_meta(conv_files[conv_id])
+                    if entry is not None:
+                        index[conv_id] = entry
+                    else:
+                        index.pop(conv_id, None)
+                changed = True
+
+            # Index unusable (corrupt/missing) but conversations exist:
+            # fall back to the full scan and rebuild the index.
+            if not index and conv_files:
+                index = self._full_scan()
+                self._index = index
+                changed = True
+
+            if changed:
+                try:
+                    self._write_index()
+                except OSError:
+                    pass
+
+            entries = sorted(index.values(),
+                             key=lambda e: e.get("updated_at", 0), reverse=True)
+            return [
+                {k: e[k] for k in ("id", "title", "summary", "message_count", "updated_at")}
+                for e in entries
+            ]
 
 
 # ── Clipboard capture ─────────────────────────────────────────────────────────
@@ -1413,12 +1652,10 @@ class MemStore:
         self._build_index()
 
     def save(self):
-        os.makedirs(CONFIG_DIR, exist_ok=True)
         try:
-            with open(MEMORY_PATH, "w") as f:
-                json.dump({
-                    "items": [asdict(item) for item in self._items.values()]
-                }, f, indent=2, ensure_ascii=False)
+            write_json_private(MEMORY_PATH, {
+                "items": [asdict(item) for item in self._items.values()]
+            }, indent=2)
         except Exception as e:
             print(f"Error saving memory store: {e}", flush=True)
 
