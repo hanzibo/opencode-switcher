@@ -338,6 +338,54 @@ class TestResolveWebkitPackageBehavior(unittest.TestCase):
         self.assertEqual(self._resolve("emptydir"), "gir1.2-webkit2-4.1")
 
 
+class TestAptUpdateOrdering(unittest.TestCase):
+    """apt update must run before resolve_webkit_package in both install paths.
+
+    resolve_webkit_package consults ``apt-cache policy``; on a fresh install
+    with stale apt metadata the 4.1/4.0 candidates can be missing, so apt
+    update must happen first in the dpkg discovery path and the no-dpkg
+    fallback alike.
+    """
+
+    def test_apt_update_precedes_resolve_webkit(self):
+        body = _function_body("install_system_deps")
+        self.assertNotEqual(
+            body, "", "install_system_deps() must exist in install.sh"
+        )
+        code_lines = [
+            line
+            for line in body.splitlines()
+            if not line.lstrip().startswith("#")
+        ]
+        apt_idx = next(
+            (i for i, line in enumerate(code_lines) if "apt update" in line), -1
+        )
+        resolve_idx = next(
+            (i for i, line in enumerate(code_lines) if "resolve_webkit_package" in line),
+            -1,
+        )
+        self.assertGreaterEqual(
+            apt_idx, 0, "install_system_deps must run apt update"
+        )
+        self.assertGreaterEqual(
+            resolve_idx, 0, "install_system_deps must resolve the WebKit package"
+        )
+        self.assertLess(
+            apt_idx,
+            resolve_idx,
+            "apt update must run before resolve_webkit_package: stale metadata "
+            "hides 4.1/4.0 candidates on fresh installs",
+        )
+
+    def test_apt_update_runs_in_both_paths(self):
+        body = _function_body("install_system_deps")
+        self.assertGreaterEqual(
+            body.count("apt update"),
+            2,
+            "apt update must run in the dpkg discovery path and the no-dpkg fallback",
+        )
+
+
 class TestSupportedTerminals(unittest.TestCase):
     """install.sh must share one terminal array matching system/launcher.py."""
 
@@ -388,6 +436,67 @@ class TestWebKit2Check(unittest.TestCase):
         self.assertNotEqual(body, "", "check_webkit2() must exist")
         self.assertIn("'4.1'", body, "check_webkit2 must probe binding 4.1 first")
         self.assertIn("'4.0'", body, "check_webkit2 must fall back to binding 4.0")
+
+
+class TestAppWebKitBindingFallback(unittest.TestCase):
+    """App views must probe WebKit2 4.1 with a 4.0 fallback, mirroring install.sh.
+
+    Per ``docs/plans/install-script-dependencies-plan.md`` the installer may
+    select ``gir1.2-webkit2-4.0`` on 4.0-only systems. The runtime imports in
+    ``views/ai_chat_panel.py`` and ``views/clipboard_panel.py`` must therefore
+    guard ``gi.require_version("WebKit2", "4.1")`` with a ``ValueError``
+    fallback to 4.0 instead of hard-requiring 4.1 — otherwise startup fails
+    on 4.0-only systems even though the installer installed 4.0.
+    """
+
+    _APP_WEBKIT_FILES = [
+        os.path.join(_ROOT_DIR, "views", "ai_chat_panel.py"),
+        os.path.join(_ROOT_DIR, "views", "clipboard_panel.py"),
+    ]
+
+    # Static pattern matching the module-level guard used elsewhere in the
+    # project (see dialogs/image_preview_dialog.py).
+    _GUARDED_FALLBACK_RE = re.compile(
+        r'try:\n'
+        r'\s+gi\.require_version\("WebKit2", "4\.1"\)\n'
+        r'except ValueError:\n'
+        r'\s+try:\n'
+        r'\s+gi\.require_version\("WebKit2", "4\.0"\)\n'
+        r'\s+except ValueError:\n'
+        r'\s+pass',
+        re.M,
+    )
+
+    def test_view_modules_guard_webkit2_fallback(self):
+        for path in self._APP_WEBKIT_FILES:
+            self.assertTrue(
+                os.path.isfile(path), f"{path} not found"
+            )
+            text = _read(path)
+            self.assertRegex(
+                text,
+                self._GUARDED_FALLBACK_RE,
+                f"{path} must probe WebKit2 4.1 with a 4.0 fallback",
+            )
+
+    def test_view_modules_have_no_bare_4_1_require(self):
+        for path in self._APP_WEBKIT_FILES:
+            text = _read(path)
+            self.assertEqual(
+                text.count('gi.require_version("WebKit2", "4.1")'),
+                1,
+                f"{path} must require WebKit2 4.1 exactly once (inside the guard)",
+            )
+            self.assertEqual(
+                text.count('gi.require_version("WebKit2", "4.0")'),
+                1,
+                f"{path} must require WebKit2 4.0 exactly once (as the fallback)",
+            )
+
+    def test_fallback_preserves_pangocairo_require(self):
+        path = os.path.join(_ROOT_DIR, "views", "clipboard_panel.py")
+        text = _read(path)
+        self.assertIn('gi.require_version("PangoCairo", "1.0")', text)
 
 
 class TestSafeImportConstruction(unittest.TestCase):
@@ -501,6 +610,13 @@ class TestValidateInstallDirBehavior(unittest.TestCase):
         self.assertNotEqual(self._validate(self.home + "/").returncode, 0)
         self.assertNotEqual(self._validate("~").returncode, 0)
 
+    def test_rejects_relative_paths(self):
+        # ~ 展开后必须是绝对路径：相对路径会被误用于 rm -rf / pgrep
+        for path in ("tmp/test", "relative/path", "install", "foo", "a/b/c"):
+            self.assertNotEqual(
+                self._validate(path).returncode, 0, f"must reject relative {path!r}"
+            )
+
     def test_rejects_dot_components(self):
         for path in ("/home/../x", "../x", "/tmp/./x", "/tmp/x/.", "."):
             self.assertNotEqual(
@@ -541,6 +657,106 @@ class TestInstallDirValidationDispatch(unittest.TestCase):
             r"uninstall\s*\)\s*validate_install_dir\s*;\s*cmd_uninstall",
             "uninstall must validate INSTALL_DIR first",
         )
+
+
+class TestSystemdGuards(unittest.TestCase):
+    """Missing systemd user sessions must warn, never abort install/uninstall."""
+
+    def test_enable_service_guards_systemctl(self):
+        body = _function_body("enable_service")
+        self.assertNotEqual(body, "", "enable_service() must exist in install.sh")
+        self.assertIn("command -v systemctl", body, "systemctl must be probed")
+        self.assertIn("daemon-reload", body)
+        self.assertIn("warn", body, "absence of systemd must warn, not abort")
+        self.assertIn(
+            "return 0", body, "skipping service registration must not abort install"
+        )
+
+    def test_uninstall_daemon_reload_guarded(self):
+        body = _function_body("cmd_uninstall")
+        self.assertNotEqual(body, "", "cmd_uninstall() must exist in install.sh")
+        code_lines = [
+            line
+            for line in body.splitlines()
+            if not line.lstrip().startswith("#")
+        ]
+        reload_lines = [
+            line
+            for line in code_lines
+            if "daemon-reload" in line and "systemctl" in line
+        ]
+        self.assertTrue(reload_lines, "cmd_uninstall must daemon-reload")
+        for line in reload_lines:
+            self.assertTrue(
+                "command -v systemctl" in line or "||" in line,
+                f"daemon-reload must be guarded: {line!r}",
+            )
+        # The guard must sit before the file cleanup so a missing systemd user
+        # session cannot abort removal of installed files.
+        rm_idx = next(
+            i for i, line in enumerate(code_lines) if line.lstrip().startswith("rm ")
+        )
+        reload_idx = next(
+            i for i, line in enumerate(code_lines) if "daemon-reload" in line
+        )
+        self.assertLess(reload_idx, rm_idx)
+
+
+class TestInstallFilesStaleCleanup(unittest.TestCase):
+    """install_files must remove stale app files before copying (reinstall)."""
+
+    def _cleanup_block(self):
+        """The rm block: from the first rm line up to the first cp line."""
+        body = _function_body("install_files")
+        self.assertNotEqual(body, "", "install_files() must exist in install.sh")
+        lines = body.splitlines()
+        start = next(
+            i for i, line in enumerate(lines) if line.lstrip().startswith("rm ")
+        )
+        end = next(
+            i for i, line in enumerate(lines) if line.lstrip().startswith("cp ")
+        )
+        return "\n".join(lines[start:end])
+
+    def test_cleanup_covers_all_copied_targets(self):
+        body = _function_body("install_files")
+        copied = set(
+            re.findall(r'cp(?: -r)? "\$SCRIPT_DIR/([^"/]+)"\s+"\$INSTALL_DIR', body)
+        )
+        self.assertGreaterEqual(
+            len(copied), 10, "install_files must copy the application files"
+        )
+        block = self._cleanup_block()
+        for name in copied:
+            self.assertIn(
+                f'"$INSTALL_DIR/{name}"',
+                block,
+                f"stale {name} must be removed before re-copy",
+            )
+
+    def test_cleanup_preserves_venv(self):
+        self.assertNotIn(
+            '"$INSTALL_DIR/venv"',
+            self._cleanup_block(),
+            "cleanup must never remove the venv",
+        )
+
+    def test_cleanup_never_removes_install_dir_root(self):
+        self.assertNotIn(
+            'rm -rf "$INSTALL_DIR"',
+            self._cleanup_block(),
+            "cleanup must not remove INSTALL_DIR itself",
+        )
+
+    def test_cleanup_precedes_copy(self):
+        lines = _function_body("install_files").splitlines()
+        rm_idx = next(
+            i for i, line in enumerate(lines) if line.lstrip().startswith("rm ")
+        )
+        cp_idx = next(
+            i for i, line in enumerate(lines) if line.lstrip().startswith("cp ")
+        )
+        self.assertLess(rm_idx, cp_idx, "stale files must be removed before copying")
 
 
 class TestUninstallProcessHardening(unittest.TestCase):

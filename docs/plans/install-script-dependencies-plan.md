@@ -58,6 +58,23 @@ Supported terminals must match `system/launcher.py`: `ptyxis`,
   against the exact `$INSTALL_DIR/main.py` — INSTALL_DIR is never expanded
   into a pgrep regex and only processes whose cmdline contains the exact
   install path are killed.
+- **apt update before WebKit resolution**: `install_system_deps()` runs
+  `sudo apt update -qq` *before* `resolve_webkit_package()` in both the
+  dpkg discovery path and the no-`dpkg` fallback. `resolve_webkit_package`
+  consults `apt-cache policy`; on fresh installs with stale apt metadata the
+  4.1/4.0 candidates are missing, so the refresh must come first.
+- **Absolute INSTALL_DIR required**: after `~` expansion and trailing-slash
+  stripping, `validate_install_dir()` rejects any path not starting with `/`
+  (relative paths would be misinterpreted by `rm -rf`/pgrep).
+- **systemd absence tolerated**: `enable_service()` probes `systemctl` and
+  warns instead of aborting when no systemd user session exists (install
+  still completes); `cmd_uninstall`'s `daemon-reload` is likewise guarded so
+  a missing session cannot abort the file cleanup that follows.
+- **Reinstall stale-file cleanup**: `install_files()` removes only the
+  application files/directories it copies (main.py, package dirs, run.sh,
+  toggle, icon, katex) before re-copying, so `cp -r` reinstall leaves no
+  ghost files. The `venv` and user data (`~/.config`, `~/.cache`) are never
+  touched; `rm -rf "$INSTALL_DIR"` only happens in `cmd_uninstall`.
 
 The uninstall path is otherwise intentionally unchanged; system packages are
 not removed during application uninstall.

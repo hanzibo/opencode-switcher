@@ -107,8 +107,8 @@ py_import_ok() {
     esac
 }
 
-# 校验 INSTALL_DIR：展开开头的 ~、去除尾部斜杠；拒绝空值、根目录 /、
-# 主目录 $HOME、含 . / .. 路径分量的值以及非法字符。
+# 校验 INSTALL_DIR：展开开头的 ~、去除尾部斜杠；拒绝空值、相对路径、
+# 根目录 /、主目录 $HOME、含 . / .. 路径分量的值以及非法字符。
 # 必须在任何 install/uninstall 使用之前调用（防止 rm -rf / pgrep 等误伤）。
 validate_install_dir() {
     case "$INSTALL_DIR" in
@@ -123,6 +123,14 @@ validate_install_dir() {
         error "INSTALL_DIR 不能为空"
         exit 1
     fi
+    # ~ 展开与去尾斜杠之后必须是绝对路径（相对路径会被误用于 rm -rf/pgrep）
+    case "$INSTALL_DIR" in
+        /*) ;;
+        *)
+            error "INSTALL_DIR 必须是绝对路径: $INSTALL_DIR"
+            exit 1
+            ;;
+    esac
     if [ "$INSTALL_DIR" = "/" ]; then
         error "INSTALL_DIR 不能是根目录 /"
         exit 1
@@ -208,18 +216,32 @@ check_deps() {
 # ── Install system deps ───────────────────────
 install_system_deps() {
     local missing_sys=()
-    # 先解析 WebKit2 包（4.1 优先、4.0 回退），dpkg 探测与回退安装共用
+
+    # 无 dpkg 回退路径：先刷新 apt 元数据，再解析 WebKit2 包。
+    # resolve_webkit_package 依赖 apt-cache policy 的候选信息，元数据过期时
+    # 4.1/4.0 候选会缺失，全新安装将无法正确解析版本。
+    if ! command -v dpkg &>/dev/null; then
+        info "未检测到 dpkg，正在尝试直接执行安装程序..."
+        sudo apt update -qq
+        local webkit_pkg
+        webkit_pkg="$(resolve_webkit_package)"
+        local pkg_list=("${SYS_PACKAGES[@]}")
+        if [ -n "$webkit_pkg" ]; then
+            pkg_list+=("$webkit_pkg")
+        fi
+        sudo apt install -y -qq "${pkg_list[@]}" 2>&1 | tail -1
+        return
+    fi
+
+    # dpkg 路径同样先 apt update 再 resolve：apt-cache policy 必须基于新鲜
+    # 元数据判断 4.1/4.0 可用性，否则全新安装可能解析到错误候选。
+    sudo apt update -qq
+
     local webkit_pkg
     webkit_pkg="$(resolve_webkit_package)"
     local pkg_list=("${SYS_PACKAGES[@]}")
     if [ -n "$webkit_pkg" ]; then
         pkg_list+=("$webkit_pkg")
-    fi
-
-    if ! command -v dpkg &>/dev/null; then
-        info "未检测到 dpkg，正在尝试直接执行安装程序..."
-        sudo apt update -qq && sudo apt install -y -qq "${pkg_list[@]}" 2>&1 | tail -1
-        return
     fi
 
     for pkg in "${pkg_list[@]}"; do
@@ -230,7 +252,6 @@ install_system_deps() {
 
     if [ ${#missing_sys[@]} -gt 0 ]; then
         info "安装系统依赖: ${missing_sys[*]}..."
-        sudo apt update -qq
         sudo apt install -y -qq "${missing_sys[@]}" 2>&1 | tail -1
         info "系统依赖安装完成"
     else
@@ -267,6 +288,23 @@ install_python_deps() {
 install_files() {
     info "安装文件到: $INSTALL_DIR"
     mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$APP_DIR" "$SYSD_DIR"
+
+    # 清理上一次安装的应用文件，避免 cp -r 重装后残留源中已删除的幽灵文件。
+    # 只删除本脚本复制的文件/目录；venv 虚拟环境与用户数据一律保留。
+    rm -rf "$INSTALL_DIR/views" \
+        "$INSTALL_DIR/dialogs" \
+        "$INSTALL_DIR/stores" \
+        "$INSTALL_DIR/ai_engine" \
+        "$INSTALL_DIR/system" \
+        "$INSTALL_DIR/tool_registry" \
+        "$INSTALL_DIR/ai_text_utils" \
+        "$INSTALL_DIR/mcp_integration" \
+        "$INSTALL_DIR/html_templates" \
+        "$INSTALL_DIR/katex"
+    rm -f "$INSTALL_DIR/main.py" \
+        "$INSTALL_DIR/run.sh" \
+        "$INSTALL_DIR/opencode-switcher-toggle" \
+        "$INSTALL_DIR/opencode-switcher.png"
 
     # Copy source files
     cp "$SCRIPT_DIR/main.py"                     "$INSTALL_DIR/"
@@ -334,9 +372,16 @@ EOF
 # ── Enable systemd service ────────────────────
 enable_service() {
     info "启用 systemd 用户服务..."
-    systemctl --user daemon-reload
-    systemctl --user enable --now opencode-switcher.service
-    info "服务已启动 (systemctl --user status opencode-switcher)"
+    if ! command -v systemctl &>/dev/null || ! systemctl --user daemon-reload 2>/dev/null; then
+        warn "未检测到可用的 systemd 用户会话，跳过服务注册（应用仍可手动启动）"
+        warn "可稍后手动启用: systemctl --user enable --now opencode-switcher.service"
+        return 0
+    fi
+    if systemctl --user enable --now opencode-switcher.service 2>/dev/null; then
+        info "服务已启动 (systemctl --user status opencode-switcher)"
+    else
+        warn "服务注册失败，可稍后手动启用: systemctl --user enable --now opencode-switcher.service"
+    fi
 }
 
 # ── Install command ───────────────────────────
@@ -399,13 +444,18 @@ cmd_uninstall() {
     # Stop and disable service
     if systemctl --user is-active --quiet opencode-switcher.service 2>/dev/null; then
         info "停止服务..."
-        systemctl --user stop opencode-switcher.service
+        systemctl --user stop opencode-switcher.service 2>/dev/null || \
+            warn "停止服务失败（systemd 用户会话不可用？），跳过"
     fi
     if systemctl --user is-enabled --quiet opencode-switcher.service 2>/dev/null; then
         info "禁用服务..."
-        systemctl --user disable opencode-switcher.service
+        systemctl --user disable opencode-switcher.service 2>/dev/null || \
+            warn "禁用服务失败（systemd 用户会话不可用？），跳过"
     fi
-    systemctl --user daemon-reload
+    # daemon-reload 失败（无 systemd 用户会话）不中止卸载，仅告警
+    if ! command -v systemctl &>/dev/null || ! systemctl --user daemon-reload 2>/dev/null; then
+        warn "未检测到可用的 systemd 用户会话，跳过 daemon-reload（不影响文件清理）"
+    fi
 
     # 终止手动启动的进程（非 systemd 管理）。先粗筛候选 PID，再用固定字符串
     # 核对 /proc cmdline 是否包含精确的安装路径，避免 INSTALL_DIR 中的
