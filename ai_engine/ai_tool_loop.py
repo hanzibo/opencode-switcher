@@ -106,6 +106,7 @@ def _execute_tool_call(tc: ToolCallData, ctx: ToolLoopContext) -> str:
 
     # 2. 尝试路由为 MCP 工具
     from mcp_integration import parse_mcp_tool_name
+    from mcp_integration.gtk_asyncio_bridge import CoroutineCancelledError
     mcp_server, mcp_tool = parse_mcp_tool_name(tc_name)
 
     if mcp_server != "builtin" and ctx.mcp_client_manager is not None:
@@ -113,8 +114,11 @@ def _execute_tool_call(tc: ToolCallData, ctx: ToolLoopContext) -> str:
         try:
             args = json.loads(tc.arguments)
             return ctx.mcp_client_manager.bridge.run_coroutine(
-                ctx.mcp_client_manager.call_tool(mcp_server, mcp_tool, args)
+                ctx.mcp_client_manager.call_tool(mcp_server, mcp_tool, args),
+                cancel_event=ctx.cancel_event,
             )
+        except CoroutineCancelledError:
+            return tool_registry.TOOL_CANCELLED
         except Exception as e:
             return f"❌ MCP 工具 '{tc_name}' 执行异常: {e}"
 
@@ -134,8 +138,11 @@ def _execute_tool_call(tc: ToolCallData, ctx: ToolLoopContext) -> str:
             try:
                 args = json.loads(tc.arguments)
                 return ctx.mcp_client_manager.bridge.run_coroutine(
-                    ctx.mcp_client_manager.call_tool(mcp_servers[tc_name], tc_name, args)
+                    ctx.mcp_client_manager.call_tool(mcp_servers[tc_name], tc_name, args),
+                    cancel_event=ctx.cancel_event,
                 )
+            except CoroutineCancelledError:
+                return tool_registry.TOOL_CANCELLED
             except Exception as e:
                 return f"❌ MCP 工具 '{tc_name}' 执行异常: {e}"
 

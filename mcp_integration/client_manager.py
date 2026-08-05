@@ -166,6 +166,19 @@ class MCPClientManager:
         for name in names:
             await self.disconnect(name)
 
+    async def shutdown(self) -> None:
+        """显式关闭所有 MCP 连接（幂等）。
+
+        供面板 destroy / 应用退出路径调用：
+        - 取消所有自动重连定时器（含未连接 Server 的孤儿定时器）。
+        - 依次断开全部会话，经既有 transport.disconnect 逻辑终止并
+          回收 stdio 子进程。
+        无会话时为无操作，可重复调用。
+        """
+        for name in list(self._reconnect_timers):
+            self._cancel_reconnect(name)
+        await self.disconnect_all()
+
     async def reconnect(self, name: str) -> Tuple[bool, str]:
         """重新连接指定 Server。"""
         config = self._configs.get(name)
@@ -252,8 +265,20 @@ class MCPClientManager:
 
     # ── 工具调用 ────────────────────────────────────────────────
 
-    async def call_tool(self, server_name: str, tool_name: str, arguments: dict) -> str:
-        """在指定 Server 上调用工具。"""
+    async def call_tool(
+        self,
+        server_name: str,
+        tool_name: str,
+        arguments: dict,
+        timeout: Optional[float] = None,
+    ) -> str:
+        """在指定 Server 上调用工具。
+
+        Parameters
+        ----------
+        timeout : float, optional
+            工具调用超时秒数，默认使用 MCPSession 的有界默认值（60s）。
+        """
         session = self._sessions.get(server_name)
         if session is None:
             return f"❌ MCP Server '{server_name}' 未连接"
@@ -261,12 +286,17 @@ class MCPClientManager:
             return f"❌ MCP Server '{server_name}' 已断开"
 
         try:
-            return await session.call_tool(tool_name, arguments)
+            return await session.call_tool(tool_name, arguments, timeout=timeout)
         except Exception as e:
             logger.error("调用 %s:%s 失败: %s", server_name, tool_name, e)
             return f"❌ MCP 工具 '{server_name}:{tool_name}' 执行异常: {e}"
 
-    async def call_tool_by_name(self, tool_name: str, arguments: dict) -> str:
+    async def call_tool_by_name(
+        self,
+        tool_name: str,
+        arguments: dict,
+        timeout: Optional[float] = None,
+    ) -> str:
         """仅按工具名在所有已连接 Server 中查找并调用。"""
         for server_name, session in self._sessions.items():
             if not session.is_connected:
@@ -274,7 +304,7 @@ class MCPClientManager:
             try:
                 tools = await self.list_tools(server_name)
                 if any(t.get("name") == tool_name for t in tools):
-                    return await session.call_tool(tool_name, arguments)
+                    return await session.call_tool(tool_name, arguments, timeout=timeout)
             except Exception:
                 continue
         return f"❌ 找不到 MCP 工具 '{tool_name}'"
