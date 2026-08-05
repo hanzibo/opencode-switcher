@@ -1434,7 +1434,13 @@ class AIChatPanel(Gtk.Box):
             self._ai_html_cache[self._ai_conversation_id] = self._last_rendered_html
 
     def _finalize_after_tool_loop(self, req_id: int):
-        """Finalize after tool loop ends (used when tool iteration limit hit)."""
+        """Finalize after tool loop ends (used when tool iteration limit hit).
+
+        归属守卫：反查 ``_ai_running_convs`` 失败时回退到当前会话，但必须取回当前
+        会话的运行态校验 ``req_id``——/retry 会在同一会话内弹掉旧状态并启动更新
+        ``req_id`` 的新流，被取代的旧完成回调一律不得终结/持久化新流（见
+        ``_on_llm_api_finished`` 的同款守卫）。
+        """
         conv_id = None
         for cid, st in list(self._ai_running_convs.items()):
             if st.get("req_id") == req_id:
@@ -1442,13 +1448,15 @@ class AIChatPanel(Gtk.Box):
                 break
 
         if not conv_id:
+            # 反查失败 → 回退到当前会话；取回其运行态（可能已被同会话内更新的流接管）
             conv_id = self._ai_conversation_id
-            state = None
+            state = self._ai_running_convs.get(conv_id) if conv_id else None
         else:
             state = self._ai_running_convs.get(conv_id)
 
-        # 看门狗已提前清理，安全返回
-        if conv_id and state is None and not self._ai_cancelling:
+        # 看门狗已提前清理（state 被弹掉）或被取代的旧完成（state 属于更新的流）：
+        # 一律安全返回，不触碰新流状态（不标记 streaming=False、不渲染、不保存）。
+        if state is None or state.get("req_id") != req_id:
             return
 
         if state:
@@ -1882,7 +1890,13 @@ class AIChatPanel(Gtk.Box):
         self._ai_webview.run_javascript(js_code, None, None)
 
     def _on_llm_api_finished(self, req_id: int):
-        """Called when LLM stream completes with a pure text response (no tool_calls)."""
+        """Called when LLM stream completes with a pure text response (no tool_calls).
+
+        归属守卫：反查 ``_ai_running_convs`` 失败时回退到当前会话，但必须取回当前
+        会话的运行态校验 ``req_id``——/retry 会在同一会话内弹掉旧状态并启动更新
+        ``req_id`` 的新流，被取代的旧完成回调不得终结/持久化新流（不得标记
+        streaming=False、追加 assistant 文本、渲染或保存）。
+        """
         conv_id = None
         for cid, st in list(self._ai_running_convs.items()):
             if st.get("req_id") == req_id:
@@ -1890,13 +1904,15 @@ class AIChatPanel(Gtk.Box):
                 break
 
         if not conv_id:
+            # 反查失败 → 回退到当前会话；取回其运行态（可能已被同会话内更新的流接管）
             conv_id = self._ai_conversation_id
-            state = None
+            state = self._ai_running_convs.get(conv_id) if conv_id else None
         else:
             state = self._ai_running_convs.get(conv_id)
 
-        # 看门狗已提前清理（conv_id 存在但 state 已弹），安全返回
-        if conv_id and state is None and not self._ai_cancelling:
+        # 看门狗已提前清理（state 被弹掉）或被取代的旧完成（state 属于更新的流）：
+        # 一律安全返回，不触碰新流状态（不标记 streaming=False、不渲染、不保存）。
+        if state is None or state.get("req_id") != req_id:
             return
 
         assistant_text = state["current_assistant_text"] if state else self._ai_current_assistant_text
@@ -4352,6 +4368,9 @@ class AIChatPanel(Gtk.Box):
             tool_registry.set_bash_cwd(prev_cwd, session_key=self._ai_conversation_id)
         except Exception:
             self._ai_conversation_id = uuid4().hex[:12]
+
+        # 锚定新空白会话的 created_at：不得继承上一个会话的陈旧值（/new、/delete、Ctrl+L 均经此共享重置路径）
+        self._ai_conversation_created_at = int(time.time() * 1000)
 
         self._ai_input_area.set_no_show_all(False)
         self._ai_input_area.show_all()

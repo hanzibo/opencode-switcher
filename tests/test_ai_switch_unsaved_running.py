@@ -820,5 +820,55 @@ class TestInitialPanelFirstMessageCreatedAt(unittest.TestCase):
         )
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  (j) start_new_conversation /new 重置路径必须重新锚定 created_at
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestStartNewConversationReanchorsCreatedAt(unittest.TestCase):
+    """bug：``start_new_conversation`` 调用 ``_reset_ai_panel_silent`` 生成新
+    ``_ai_conversation_id`` 时未重新锚定 ``_ai_conversation_created_at``，导致
+    /new 开启的新会话继承上一个会话的陈旧时间戳，违反分支元数据不变式，并影响
+    其后可见/后台持久化的 created_at 落盘。
+    """
+
+    def test_start_new_conversation_reanchors_created_at(self):
+        panel = _make_panel()
+        panel._ai_conversation_id = "prev-id"
+        panel._ai_messages = [{"role": "user", "content": "上一个会话的消息"}]
+        panel._ai_conversation_created_at = 999  # 陈旧值：不得被新会话继承
+        panel._ai_running_convs = {}
+        panel._ai_html_cache = {}
+        # 打桩重路径（渲染/配置快照），被测逻辑集中在 created_at 重新锚定
+        with mock.patch.object(
+            AIChatPanel, "_load_webview_html", lambda self, html: None
+        ), mock.patch.object(
+            AIChatPanel, "_snapshot_system_prompt", lambda self: None
+        ):
+            AIChatPanel.start_new_conversation(panel)
+
+        self.assertNotEqual(
+            panel._ai_conversation_id, "prev-id",
+            "start_new_conversation 必须生成全新会话 id",
+        )
+        self.assertNotEqual(
+            panel._ai_conversation_created_at, 999,
+            "/new 新会话不得继承上一个会话的陈旧 created_at（当前 → FAIL）",
+        )
+        self.assertNotEqual(
+            panel._ai_conversation_created_at, 0,
+            "/new 新会话 created_at 必须非 0（已锚定）",
+        )
+        now = int(time.time() * 1000)
+        self.assertGreaterEqual(
+            panel._ai_conversation_created_at, now - 10000,
+            "重新锚定的 created_at 必须接近当前时间（不得为陈旧时间戳）",
+        )
+        self.assertLessEqual(
+            panel._ai_conversation_created_at, now,
+            "重新锚定的 created_at 不得晚于当前时间",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
