@@ -75,6 +75,23 @@ Supported terminals must match `system/launcher.py`: `ptyxis`,
   toggle, icon, katex) before re-copying, so `cp -r` reinstall leaves no
   ghost files. The `venv` and user data (`~/.config`, `~/.cache`) are never
   touched; `rm -rf "$INSTALL_DIR"` only happens in `cmd_uninstall`.
+- **INSTALL_DIR ≠ SCRIPT_DIR**: `validate_install_dir()` canonicalizes both
+  `INSTALL_DIR` (when it already exists, via `cd -P && pwd -P`, resolving
+  symlinks) and `SCRIPT_DIR` and rejects equality before any install/uninstall
+  use. Without this guard, pointing `INSTALL_DIR` at the source tree lets
+  `install_files()`' stale cleanup and `cmd_uninstall`'s `rm -rf` delete the
+  entire repo. Valid absolute custom paths (including symlinks to existing
+  directories) are preserved and resolved to their physical path.
+- **Dual-version WebKit status hint**: the `cmd_status` binding-missing hint
+  no longer advertises `gir1.2-webkit2-4.1` alone; it now names both 4.1
+  (primary) and 4.0 (fallback for 4.0-only systems), mirroring
+  `check_webkit2`'s apt hint so a 4.0-only machine is not told to install an
+  unavailable package.
+- **EOF-safe keep-data prompt**: `cmd_uninstall` reads `keep_data` via
+  `read -r keep_data || keep_data="y"`. A bare `read` returns nonzero on EOF
+  (empty stdin) and, under `set -euo pipefail`, would abort the uninstall
+  before the user-data section runs; the guard makes EOF default to keeping
+  user data ("y").
 
 The uninstall path is otherwise intentionally unchanged; system packages are
 not removed during application uninstall.

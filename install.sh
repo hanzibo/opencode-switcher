@@ -149,6 +149,19 @@ validate_install_dir() {
             exit 1
             ;;
     esac
+
+    # 规范化 INSTALL_DIR 与 SCRIPT_DIR（已存在时解析符号链接/物理路径），
+    # 再比较二者：INSTALL_DIR 指向源码树时，install_files 的清理块和
+    # cmd_uninstall 的 rm -rf 会删除整个源码目录。此检查必须在任何
+    # install/uninstall 使用 INSTALL_DIR 之前完成。
+    if [ -d "$INSTALL_DIR" ]; then
+        INSTALL_DIR="$(cd -P "$INSTALL_DIR" && pwd -P)"
+    fi
+    SCRIPT_DIR="$(cd -P "$SCRIPT_DIR" && pwd -P)"
+    if [ "$INSTALL_DIR" = "$SCRIPT_DIR" ]; then
+        error "INSTALL_DIR 不能等于脚本源码目录 (SCRIPT_DIR): $SCRIPT_DIR"
+        exit 1
+    fi
     return 0
 }
 
@@ -507,7 +520,8 @@ cmd_uninstall() {
         echo ""
         warn "是否保留剪切板历史等用户数据？"
         echo -n "  输入 y 保留, n 删除 [y]: "
-        read -r keep_data
+        # EOF（无输入）默认保留数据：set -e 下裸 read 遇 EOF 返回非零会中止卸载
+        read -r keep_data || keep_data="y"
         if [ "$keep_data" = "n" ] || [ "$keep_data" = "N" ]; then
             rm -rf "$HOME/.config/opencode-switcher" 2>/dev/null
             rm -rf "$HOME/.cache/opencode-switcher" 2>/dev/null
@@ -613,7 +627,7 @@ cmd_status() {
     if wk=$(check_webkit2 2>/dev/null); then
         echo -e "    ${GREEN}✔${NC} WebKit2 运行时绑定 (${wk})"
     else
-        echo -e "    ${RED}✘${NC} WebKit2 运行时绑定 缺失 — 运行: sudo apt install gir1.2-webkit2-4.1"
+        echo -e "    ${RED}✘${NC} WebKit2 运行时绑定 缺失 — 运行: sudo apt install gir1.2-webkit2-4.1（4.0-only 系统请改用 gir1.2-webkit2-4.0）"
     fi
 
     # Check Python dependencies

@@ -116,6 +116,9 @@ def _run_install_fn(name, argv=(), env_extra=None):
         raise AssertionError(f"function {name} not found in install.sh")
     env = dict(os.environ)
     env.update(env_extra or {})
+    # SCRIPT_DIR is derived from $0 in install.sh; expose the real source dir so
+    # extracted helpers that compare INSTALL_DIR against it behave identically.
+    env.setdefault("SCRIPT_DIR", _ROOT_DIR)
     arrays = "".join(
         f"{n}=({' '.join(items)})\n" for n, items in _top_level_arrays().items()
     )
@@ -605,6 +608,42 @@ class TestValidateInstallDirBehavior(unittest.TestCase):
         self.assertNotEqual(self._validate("/").returncode, 0)
         self.assertNotEqual(self._validate("//").returncode, 0)
 
+    def test_accepts_symlink_to_existing_dir(self):
+        # Symlinked custom paths are preserved and resolved to the physical path,
+        # so the SCRIPT_DIR equality guard cannot be bypassed via a link.
+        target = os.path.join(self.tmp.name, "custom-target")
+        os.makedirs(target, exist_ok=True)
+        link = os.path.join(self.tmp.name, "custom-link")
+        os.symlink(target, link)
+        r = self._validate(link)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, os.path.realpath(target))
+
+    def test_rejects_script_source_dir(self):
+        # INSTALL_DIR equal to the source tree would let install_files' stale
+        # cleanup and cmd_uninstall's rm -rf delete the whole repo.
+        r = self._validate(_ROOT_DIR)
+        self.assertNotEqual(
+            r.returncode, 0, "INSTALL_DIR equal to SCRIPT_DIR must be rejected"
+        )
+
+    def test_rejects_script_source_dir_trailing_slash(self):
+        r = self._validate(_ROOT_DIR + "/")
+        self.assertNotEqual(
+            r.returncode, 0, "trailing-slash variant of SCRIPT_DIR must be rejected"
+        )
+
+    def test_rejects_script_source_dir_via_symlink(self):
+        with tempfile.TemporaryDirectory() as d:
+            link = os.path.join(d, "repo-link")
+            os.symlink(_ROOT_DIR, link)
+            r = self._validate(link)
+            self.assertNotEqual(
+                r.returncode,
+                0,
+                "symlink resolving to SCRIPT_DIR must be rejected",
+            )
+
     def test_rejects_home_dir(self):
         self.assertNotEqual(self._validate(self.home).returncode, 0)
         self.assertNotEqual(self._validate(self.home + "/").returncode, 0)
@@ -643,6 +682,19 @@ class TestInstallDirValidationDispatch(unittest.TestCase):
     def test_validate_install_dir_defined(self):
         self.assertNotEqual(
             _function_body("validate_install_dir"), "", "validate_install_dir() must exist"
+        )
+
+    def test_validate_rejects_script_dir_equality(self):
+        body = _function_body("validate_install_dir")
+        self.assertIn(
+            "SCRIPT_DIR",
+            body,
+            "validate_install_dir must compare INSTALL_DIR against SCRIPT_DIR",
+        )
+        self.assertIn(
+            'INSTALL_DIR" = "$SCRIPT_DIR"',
+            body,
+            "validate_install_dir must reject INSTALL_DIR equal to SCRIPT_DIR",
         )
 
     def test_validate_before_install_and_uninstall(self):
@@ -814,6 +866,77 @@ class TestStatusSystemDependencies(unittest.TestCase):
         body = _function_body("cmd_status")
         self.assertIn("gir1.2-webkit2-4.1", body)
         self.assertIn("gir1.2-webkit2-4.0", body)
+
+    def test_status_binding_missing_hint_is_dual_version(self):
+        # The binding-missing hint must not advertise only 4.1: on 4.0-only
+        # systems that would tell the user to install an unavailable package.
+        body = _function_body("cmd_status")
+        hint_lines = [
+            line
+            for line in body.splitlines()
+            if "WebKit2 运行时绑定" in line and "缺失" in line
+        ]
+        self.assertTrue(
+            hint_lines, "cmd_status must print a WebKit2 binding-missing hint"
+        )
+        for line in hint_lines:
+            self.assertIn("4.1", line, f"hint must keep 4.1 as primary: {line!r}")
+            self.assertIn(
+                "4.0",
+                line,
+                f"binding-missing hint must mention the 4.0 fallback: {line!r}",
+            )
+
+
+class TestUninstallKeepDataPrompt(unittest.TestCase):
+    """The uninstall keep-data prompt must not abort on EOF under ``set -e``.
+
+    A bare ``read -r keep_data`` returns nonzero on EOF (empty stdin), which
+    with ``set -euo pipefail`` would terminate the uninstall before the
+    user-data section runs. The guard defaults to keeping user data ("y").
+    """
+
+    def test_read_guarded_for_eof(self):
+        body = _function_body("cmd_uninstall")
+        self.assertNotEqual(body, "", "cmd_uninstall() must exist")
+        read_lines = [line for line in body.splitlines() if "read -r keep_data" in line]
+        self.assertEqual(
+            len(read_lines),
+            1,
+            "cmd_uninstall must read keep_data exactly once",
+        )
+        self.assertIn(
+            "||", read_lines[0], f"read must be EOF-guarded: {read_lines[0]!r}"
+        )
+        self.assertIn(
+            'keep_data="y"',
+            read_lines[0],
+            "EOF must default to keeping user data",
+        )
+
+    def test_eof_defaults_to_keep(self):
+        r = subprocess.run(
+            [
+                _BASH,
+                "-c",
+                'set -euo pipefail\nread -r keep_data || keep_data="y"\nprintf "%s" "$keep_data"',
+            ],
+            input="",
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "y")
+
+    def test_unguarded_read_aborts_on_eof(self):
+        # Regression contrast: the unguarded form fails under set -e.
+        r = subprocess.run(
+            [_BASH, "-c", 'set -euo pipefail\nread -r keep_data\nprintf "%s" "$keep_data"'],
+            input="",
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(r.returncode, 0)
 
 
 class TestInstallerSyntax(unittest.TestCase):
