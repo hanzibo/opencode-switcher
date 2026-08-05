@@ -20,6 +20,10 @@
   磁盘 ``created_at``（守卫测试，当前通过——修复不得破坏磁盘路径语义）。
 - (e) ``_get_sorted_conversations`` 必须包含未落盘的流式会话
   （``navigate_conversation`` 能定位目标的前提，锚定测试，当前通过）。
+- (h) 后台流结束（``_render_background_conversation``）对磁盘上不存在的会话
+  落盘时，``created_at``/``system_prompt`` 必须来自运行态 ``state``（当前：
+  ``conv is None`` 分支硬编码 ``system_prompt=""`` + ``created_at=now`` → FAIL）；
+  已落盘会话则必须保留磁盘元数据（守卫测试，当前通过）。
 
 复用既有无头假面板模式：``AIChatPanel.__new__`` + 桩属性 + 假 WebView
 （同 tests/test_ai_switch_back_restore.py）。
@@ -671,6 +675,93 @@ class TestStartNewConversationAnchorsCreatedAt(unittest.TestCase):
         self.assertLessEqual(
             panel._ai_conversation_created_at, now,
             "锚定的 created_at 不得晚于当前时间",
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  (h) 背景流结束落盘：created_at/system_prompt 元数据（核心 bug 3）
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestBackgroundFinishedMetadataForUnsaved(unittest.TestCase):
+    """bug：``_render_background_conversation`` 对磁盘上不存在的背景会话
+    硬编码 ``system_prompt=""`` 与 ``created_at=now``。
+
+    后台会话流结束走 ``_render_background_conversation``（见
+    ``_on_llm_api_finished`` / ``_finalize_after_tool_loop``）：``conv is None``
+    分支新建 ``Conversation`` 时当前把 ``system_prompt`` 写死为空串、
+    ``created_at`` 写死为当前时间——切走时后台流完成的会话一旦落盘即为错误
+    元数据（丢失状态里的快照值）。
+    """
+
+    def test_background_finish_persists_running_created_at_and_system_prompt(self):
+        """未落盘背景会话流结束保存：created_at/system_prompt 必须来自运行态。
+
+        走真实 ``_render_background_conversation`` + 记录型 store；convA 只存在于
+        ``_ai_running_convs``，磁盘 store 无此 id（当前：硬编码空串/now → FAIL）。
+        """
+        panel = _make_panel()
+        st = _streaming_state(
+            created_at=1700000000000,
+            system_prompt="未落盘背景会话的系统提示词快照",
+        )
+        store = _RecordingConversationStore({})  # convA 未落盘
+        panel._conversation_store = store
+        panel._ai_running_convs = {"convA": st}
+        panel._ai_html_cache = {}
+
+        AIChatPanel._render_background_conversation(panel, "convA", st["messages"], st)
+
+        saved_a = [c for c in store.saved if getattr(c, "id", None) == "convA"]
+        self.assertEqual(
+            len(saved_a), 1,
+            "后台流结束必须把未落盘会话真实落盘（真实 _render_background_conversation 链）",
+        )
+        saved = saved_a[0]
+        self.assertEqual(
+            saved.created_at, st["created_at"],
+            "持久化的 created_at 必须来自运行态（当前硬编码 now → FAIL）",
+        )
+        self.assertEqual(
+            saved.system_prompt, st["system_prompt"],
+            "持久化的 system_prompt 必须来自运行态（当前硬编码空串 → FAIL）",
+        )
+
+    def test_background_finish_keeps_ondisk_metadata(self):
+        """已落盘背景会话流结束：created_at/system_prompt 必须保留磁盘值。
+
+        守卫测试——修复只允许作用于 ``conv is None``（未落盘）分支，不得覆盖
+        磁盘路径语义（当前已通过，修复后仍须通过）。
+        """
+        panel = _make_panel()
+        st = _streaming_state(
+            created_at=1700000000000,
+            system_prompt="运行态提示词（磁盘存在时不得落盘）",
+        )
+        store = _RecordingConversationStore({
+            "convA": {
+                "messages": [{"role": "user", "content": "A 的问题"}],
+                "title": "已落盘会话",
+                "created_at": 1234567,
+                "system_prompt": "磁盘会话的系统提示词",
+            },
+        })
+        panel._conversation_store = store
+        panel._ai_running_convs = {"convA": st}
+        panel._ai_html_cache = {}
+
+        AIChatPanel._render_background_conversation(panel, "convA", st["messages"], st)
+
+        saved_a = [c for c in store.saved if getattr(c, "id", None) == "convA"]
+        self.assertEqual(len(saved_a), 1)
+        saved = saved_a[0]
+        self.assertEqual(
+            saved.created_at, 1234567,
+            "已落盘背景会话流结束 created_at 必须保留磁盘值（运行态不得覆盖）",
+        )
+        self.assertEqual(
+            saved.system_prompt, "磁盘会话的系统提示词",
+            "已落盘背景会话流结束 system_prompt 必须保留磁盘值（运行态不得覆盖）",
         )
 
 
