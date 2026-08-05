@@ -26,6 +26,7 @@
 """
 import os
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -177,17 +178,22 @@ class _FakeConversationStore:
         pass
 
 
-def _streaming_state(req_id=5):
+def _streaming_state(req_id=5, created_at=1700000000000,
+                     system_prompt="未落盘会话的系统提示词快照"):
     """正在流式的未落盘会话状态：含未解决的 bash 工具调用 + 推理文本。
 
     与 test_ai_switch_back_restore 的夹具同构；``response_div_added=True``
     表示切走前容器已渲染——切回时必须被 ``_rebind_active_stream`` 复位。
+    ``created_at``/``system_prompt`` 为会话级元数据：未落盘会话从运行态恢复
+    时必须以它们为准（生产修复将把它们写入 ``_ai_running_convs``）。
     """
     return {
         "streaming": True,
         "req_id": req_id,
         "request_key": ("ai", "convA", req_id),
         "cancel_event": threading.Event(),
+        "created_at": created_at,
+        "system_prompt": system_prompt,
         "messages": [
             {"role": "user", "content": "帮我分析一下 unsaved 会话"},
             {
@@ -361,6 +367,41 @@ class TestSwitchToUnsavedRunningConversation(unittest.TestCase):
             "切换后必须把缓存 HTML 推送到 WebView（当前提前 return 无任何 JS）",
         )
 
+    def test_switch_restores_created_at_and_system_prompt_from_running_state(self):
+        """未落盘流式会话切回：created_at/system_prompt 必须从运行态恢复。
+
+        当前 bug：``conv is None`` 时 ``_ai_conversation_created_at`` 残留上一个
+        磁盘会话的陈旧值、``_ai_system_prompt`` 被清空——流结束保存时会把错误
+        元数据落盘（见 (f) 的持久化断言）。
+        """
+        panel = _make_panel()
+        st = _streaming_state()
+        panel._ai_running_convs = {"convA": st}
+        panel._ai_conversation_id = "convB"
+        panel._ai_messages = [{"role": "user", "content": "B 的问题"}]
+        panel._ai_conversation_created_at = 999   # 陈旧值：不得被保留
+        panel._ai_system_prompt = ""              # 空白：不得被保留
+        panel._ai_streaming = False
+        panel._ai_html_cache = {
+            "convA": "<div id='content'>A 的部分流式渲染</div>",
+            "convB": "<div id='content'>B 的历史消息</div>",
+        }
+        panel._conversation_store = _FakeConversationStore({
+            "convB": {"messages": [{"role": "user", "content": "B 的问题"}],
+                      "created_at": 999},
+        })  # convA 未落盘 → load_conversation("convA") 返回 None
+
+        AIChatPanel._switch_to_conversation(panel, "convA")
+
+        self.assertEqual(
+            panel._ai_conversation_created_at, st["created_at"],
+            "未落盘流式会话切回后 created_at 必须从运行态恢复（不得残留陈旧值）",
+        )
+        self.assertEqual(
+            panel._ai_system_prompt, st["system_prompt"],
+            "未落盘流式会话切回后 system_prompt 必须从运行态恢复（不得被清空）",
+        )
+
 
 # ═══════════════════════════════════════════════════════════════════
 #  (b) navigate_conversation 键盘路径
@@ -462,13 +503,15 @@ class TestOnDiskStreamingCreatedAtPreserved(unittest.TestCase):
         panel._ai_messages = [{"role": "user", "content": "B 的问题"}]
         panel._ai_streaming = False
         panel._ai_conversation_created_at = 999
+        panel._ai_system_prompt = ""  # 面板侧空白：磁盘值必须优先
         panel._ai_html_cache = {
             "convA": "<div id='content'>A 的部分流式渲染</div>",
             "convB": "<div id='content'>B 的历史消息</div>",
         }
         panel._conversation_store = _FakeConversationStore({
             "convA": {"messages": [{"role": "user", "content": "A 的问题"}],
-                      "created_at": 1234567},
+                      "created_at": 1234567,
+                      "system_prompt": "磁盘会话的系统提示词"},
             "convB": {"messages": [{"role": "user", "content": "B 的问题"}],
                       "created_at": 999},
         })
@@ -478,6 +521,10 @@ class TestOnDiskStreamingCreatedAtPreserved(unittest.TestCase):
         self.assertEqual(
             panel._ai_conversation_created_at, 1234567,
             "流式会话切换后 created_at 必须保留磁盘值（不得被覆盖）",
+        )
+        self.assertEqual(
+            panel._ai_system_prompt, "磁盘会话的系统提示词",
+            "已落盘流式会话切换后 system_prompt 必须取磁盘值（运行态不得覆盖磁盘）",
         )
         self.assertEqual(panel._ai_conversation_id, "convA")
         self.assertIs(panel._ai_messages, st["messages"])
@@ -521,6 +568,109 @@ class TestSortedConversationsIncludeUnsavedRunning(unittest.TestCase):
         self.assertEqual(
             ids[0], "convA",
             "未落盘的流式会话必须按 updated_at 排在最前（最新）",
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  (f) 未落盘流式会话流结束保存：created_at/system_prompt 持久化（核心 bug 2）
+# ═══════════════════════════════════════════════════════════════════
+
+
+class _RecordingConversationStore(_FakeConversationStore):
+    """记录 save_conversation 调用的会话存储（断言实际持久化的元数据）。"""
+
+    def __init__(self, conversations, summaries=None):
+        super().__init__(conversations, summaries)
+        self.saved = []
+
+    def save_conversation(self, conv, bump_updated_at=True):
+        self.saved.append(conv)
+
+
+class TestStreamEndPersistsMetadataForUnsaved(unittest.TestCase):
+    """未落盘流式会话切回后流结束保存：created_at/system_prompt 必须正确落盘。
+
+    走真实 ``_save_current_conversation`` + 记录型 store：``_handle_stream_end``
+    收尾保存时若 ``_ai_conversation_created_at`` 残留陈旧值、``_ai_system_prompt``
+    为空，则落盘即为错误元数据（当前 commit 均发生 → FAIL）。
+    """
+
+    def test_stream_end_persists_restored_created_at_and_system_prompt(self):
+        panel = _make_panel()
+        # 绑定真实保存方法（同 test_ai_switch_back_restore 的 __get__ 模式）
+        panel._save_current_conversation = (
+            AIChatPanel._save_current_conversation.__get__(panel, AIChatPanel)
+        )
+        st = _streaming_state()
+        store = _RecordingConversationStore({})  # convA 未落盘
+        panel._conversation_store = store
+        panel._ai_running_convs = {"convA": st}
+        panel._ai_conversation_id = "convB"
+        panel._ai_conversation_created_at = 999  # 陈旧值：不得残留/落盘
+        panel._ai_messages = [{"role": "user", "content": "B 的问题"}]
+        panel._ai_system_prompt = ""             # 空白：不得落盘
+        panel._ai_streaming = False
+        panel._ai_request_id = 5
+        panel._ai_html_cache = {"convA": st["ai_markdown_text"]}
+
+        # 切到未落盘的流式会话（切换前保存 convB 是真实链的既有语义）
+        AIChatPanel._switch_to_conversation(panel, "convA")
+
+        # 流结束：真实保存链把当前 _ai_messages + 元数据落盘
+        AIChatPanel._handle_stream_end(panel, 5)
+
+        saved_a = [c for c in store.saved if getattr(c, "id", None) == "convA"]
+        self.assertEqual(
+            len(saved_a), 1,
+            "流结束后未落盘会话必须真实保存（真实 _save_current_conversation 链）",
+        )
+        saved = saved_a[0]
+        self.assertEqual(
+            saved.created_at, st["created_at"],
+            "持久化的 created_at 必须来自运行态（当前残留陈旧 999 → FAIL）",
+        )
+        self.assertEqual(
+            saved.system_prompt, st["system_prompt"],
+            "持久化的 system_prompt 必须来自运行态（当前被清空 → FAIL）",
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  (g) _start_new_conversation 锚定 created_at（缺失初始化）
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestStartNewConversationAnchorsCreatedAt(unittest.TestCase):
+    """bug：``_start_new_conversation`` 不设置 ``_ai_conversation_created_at``。
+
+    新对话若继承陈旧值/默认 0，其后任何保存（流结束）都会把错误时间戳落盘。
+    """
+
+    def test_start_new_conversation_anchors_created_at(self):
+        panel = _make_panel()
+        panel._ai_conversation_id = "stale-id"
+        panel._ai_conversation_created_at = 0  # 未初始化（默认值）
+        panel._ai_system_prompt = ""
+        # 打桩重路径（渲染/配置快照），被测逻辑集中在 created_at 锚定
+        with mock.patch.object(
+            AIChatPanel, "_load_webview_html", lambda self, html: None
+        ), mock.patch.object(
+            AIChatPanel, "_snapshot_system_prompt", lambda self: None
+        ):
+            AIChatPanel._start_new_conversation(panel, "新问题")
+
+        self.assertNotEqual(
+            panel._ai_conversation_created_at, 0,
+            "新对话必须锚定 created_at（当前 _start_new_conversation 未设置 → FAIL）",
+        )
+        now = int(time.time() * 1000)
+        self.assertGreaterEqual(
+            panel._ai_conversation_created_at, now - 10000,
+            "锚定的 created_at 必须接近当前时间（不得为陈旧时间戳）",
+        )
+        self.assertLessEqual(
+            panel._ai_conversation_created_at, now,
+            "锚定的 created_at 不得晚于当前时间",
         )
 
 

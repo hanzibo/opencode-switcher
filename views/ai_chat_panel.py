@@ -791,6 +791,8 @@ class AIChatPanel(Gtk.Box):
         # 新对话建立时快照当前 Settings 中的系统提示词；此后该对话沿用此快照，不受 Settings 热加载影响
         self._snapshot_system_prompt()
         self._ai_conversation_id = uuid4().hex[:12]
+        # 锚定新对话的创建时间戳：流结束保存时若无落盘会话则以此落盘（不得继承陈旧值/0）
+        self._ai_conversation_created_at = int(time.time() * 1000)
         self._ai_assistant_buffer = ""
         self._ai_current_assistant_text = ""
         self._ai_response_div_added = False
@@ -1264,6 +1266,9 @@ class AIChatPanel(Gtk.Box):
             "ai_markdown_text": markdown_text,
             "req_id": req_id,
             "request_key": request_key,
+            # 会话级元数据：未落盘会话切回时从运行态恢复 created_at/system_prompt
+            "created_at": getattr(self, "_ai_conversation_created_at", 0),
+            "system_prompt": getattr(self, "_ai_system_prompt", ""),
         }
         self._ai_running_convs[conv_id] = state
 
@@ -3961,9 +3966,15 @@ class AIChatPanel(Gtk.Box):
             self._ai_messages = st["messages"]
             self._ai_conversation_id = conv_id
             if conv:
+                # 已落盘会话：created_at/system_prompt 以磁盘为准（运行态不得覆盖）
                 self._ai_conversation_created_at = conv.created_at
-            self._ai_summary = conv.summary if conv else ""
-            self._ai_system_prompt = conv.system_prompt if conv else ""  # 旧对话加载自身快照，不读 Settings（无热加载）
+                self._ai_summary = conv.summary
+                self._ai_system_prompt = conv.system_prompt  # 旧对话加载自身快照，不读 Settings（无热加载）
+            else:
+                # 未落盘的流式会话：元数据从运行态恢复（无磁盘快照可读）
+                self._ai_summary = ""
+                self._ai_conversation_created_at = st.get("created_at", self._ai_conversation_created_at)
+                self._ai_system_prompt = st.get("system_prompt", "")
             
             cached_html = self._ai_html_cache.get(conv_id)
             if cached_html is not None:
