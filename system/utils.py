@@ -178,3 +178,29 @@ def request_window_focus(wm_class: str):
     except Exception as e:
         print(f"Failed to write focus request: {e}", flush=True)
 
+
+def preload_webkit_libs() -> None:
+    """后台预读 WebKit 共享库进 OS page cache。
+
+    冷启动（重启操作系统后）首次 spawn WebKitWebProcess 需要从磁盘读入
+    ~120MB 的 libwebkit2gtk/libjavascriptcoregtk，导致首次打开 AI 对话框
+    卡顿 1-2s。用 posix_fadvise(WILLNEED) 在启动阶段异步预读，
+    把冷 spawn 的磁盘 I/O 成本降到接近热缓存（实测 ~165ms）。
+    Best-effort：任何失败都静默忽略，绝不影响启动。
+    """
+    candidates = []  # type: ignore[var-annotated]
+    for ver in ("4.1", "4.0"):
+        for lib in ("libwebkit2gtk-%s.so.0", "libjavascriptcoregtk-%s.so.0"):
+            candidates.append(f"/usr/lib/x86_64-linux-gnu/{lib % ver}")
+        candidates.append(f"/usr/lib/x86_64-linux-gnu/webkit2gtk-{ver}/WebKitWebProcess")
+        candidates.append(f"/usr/lib/x86_64-linux-gnu/webkit2gtk-{ver}/WebKitNetworkProcess")
+    for path in candidates:
+        real = os.path.realpath(path)  # symlink → 真实大文件
+        if not os.path.isfile(real):
+            continue
+        try:
+            with open(real, "rb") as f:
+                os.posix_fadvise(f.fileno(), 0, 0, os.POSIX_FADV_WILLNEED)
+        except OSError:
+            pass  # best-effort
+

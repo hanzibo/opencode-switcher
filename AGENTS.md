@@ -18,7 +18,7 @@ Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipb
 
 **System deps**: `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-gi-cairo python3-pip python3-venv wl-clipboard gir1.2-webkit2-4.1` — webkit2gtk NOT in `install.sh` but required at runtime (AI panel crashes without it).
 
-**Tests ARE version-controlled**: all 17 `tests/test_*.py` files are tracked (only `tests/__pycache__/` is gitignored). No CI, no pre-commit, no pyproject — stdlib `unittest` is the only test runner, and there is no linter/formatter config (manual discipline). Run focused tests as `venv/bin/python3 -m unittest tests.test_session_store`; the venv uses `--system-site-packages` so a fresh clone needs system GTK deps installed first.
+**Tests ARE version-controlled**: all 41 `tests/test_*.py` files are tracked (only `tests/__pycache__/` is gitignored). No CI, no pre-commit, no pyproject — stdlib `unittest` is the only test runner, and there is no linter/formatter config (manual discipline). Run focused tests as `venv/bin/python3 -m unittest tests.test_session_store`; the venv uses `--system-site-packages` so a fresh clone needs system GTK deps installed first.
 
 **Commit convention**: `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `docs(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`, `tool-registry`, `clipboard`, `mcp`).
 
@@ -44,22 +44,22 @@ systemd/.desktop → run.sh → main.py (flock lock)
 | Module | Lines | Role |
 |--------|-------|------|
 | `main.py` | 312 | Entrypoint: flock lock, App(), Gtk.main() |
-| `views/` | ~8360 | Main UI views (`panel.py`, `clipboard_panel.py`, `ai_chat_panel.py`, `ai_popovers.py`) |
+| `views/` | ~8840 | Main UI views (`panel.py`, `clipboard_panel.py`, `ai_chat_panel.py`, `ai_popovers.py`). `ai_chat_panel.py` is the largest file in the repo (~4600 lines, streaming + suspend/resume logic) |
 | `dialogs/` | ~4270 | GTK dialogs (`settings_dialog.py`, `prompts_config_dialog.py`, `memory_manager_dialog.py`, etc.) |
-| `stores/` | ~2260 | Data persistence & state (`clipboard_store.py`, `session_store.py`, `skill_store.py`, `theme_config.py`, `delete_queue.py`) |
-| `ai_engine/` | ~1390 | AI LLM engine & rendering (`llm_client.py`, `ai_tool_loop.py`, `ai_html_template.py`, `render_pipeline.py`) |
-| `system/` | ~430 | System IPC & utilities (`hotkey.py`, `launcher.py`, `event_types.py`, `migrate_history.py`, `utils.py`, `inspect_db.py`) |
-| `mcp_integration/` | ~2170 | MCP protocol layer (JSON-RPC over stdio/http transports in `transports/`, GTK asyncio bridge) |
-| `tool_registry/` | ~6100 | AI tool executors — 28 tools across 13 schema modules (+`display.py`/`_state.py` helpers, no schemas) |
+| `stores/` | ~2630 | Data persistence & state (`clipboard_store.py`, `session_store.py`, `skill_store.py`, `theme_config.py`, `delete_queue.py`) |
+| `ai_engine/` | ~1610 | AI LLM engine & rendering (`llm_client.py`, `ai_tool_loop.py`, `ai_html_template.py`, `render_pipeline.py`) |
+| `system/` | ~640 | System IPC & utilities (`hotkey.py`, `launcher.py`, `event_types.py`, `migrate_history.py`, `utils.py`, `inspect_db.py`, `session_refresh.py`) |
+| `mcp_integration/` | ~2290 | MCP protocol layer (JSON-RPC over stdio/http transports in `transports/`, GTK asyncio bridge) |
+| `tool_registry/` | ~6350 | AI tool executors — 28 tools across 13 schema modules (+`display.py`/`_state.py` helpers, no schemas) |
 | `html_templates/` | ~1910 | Web assets (`chat.js`, `chat.css`) for WebKit WebView rendering |
-| `ai_text_utils/` | ~1280 | Pure text/markdown/math helpers (zero GTK dep) |
+| `ai_text_utils/` | ~1240 | Pure text/markdown/math helpers (zero GTK dep) |
 | `deploy/` | — | Templated `opencode-switcher.{service,desktop}` + icon; `install.sh` substitutes `__INSTALL_DIR__` via `sed` |
 
 ### Tool Registry (`tool_registry/`)
 
 28 AI tool executors dispatched via `TOOL_EXECUTORS` dict in `__init__.py`, assembled from per-module `TOOL_SCHEMAS` lists. Each tool call carries a `purpose` parameter (agent-generated description) displayed in the tool summary line.
 
-Key executor modules: `bash.py` (persistent bash session, sentinel protocol, interactive command blocking), `web.py` (`web_search`/`web_fetch` with Obscura browser), `filesystem.py` (safe-path guarded), `subagent.py` (parallel isolated execution), `memory.py` (long-term semantic memory → `agent_memory.json`), `mail.py` (read_qq_mail with credential caching), `gmail.py` (OAuth2 Gmail via `google-api-python-client`, creds in `gmail_credentials/`), `notification.py` (`send_notification`), `todo.py` (todo store → `todos.json`), `search.py`, `skill.py` (`read_skill`), `code_analysis.py` (`get_code_metrics`/`find_project_dependencies`/`parse_file_ast`).
+Key executor modules: `common.py` (`get_current_time`, `ask_user_question`), `bash.py` (persistent bash session, sentinel protocol, interactive command blocking), `web.py` (`web_search`/`web_fetch` with Obscura browser), `filesystem.py` (safe-path guarded), `subagent.py` (parallel isolated execution), `memory.py` (long-term semantic memory → `agent_memory.json`), `mail.py` (read_qq_mail with credential caching), `gmail.py` (OAuth2 Gmail via `google-api-python-client`, creds in `gmail_credentials/`), `notification.py` (`send_notification`), `todo.py` (todo store → `todos.json`), `search.py`, `skill.py` (`read_skill`), `code_analysis.py` (`get_code_metrics`/`find_project_dependencies`/`parse_file_ast`).
 
 ### Wayland Integration (GNOME Shell Extension)
 
@@ -93,9 +93,12 @@ These cause SIGSEGV if violated. Follow strictly.
 ## WebView Memory Optimization Patterns
 
 - **`terminate_web_process()` is the only effective memory release** for WebKit — `load_html` + cache clearing barely moves the ~200MB WebProcess RSS.
-- **MemoryPressureSettings must be set at `WebContext` construction time** — runtime changes are ignored. Configured in `ai_engine/ai_html_template.py:118-126` (`get_shared_web_context()`): 300MB limit, 5s poll, 0.2/0.4 thresholds; constants duplicated at `views/ai_chat_panel.py:50-53`.
+- **MemoryPressureSettings must be set at `WebContext` construction time** — runtime changes are ignored. Configured in `ai_engine/ai_html_template.py:188-209` (`get_shared_web_context()`): 300MB limit, 5s poll, 0.2/0.4 thresholds; constants duplicated at `views/ai_chat_panel.py:50-53`.
 - **Shared WebContext singleton**: all WebViews use `get_shared_web_context()` to avoid duplicate WebKitNet processes. Reuse it (never create a fresh context) when rebuilding a WebView.
 - **Suspend flow** (`views/ai_chat_panel.py`): 5s after panel hidden (`_SUSPEND_DELAY_SECONDS`), deferred while any conversation is still streaming → cache `_last_rendered_html` into `_ai_html_cache[conv_id]`, set `_webview_suspended`, then `terminate_web_process()`.
+- **First-open guard (`_ai_has_shown`)**: the suspend timer never starts until the panel has been shown to the user at least once (set in `open_ai_and_load_recent`/`show_panel`/`start_new_conversation`/`ask_llm_api`, NOT in `on_panel_shown`). Without it, the startup-time internal hide would kill the cold-spawned WebProcess and the first Ctrl+Shift+X after an OS reboot would pay a 1-2s cold spawn. **WebProcess spawn is the bottleneck**: measured ~2100ms first spawn vs ~165ms warm respawn vs ~60ms HTML load (Python side only ~40ms).
+- **Cold-start preload**: `system/utils.py:preload_webkit_libs()` (called from `main.py` startup thread) issues `posix_fadvise(WILLNEED)` on `libwebkit2gtk-4.1`/`libjavascriptcoregtk-4.1` (~120MB) + WebProcess binaries to warm the OS page cache after reboot. Best-effort, never blocks startup.
+- **Deferred recent-load**: `open_ai_and_load_recent` shows the panel synchronously, then loads the recent conversation via `GLib.idle_add(_load_recent_conversation_deferred)` (guarded by `_ai_recent_load_pending` + `get_visible()`) so the first frame paints before any spawn/render work.
 - **Resume flow**: `on_panel_shown` → `load_html(theme_template + cached_html)`, reset `_streaming_container_created` (DOM must be rebuilt).
 - **Crash vs suspend**: `_on_webview_crashed` skips the rebuild when `_webview_suspended` is set (intentional termination, not a crash); on real crashes it builds a new `WebKit2.WebView` reusing the shared context.
 
@@ -119,6 +122,7 @@ Heuristic regex scoring in `clipboard_store.py` (`classify_text()`, `detect_lang
 ### AI Assistant Streaming Architecture
 - Three-zone DOM structure in WebView (`.bubble-region` for reasoning/tool/answer).
 - Streaming: `_render_current_assistant_message()` calls JS `updateMessageContainer()` to incrementally update only the answer region. Poll interval: 200ms.
+- Token batching: Python buffers streaming tokens and flushes to JS every `_BATCH_FLUSH_MS`=60ms (`ai_chat_panel.py:151`, `_flush_token_buffer`) — a batching perf mechanism, distinct from the JS-side 200ms polling.
 - Non-streaming (conversation switch, full rebuilds): `_render_markdown()`.
 - **DOM Windowing**: Only last 10 rounds visible. `display:none` for older. Batch-load 3 more per click.
 - Background conversations: not interrupted by hiding panel or switching conversations. State cached in `self._ai_running_convs` by `conv_id`.
@@ -138,7 +142,7 @@ Dynamically add/remove `.subagent-status-bar` class on FlowBox before `hide()`/`
 - **Exclude**: archived sessions, subagent sessions (`title LIKE '%(@%subagent)%'`), non-existent dirs.
 - **Live detection**: `pgrep -f opencode` → scan `/proc/<pid>/cmdline` + `/proc/<pid>/cwd`. Filters out switcher itself.
 - **Status**: "live" (running), "recent" (<24h), "closed".
-- **Hard delete**: confirmed deletions shell out to `opencode session delete <session_id>` (`session_store.py:228`) instead of only hiding rows.
+- **Hard delete**: `delete_session()` (`session_store.py:279`) shells out to `opencode session delete <session_id>` first (cross-verifies the row is gone), falling back to `_soft_delete()` (line 254, sets `time_archived`) if the CLI is missing or fails — instead of only hiding rows.
 - **Known optimization**: `part` table snippet query reduced from 49,740→100 rows via `INNER JOIN + MAX(time_created)` subquery (`session_store.py`). Data transfer dropped ~97MB→0.03MB.
 
 ## Anti-Patterns (Must-Know)

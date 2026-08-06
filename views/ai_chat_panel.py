@@ -220,6 +220,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_current_draft = ""
         self._llm_client = _LLMHttpClient()
         self._ai_panel_visible_saved = False
+        self._ai_has_shown = False          # 首开守卫：从未显示过时不允许挂起杀 WebProcess
+        self._ai_recent_load_pending = False  # 方案3：延后加载防重入
         self._ai_cmd_popover = None
         self._ai_cmd_listbox = None
         self._ai_cmd_popover_visible = False
@@ -1221,6 +1223,7 @@ class AIChatPanel(Gtk.Box):
         ).start()
 
     def ask_llm_api(self, prompt_text: str, prompt_obj: Optional[CustomPrompt] = None):
+        self._ai_has_shown = True  # 用户级显示入口：解除首开挂起守卫
         # 初始化 MCP（幂等，仅首次有效）
         self._init_mcp()
 
@@ -4368,6 +4371,11 @@ class AIChatPanel(Gtk.Box):
         self._ai_entry.grab_focus()
 
     def on_panel_hidden(self):
+        # 首开守卫：面板从未显示给用户之前不启动挂起定时器。
+        # 避免重启系统后应用自启阶段内部 hide 触发挂起，把 __init__ 冷启动
+        # 拉起的 WebKitWebProcess 杀掉，导致首次 Ctrl+Shift+X 冷 spawn 卡顿 1-2s。
+        if not getattr(self, "_ai_has_shown", False):
+            return
         if getattr(self, "_suspend_timeout_id", 0) != 0:
             GLib.source_remove(self._suspend_timeout_id)
             self._suspend_timeout_id = 0
@@ -4378,6 +4386,11 @@ class AIChatPanel(Gtk.Box):
         print(f"[AI] suspend timer started: {self._SUSPEND_DELAY_SECONDS}s, running_convs={len(self._ai_running_convs)}", flush=True)
 
     def _suspend_webview_cb(self) -> bool:
+        # 防御：首开守卫——从未显示过时即使定时器意外存在也不杀进程
+        if not getattr(self, "_ai_has_shown", False):
+            self._suspend_timeout_id = 0
+            return False
+
         running_states = list(self._ai_running_convs.values())
         any_running = any(st.get("streaming", False) for st in running_states)
         if any_running:
@@ -4456,6 +4469,7 @@ class AIChatPanel(Gtk.Box):
 
     def start_new_conversation(self):
         """保存当前对话（若有内容），确保 AI 看盘面板可见，并启动一个全新的空白对话。"""
+        self._ai_has_shown = True  # 用户级显示入口：解除首开挂起守卫
         if not hasattr(self, "_ai_request_id"):
             self._ai_request_id = 0
         self._ai_request_id += 1
@@ -4484,6 +4498,7 @@ class AIChatPanel(Gtk.Box):
         self._reset_ai_panel_silent()
 
     def open_ai_and_load_recent(self):
+        self._ai_has_shown = True  # 用户级显示入口：解除首开挂起守卫
         self.on_panel_shown()
         self.separator.set_no_show_all(False)
         self.separator.show()
@@ -4492,20 +4507,36 @@ class AIChatPanel(Gtk.Box):
         self.show_all()
         self.queue_resize()
 
-        summaries = self._get_sorted_conversations()
-        if summaries:
-            latest_id = summaries[0].get("id")
-            if latest_id:
-                if latest_id == self._ai_conversation_id and self._ai_messages:
-                    self._ai_history_popover.refresh_dropdown()
-                    if self._ai_input_area.get_visible():
-                        self._ai_entry.grab_focus()
-                else:
-                    self._switch_to_conversation(latest_id)
-        else:
-            self._reset_ai_panel_silent()
+        # 方案3：内容加载延后到下一帧 idle——先让面板首帧绘制出来，
+        # 避免 WebProcess 冷 spawn / 会话渲染阻塞 UI 线程造成"卡一下"
+        if not self._ai_recent_load_pending:
+            self._ai_recent_load_pending = True
+            GLib.idle_add(self._load_recent_conversation_deferred)
+
+    def _load_recent_conversation_deferred(self) -> bool:
+        """首帧绘制后加载最近会话（原 open_ai_and_load_recent 的加载部分）。"""
+        self._ai_recent_load_pending = False
+        try:
+            if not self.get_visible():
+                return False  # 用户已关闭 AI 面板，跳过加载
+            summaries = self._get_sorted_conversations()
+            if summaries:
+                latest_id = summaries[0].get("id")
+                if latest_id:
+                    if latest_id == self._ai_conversation_id and self._ai_messages:
+                        self._ai_history_popover.refresh_dropdown()
+                        if self._ai_input_area.get_visible():
+                            self._ai_entry.grab_focus()
+                    else:
+                        self._switch_to_conversation(latest_id)
+            else:
+                self._reset_ai_panel_silent()
+        except Exception as e:
+            print(f"[AI] deferred recent load error: {e}", flush=True)
+        return False
 
     def show_panel(self):
+        self._ai_has_shown = True  # 用户级显示入口：解除首开挂起守卫
         self.on_panel_shown()
         self.set_no_show_all(False)
         self.show()

@@ -355,6 +355,14 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"opencode-switcher: permission sweep failed: {e}", flush=True)
 
+    # 冷启动预热：后台预读 WebKit 共享库进 page cache（与 App 初始化并行），
+    # 降低重启系统后首次打开 AI 对话框时 WebProcess 冷 spawn 的 1-2s 卡顿。
+    try:
+        from system.utils import preload_webkit_libs
+        threading.Thread(target=preload_webkit_libs, daemon=True).start()
+    except Exception:
+        pass  # best-effort，绝不阻塞启动
+
     app = App()
     try:
         app.run()
