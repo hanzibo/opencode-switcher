@@ -1,6 +1,7 @@
 import json
 import time
 import os
+import glob
 
 
 def relative_time(ts_ms: int) -> str:
@@ -186,16 +187,35 @@ def preload_webkit_libs() -> None:
     ~120MB 的 libwebkit2gtk/libjavascriptcoregtk，导致首次打开 AI 对话框
     卡顿 1-2s。用 posix_fadvise(WILLNEED) 在启动阶段异步预读，
     把冷 spawn 的磁盘 I/O 成本降到接近热缓存（实测 ~165ms）。
+    路径通过 glob 发现，兼容各发行版目录布局（Debian multiarch
+    /usr/lib/<arch>/、Fedora /usr/lib64/、Arch /usr/lib/、
+    /usr/libexec 等），并保留已知 x86_64 路径兜底。
     Best-effort：任何失败都静默忽略，绝不影响启动。
     """
-    candidates = []  # type: ignore[var-annotated]
+    candidates = []
     for ver in ("4.1", "4.0"):
-        for lib in ("libwebkit2gtk-%s.so.0", "libjavascriptcoregtk-%s.so.0"):
-            candidates.append(f"/usr/lib/x86_64-linux-gnu/{lib % ver}")
-        candidates.append(f"/usr/lib/x86_64-linux-gnu/webkit2gtk-{ver}/WebKitWebProcess")
-        candidates.append(f"/usr/lib/x86_64-linux-gnu/webkit2gtk-{ver}/WebKitNetworkProcess")
+        candidates += glob.glob(f"/usr/lib/*/libwebkit2gtk-{ver}.so.0*")
+        candidates += glob.glob(f"/usr/lib/*/libjavascriptcoregtk-{ver}.so.0*")
+        candidates += glob.glob(f"/usr/lib/*/webkit2gtk-{ver}/WebKitWebProcess")
+        candidates += glob.glob(f"/usr/lib/*/webkit2gtk-{ver}/WebKitNetworkProcess")
+        candidates += glob.glob(f"/usr/lib64/libwebkit2gtk-{ver}.so.0*")
+        candidates += glob.glob(f"/usr/lib64/webkit2gtk-{ver}/WebKitWebProcess")
+        candidates += glob.glob(f"/usr/lib/libwebkit2gtk-{ver}.so.0*")
+        candidates += glob.glob(f"/usr/lib/webkit2gtk-{ver}/WebKitWebProcess")
+        candidates += glob.glob(f"/usr/libexec/webkit2gtk-{ver}/WebKitWebProcess")
+    # 兜底：已知 Debian/x86_64 路径（与 glob 命中重复时由 realpath 去重）
+    candidates += [
+        "/usr/lib/x86_64-linux-gnu/libwebkit2gtk-4.1.so.0",
+        "/usr/lib/x86_64-linux-gnu/libjavascriptcoregtk-4.1.so.0",
+        "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitWebProcess",
+        "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/WebKitNetworkProcess",
+    ]
+    seen = set()
     for path in candidates:
         real = os.path.realpath(path)  # symlink → 真实大文件
+        if real in seen:
+            continue
+        seen.add(real)
         if not os.path.isfile(real):
             continue
         try:
