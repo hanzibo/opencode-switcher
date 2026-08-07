@@ -330,7 +330,8 @@ class AIChatPanel(Gtk.Box):
             on_dialog_shown=lambda: self.on_dialog_shown() if self.on_dialog_shown else None,
             on_dialog_hidden=lambda: self.on_dialog_hidden() if self.on_dialog_hidden else None,
             on_popover_shown=lambda: self.on_combo_popup_shown() if self.on_combo_popup_shown else None,
-            on_popover_closed=lambda: self.on_combo_popup_hidden() if self.on_combo_popup_hidden else None
+            on_popover_closed=lambda: self.on_combo_popup_hidden() if self.on_combo_popup_hidden else None,
+            on_delete_conversation_fn=self._delete_conversation_cleanup,
         )
 
 
@@ -2553,6 +2554,21 @@ class AIChatPanel(Gtk.Box):
             ask_state["event"].set()
             return
 
+    def _delete_conversation_cleanup(self, conv_id: str):
+        """删除指定会话时，关断后台流与工具循环，释放 CWD 绑定并弹出 HTML 缓存。"""
+        if not conv_id:
+            return
+        if conv_id in self._ai_running_convs:
+            self._cancel_streams_for_conversation(conv_id)
+        try:
+            from tool_registry.bash import close_bash_session
+            close_bash_session(conv_id)
+        except Exception:
+            pass
+        self._conversation_store.delete_conversation(conv_id)
+        self._ai_html_cache.pop(conv_id, None)
+
+    def _on_send_clicked(self, _btn=None):
         if self._ai_streaming or self._ai_cancelling:
             if not self._ai_cancelling:
                 # 首次点击暂停：发信号，不销毁状态，由后台线程回调清理
@@ -2603,13 +2619,7 @@ class AIChatPanel(Gtk.Box):
             buf.set_text("")
             conv_id = self._ai_conversation_id
             if conv_id:
-                try:
-                    from tool_registry.bash import close_bash_session
-                    close_bash_session(conv_id)
-                except Exception:
-                    pass
-                self._conversation_store.delete_conversation(conv_id)
-                self._ai_html_cache.pop(conv_id, None)
+                self._delete_conversation_cleanup(conv_id)
             self._reset_ai_panel_silent()
             return
         if text == "/fork":
@@ -4218,7 +4228,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_spinner.hide()
 
             cached_html = self._ai_html_cache.get(conv_id)
-            if cached_html is not None:
+            if cached_html is not None and getattr(self, "_webview_ready", False) and not getattr(self, "_webview_suspended", False):
                 self._last_rendered_html = cached_html
                 self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
                 js_code = f"updateContent({json.dumps(cached_html)});"

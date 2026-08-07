@@ -177,7 +177,8 @@ def _preserve_newlines(text: str) -> str:
     in_code_block = False
 
     for line in lines:
-        if line.strip().startswith('```'):
+        stripped = line.strip()
+        if re.match(r'^\s*>?\s*(`{3,}|~{3,})', line):
             in_code_block = not in_code_block
             out.append(line)
             continue

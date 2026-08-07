@@ -263,7 +263,8 @@ class HistoryPopover(Gtk.Popover):
                  on_dialog_shown: Optional[Callable[[], None]],
                  on_dialog_hidden: Optional[Callable[[], None]],
                  on_popover_shown: Optional[Callable[[], None]],
-                 on_popover_closed: Optional[Callable[[], None]]):
+                 on_popover_closed: Optional[Callable[[], None]],
+                 on_delete_conversation_fn: Optional[Callable[[str], None]] = None):
         super().__init__(relative_to=relative_to_widget)
         self.history_btn = history_btn
         self.history_btn_label = history_btn_label
@@ -272,6 +273,7 @@ class HistoryPopover(Gtk.Popover):
         self.get_sorted_conversations_fn = get_sorted_conversations_fn
         self.on_conversation_selected = on_conversation_selected
         self.on_clear_all_deleted_reset_fn = on_clear_all_deleted_reset_fn
+        self.on_delete_conversation_fn = on_delete_conversation_fn
         self.on_dialog_shown = on_dialog_shown
         self.on_dialog_hidden = on_dialog_hidden
         self.on_popover_shown_cb = on_popover_shown
@@ -405,7 +407,10 @@ class HistoryPopover(Gtk.Popover):
                 for s in summaries:
                     sid = s.get("id")
                     if sid:
-                        self.conversation_store.delete_conversation(sid)
+                        if self.on_delete_conversation_fn:
+                            self.on_delete_conversation_fn(sid)
+                        else:
+                            self.conversation_store.delete_conversation(sid)
                 self.on_clear_all_deleted_reset_fn()
             if self.on_dialog_hidden:
                 self.on_dialog_hidden()
@@ -488,7 +493,10 @@ class HistoryPopover(Gtk.Popover):
                 current_conv_id = self.get_current_conv_id_fn()
                 current_deleted = False
                 for conv_id in selected:
-                    self.conversation_store.delete_conversation(conv_id)
+                    if self.on_delete_conversation_fn:
+                        self.on_delete_conversation_fn(conv_id)
+                    else:
+                        self.conversation_store.delete_conversation(conv_id)
                     if conv_id == current_conv_id:
                         current_deleted = True
                 self._exit_edit_mode()

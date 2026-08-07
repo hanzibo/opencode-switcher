@@ -34,6 +34,8 @@ class TestUIPerformanceOptimizations(unittest.TestCase):
         panel._ai_messages = []
         panel._ai_conversation_id = None
         panel._ai_active_model_info = None
+        panel._webview_ready = True
+        panel._webview_suspended = False
         panel._conversation_store = MagicMock()
         panel._ai_spinner = MagicMock()
         panel._ai_entry = MagicMock()
