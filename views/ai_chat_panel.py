@@ -4211,6 +4211,7 @@ class AIChatPanel(Gtk.Box):
             self._ai_response_div_added = False
             self._ai_streaming = False
             
+            self._ai_recent_load_pending = False
             self._update_send_button(False)
             self._ai_entry.placeholder_text = ""
             self._ai_spinner.stop()
@@ -4639,6 +4640,7 @@ class AIChatPanel(Gtk.Box):
 
     def start_new_conversation(self):
         """保存当前对话（若有内容），确保 AI 看盘面板可见，并启动一个全新的空白对话。"""
+        self._ai_recent_load_pending = False  # 取消延迟加载任务，防止覆盖新新建的空白会话
         self._ai_has_shown = True  # 用户级显示入口：解除首开挂起守卫
         if not hasattr(self, "_ai_request_id"):
             self._ai_request_id = 0
@@ -4685,6 +4687,8 @@ class AIChatPanel(Gtk.Box):
 
     def _load_recent_conversation_deferred(self) -> bool:
         """首帧绘制后加载最近会话（原 open_ai_and_load_recent 的加载部分）。"""
+        if not getattr(self, "_ai_recent_load_pending", False):
+            return False  # 已被 start_new_conversation 取消，跳过加载最近会话
         self._ai_recent_load_pending = False
         try:
             if not self.get_visible():
