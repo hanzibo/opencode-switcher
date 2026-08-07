@@ -5,6 +5,7 @@ import os
 import re
 import html
 import tool_registry
+from tool_registry.notification import execute_send_notification
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gio", "2.0")
 gi.require_version("GdkPixbuf", "2.0")
@@ -2039,7 +2040,43 @@ class AIChatPanel(Gtk.Box):
 
         self._ai_running_convs.pop(conv_id, None)
         self._ai_cancelling = False
+
+        # 主对话 AI 正式回答输出结束 → 自动弹桌面通知。
+        # 仅在当前可见会话且本轮回有实际回答内容时触发；错误标志未消费时
+        # （_render_llm_error 已渲染错误气泡）跳过，避免"失败也弹完成"误导。
+        if (self._ai_conversation_id == conv_id
+                and (assistant_text or reasoning)
+                and getattr(self._ai_settings_store, "enable_answer_notification", True)):
+            error_pending = getattr(self, "_ai_error_pending_conv", None)
+            if error_pending == conv_id:
+                self._ai_error_pending_conv = None  # 消费错误标志，不通知
+            else:
+                self._notify_ai_answer_finished(assistant_text)
+
         self._handle_stream_end(req_id, conv_id)
+
+    def _notify_ai_answer_finished(self, answer_text: str) -> None:
+        """主对话 AI 正式回答结束后弹桌面通知（best-effort，后台线程不阻塞 UI）。
+
+        复用 tool_registry/notification.py 的 notify-send 封装；发送在 daemon
+        线程执行（notify-send 自身有 10s 超时），任何失败静默（仅打日志），
+        绝不阻塞主线程渲染/保存收尾。
+        """
+        try:
+            preview = re.sub(r"\s+", " ", answer_text or "").strip()[:80]
+            threading.Thread(
+                target=execute_send_notification,
+                kwargs={
+                    "summary": "🤖 AI 回答完成",
+                    "body": preview or "回答已生成",
+                    "urgency": "normal",
+                    "expire_time": 8000,
+                    "icon": "dialog-information",
+                },
+                daemon=True,
+            ).start()
+        except Exception as e:
+            print(f"[notify] 通知发送异常: {e}", flush=True)
 
     def _adjust_ai_entry_height(self):
         buf = self._ai_entry.get_buffer()
@@ -2810,6 +2847,8 @@ class AIChatPanel(Gtk.Box):
             return
         if self._ai_cancelling:
             return
+        # 错误标志：_on_llm_api_finished 通知前消费，避免 LLM 失败也弹"回答完成"。
+        self._ai_error_pending_conv = conv_id
         safe = html.escape(reason)
         self.append_html_to_webview(
             '<div class="chat-system-error">❌ ' + safe + '</div>'

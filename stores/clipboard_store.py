@@ -1507,6 +1507,7 @@ class AISettingsStore:
         self.disabled_tools: list[str] = []  # 禁用的内置工具名称列表
         # ── MCP Server 配置列表 ──
         self.mcp_servers: list[dict] = []  # MCPServerConfig.to_dict() 的列表
+        self.enable_answer_notification: bool = True  # 主对话 AI 正式回答结束后弹桌面通知
         self._load()
 
     def _load(self):
@@ -1532,6 +1533,7 @@ class AISettingsStore:
             self.disabled_skills = data.get("disabled_skills", [])
             self.disabled_tools = data.get("disabled_tools", [])
             self.mcp_servers = data.get("mcp_servers", [])
+            self.enable_answer_notification = data.get("enable_answer_notification", True)
         except Exception:
             pass  # 使用默认值
 
@@ -1542,7 +1544,7 @@ class AISettingsStore:
             fd = os.open(AI_SETTINGS_PATH, flags, 0o600)
             with os.fdopen(fd, "w") as f:
                 json.dump({
-                    "version": 5,
+                    "version": 6,
                     "soft_limit": self.soft_limit,
                     "trim_target": self.trim_target,
                     "enable_summary": self.enable_summary,
@@ -1559,6 +1561,7 @@ class AISettingsStore:
                     "disabled_skills": self.disabled_skills,
                     "disabled_tools": self.disabled_tools,
                     "mcp_servers": self.mcp_servers,
+                    "enable_answer_notification": self.enable_answer_notification,
                 }, f, indent=2)
         except Exception as e:
             print(f"Error saving AI settings: {e}", flush=True)
