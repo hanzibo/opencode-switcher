@@ -2081,6 +2081,15 @@ class AIChatPanel(Gtk.Box):
         self._ai_running_convs.pop(conv_id, None)
         self._ai_cancelling = False
 
+        if getattr(self, "_ai_cancel_watchdog_id", 0) != 0:
+            GLib.source_remove(self._ai_cancel_watchdog_id)
+            self._ai_cancel_watchdog_id = 0
+
+            model_info = getattr(self, "_ai_active_model_info", None)
+            _, _, _, display_name, _, _, _, _, _ = self._read_model_config(None, model_info)
+            if hasattr(self, "_ai_lbl") and self._ai_lbl:
+                self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
+
         # 无条件消费错误标志：即使本轮零输出（错误发生后文本为空），也须消费，
         # 避免残留到同一会话下一轮成功回答被误判"错误未消费"而吞掉通知。
         error_pending = getattr(self, "_ai_error_pending_conv", None)
@@ -2634,8 +2643,12 @@ class AIChatPanel(Gtk.Box):
                     self._ai_current_reasoning_text = ""
                 self._update_send_button(False, sensitive=False)
                 self._ai_entry.placeholder_text = "正在中止..."
-                # 看门狗：10 秒后若线程未响应则强制清理
-                GLib.timeout_add(10000, self._force_cleanup_after_cancel)
+                self._ai_spinner.stop()
+                self._ai_lbl.set_markup("<b>AI 助手看盘</b>\n<span size='small' foreground='#f43f5e'>(正在中止...)</span>")
+                # 看门狗：10 秒后若线程未响应则强制清理（移除可能存在的旧看门狗）
+                if getattr(self, "_ai_cancel_watchdog_id", 0) != 0:
+                    GLib.source_remove(self._ai_cancel_watchdog_id)
+                self._ai_cancel_watchdog_id = GLib.timeout_add(10000, self._force_cleanup_after_cancel)
             # 取消中忽略重复点击
             return
         buf = self._ai_entry.get_buffer()
@@ -2885,6 +2898,11 @@ class AIChatPanel(Gtk.Box):
         self._ai_entry.grab_focus()
         self._ai_spinner.stop()
         self._ai_spinner.hide()
+        self._ai_cancel_watchdog_id = 0
+        model_info = getattr(self, "_ai_active_model_info", None)
+        _, _, _, display_name, _, _, _, _, _ = self._read_model_config(None, model_info)
+        if hasattr(self, "_ai_lbl") and self._ai_lbl:
+            self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
         print("[cancel] 看门狗触发：强制清理取消状态", flush=True)
         return False  # 单次 GLib timeout
 
