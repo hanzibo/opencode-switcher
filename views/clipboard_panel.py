@@ -806,13 +806,7 @@ class ClipboardPanel(Gtk.Box):
                     
         # 2. Apply Tab Filter (only if active category is __clipboard__)
         if self._active_category_id == "__clipboard__" and self._active_tab_type != "all":
-            # Determine type of this item
-            item_type = getattr(item, "type", None)
-            if item_type is None:
-                # Classify ClipboardItem text on the fly if type is missing
-                item_text = getattr(item, "text", "") or ""
-                item_type = self._clip_store.classify_text(item_text)
-                
+            item_type = getattr(item, "type", None) or "Text"
             if item_type != self._active_tab_type:
                 return False
                 

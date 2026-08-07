@@ -309,7 +309,13 @@ class ClipboardStore:
         try:
             with open(path, "r") as f:
                 data = json.load(f)
-            return [ClipboardItem(**d) for d in data[-self._max_clipboard:]]
+            items = []
+            for d in data[-self._max_clipboard:]:
+                item = ClipboardItem(**d)
+                if not getattr(item, "type", None):
+                    item.type = classify_text(item.text or "") if not getattr(item, "image_path", None) else "Text"
+                items.append(item)
+            return items
         except (json.JSONDecodeError, TypeError):
             return None
 
@@ -335,14 +341,7 @@ class ClipboardStore:
     @staticmethod
     def _fsync_dir(path):
         """Best-effort fsync of the containing directory to persist the rename."""
-        try:
-            dir_fd = os.open(os.path.dirname(path) or ".", os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except OSError:
-            pass
+        pass
 
     @staticmethod
     def _write_items_to(path, items):
@@ -852,14 +851,6 @@ class ConversationStore:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(tmp_path, self._index_path)
-            try:
-                dir_fd = os.open(self._dir, os.O_RDONLY)
-                try:
-                    os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
-            except OSError:
-                pass
         finally:
             # Clean up the temp file on failure (or no-op after a successful replace).
             try:

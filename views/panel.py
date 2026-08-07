@@ -788,7 +788,6 @@ class SearchPanel:
     def _render(self):
         for child in self._listbox.get_children():
             self._listbox.remove(child)
-        gc.collect()
 
         self._update_all_count()
 

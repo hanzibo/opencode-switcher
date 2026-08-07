@@ -4219,7 +4219,6 @@ class AIChatPanel(Gtk.Box):
             cached_html = self._ai_html_cache.get(conv_id)
             if cached_html is not None:
                 self._last_rendered_html = cached_html
-                self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
                 js_code = f"updateContent({json.dumps(cached_html)});"
                 self._ai_webview.run_javascript(js_code, None, None)
             else:
