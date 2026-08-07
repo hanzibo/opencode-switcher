@@ -741,6 +741,8 @@ function _renderMath(element) {
                     }
 
                     _scrollToBottom();
+                    _reasoningCache = '';
+                    _reasoningPendingText = '';
                 }
 
                 /**

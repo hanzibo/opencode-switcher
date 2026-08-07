@@ -133,6 +133,11 @@ class TestGetHtmlTemplateContent(unittest.TestCase):
         self.assertIn('body class="light"', html)
         self.assertIn("PREFIX{color:red}", html)
 
+    def test_finish_reasoning_resets_reasoning_cache(self):
+        """finishReasoning 必须清空 _reasoningCache，防止最新思考泄漏到历史轮次。"""
+        html = get_html_template("dark", "", "")
+        self.assertIn("_reasoningCache = '';", html)
+
 
 if __name__ == "__main__":
     unittest.main()
