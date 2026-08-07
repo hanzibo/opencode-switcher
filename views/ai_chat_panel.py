@@ -3649,12 +3649,17 @@ class AIChatPanel(Gtk.Box):
                 total_chars += self._ESTIMATED_OVERHEAD_PER_MSG
             return int(total_chars / 2.5)
 
-    def _update_token_display(self):
-        """更新输入框下方的 token 计数显示。"""
-        n = self._estimate_token_count()
+    def _update_token_display(self, tokens: Optional[int] = None):
+        """更新输入框下方的 token 计数显示。
+
+        ``tokens`` 可由后台线程预计算后传入——大会话的 tiktoken 统计在冷启动
+        可达秒级，首次渲染走 ``_async_render_conversation`` 时避免主线程阻塞。
+        """
+        if tokens is None:
+            tokens = self._estimate_token_count()
         label = f"Shift+Enter \u21b5 \u00b7 Enter \u53d1\u9001"
-        if n > 0:
-            label = f"\U0001f4dd {n:,} tokens  |  " + label
+        if tokens > 0:
+            label = f"\U0001f4dd {tokens:,} tokens  |  " + label
         if hasattr(self, "_ai_hint_label"):
             self._ai_hint_label.set_text(label)
 
@@ -4046,6 +4051,7 @@ class AIChatPanel(Gtk.Box):
 
     def _switch_to_conversation(self, conv_id: str, save_current: bool = True):
         """Switch AI panel to display a different conversation by ID."""
+        self._ai_render_async = False  # 非异步分支走同步 token/渲染
         if not hasattr(self, "_ai_request_id"):
             self._ai_request_id = 0
         self._ai_request_id += 1
@@ -4149,9 +4155,12 @@ class AIChatPanel(Gtk.Box):
                 js_code = f"updateContent({json.dumps(cached_html)});"
                 self._ai_webview.run_javascript(js_code, None, None)
             else:
-                self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
+                # 首次渲染：重建 markdown + 转 HTML + token 统计较重
+                # （冷启动可达数秒，pygments/tiktoken 首次加载）。
+                # 放后台线程执行，主线程只做状态更新——面板立即响应，内容稍后弹出。
                 self._prune_messages()
-                self._render_markdown(self._ai_markdown_text)
+                self._ai_render_async = True
+                self._async_render_conversation(conv_id)
         
         self._refresh_subagent_bar()
 
@@ -4173,7 +4182,50 @@ class AIChatPanel(Gtk.Box):
             self._ai_history_popover.refresh_dropdown()
         except Exception as e:
             print(f"Failed to refresh dropdown in switch: {e}", flush=True)
-        self._update_token_display()
+        if getattr(self, "_ai_render_async", False):
+            # token 统计已由 _async_render_conversation 的 worker 计算，
+            # 由 _apply_async_render 更新——此处跳过同步估算（冷启动 tiktoken 可达秒级）
+            pass
+        else:
+            self._update_token_display()
+
+    def _async_render_conversation(self, conv_id: str) -> None:
+        """后台渲染会话 HTML 并统计 token，完成后 idle 回主线程应用。
+
+        首次打开/切换未缓存会话时，markdown+pygments 渲染与 tiktoken 统计
+        在冷启动可达数秒；移出主线程后面板立即响应，内容稍后显示。
+        """
+        messages = list(self._ai_messages)
+        show_details = self._show_tool_details
+
+        def _worker():
+            try:
+                text = _rebuild_markdown_from_messages(
+                    messages, show_details=show_details,
+                )
+                html = _markdown_to_html_safe(text, fallback_content="")
+                tokens = self._estimate_token_count(messages)
+                GLib.idle_add(self._apply_async_render, conv_id, html, text, tokens)
+            except Exception as e:
+                print(f"[AI] async render error: {e}", flush=True)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_async_render(self, conv_id: str, html: str, markdown_text: str, tokens: int) -> bool:
+        """主线程应用后台渲染结果（仅当用户仍停留在目标会话）。"""
+        self._ai_render_async = False
+        try:
+            if self._ai_conversation_id != conv_id:
+                return False  # 渲染期间用户已切换会话，丢弃过期结果
+            self._last_rendered_html = html
+            self._ai_html_cache[conv_id] = html
+            self._ai_markdown_text = markdown_text
+            js_code = f"updateContent({json.dumps(html)});"
+            self._ai_webview.run_javascript(js_code, None, None)
+            self._update_token_display(tokens)
+        except Exception as e:
+            print(f"[AI] apply async render error: {e}", flush=True)
+        return False
 
     def _get_sorted_conversations(self) -> List[Dict[str, Any]]:
         """Return all conversations sorted by updated_at descending (newest first)."""
@@ -4353,6 +4405,31 @@ class AIChatPanel(Gtk.Box):
 
     def is_visible(self) -> bool:
         return self.get_visible()
+
+    def is_webview_ready(self) -> bool:
+        """WebView 文档是否已装载就绪（load-changed FINISHED）。"""
+        return bool(getattr(self, "_webview_ready", False))
+
+    def wait_ai_webview_ready(self, timeout: float = 10.0) -> None:
+        """冷启动等待 WebKit 进程/文档就绪（App.run 注册热键前调用）。
+
+        重启系统后首次打开 AI 面板时，WebView 首次 realize/装载会与仍在
+        冷 spawn 的 WebKitWebProcess 做同步 IPC（实测冷缓存 ~2s），阻塞主线程
+        造成 1-2s 卡死。这里在启动阶段泵主循环，让 load-changed FINISHED
+        正常触发，保证用户首次打开时进程已就绪——realize 不再等 spawn。
+        超时则放弃（保持原行为，绝不无限等待）。
+        """
+        if self.is_webview_ready():
+            return
+        t0 = time.monotonic()
+        while not self.is_webview_ready():
+            if time.monotonic() - t0 > timeout:
+                print(f"[AI] wait webview ready: timeout after {timeout:.1f}s", flush=True)
+                return
+            while Gtk.events_pending():
+                Gtk.main_iteration_do(False)
+            time.sleep(0.01)
+        print(f"[AI] webview ready after {(time.monotonic()-t0)*1000:.0f}ms", flush=True)
 
     def on_panel_shown(self):
         # AI 面板显示时预先初始化 MCP，让第一轮对话就能用上工具

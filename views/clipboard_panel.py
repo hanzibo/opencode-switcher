@@ -1385,6 +1385,10 @@ class ClipboardPanel(Gtk.Box):
     def open_ai_and_load_recent(self):
         self._ai_chat_panel.open_ai_and_load_recent()
 
+    def wait_ai_webview_ready(self, timeout: float = 10.0):
+        """冷启动等待 AI 面板 WebView 就绪（App.run 注册热键前调用）。"""
+        self._ai_chat_panel.wait_ai_webview_ready(timeout=timeout)
+
     def navigate_conversation(self, direction: int):
         self._ai_chat_panel.navigate_conversation(direction)
 

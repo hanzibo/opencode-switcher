@@ -154,6 +154,13 @@ class App:
         GLib.idle_add(self._panel.toggle_ai)
 
     def run(self):
+        # 冷启动预热：等 WebKit 进程/文档就绪后再注册热键，避免用户重启系统后
+        # 首次打开 AI 面板时 WebView realize 撞上冷 spawn（~2s）阻塞主线程。
+        # 超时自动放弃（best-effort），绝不无限阻塞启动。
+        try:
+            self._clip_panel.wait_ai_webview_ready(timeout=10.0)
+        except Exception as e:
+            print(f"[AI] wait webview ready failed: {e}", flush=True)
         self._hotkey.start()
         Gtk.main()
 
@@ -360,6 +367,24 @@ if __name__ == "__main__":
     try:
         from system.utils import preload_webkit_libs
         threading.Thread(target=preload_webkit_libs, daemon=True).start()
+    except Exception:
+        pass  # best-effort，绝不阻塞启动
+
+    # AI 渲染依赖预热：markdown/pygments/tiktoken 首次加载在冷启动可达数秒，
+    # 后台预热避免首次打开 AI 面板时主线程渲染阻塞。
+    try:
+        def _prewarm_ai_render():
+            from ai_text_utils.markdown import _markdown_to_html_safe
+            _markdown_to_html_safe(
+                "**warm**\n```python\nprint(1)\n```\n```bash\necho hi\n```\n```json\n{}\n```",
+                fallback_content="",
+            )
+            try:
+                import tiktoken
+                tiktoken.get_encoding("cl100k_base").encode("warmup")
+            except Exception:
+                pass  # 无 tiktoken 时走字符启发式回退
+        threading.Thread(target=_prewarm_ai_render, daemon=True).start()
     except Exception:
         pass  # best-effort，绝不阻塞启动
 
