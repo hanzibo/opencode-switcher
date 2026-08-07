@@ -9,6 +9,7 @@ from ai_text_utils.markdown import (
     _escape_math,
     _unescape_math,
 )
+from ai_text_utils.render import _rebuild_markdown_from_messages
 from ai_text_utils.cleanup import (
     _close_unclosed_code_blocks,
     _strip_ai_markup,
@@ -117,6 +118,44 @@ class TestAITextUtils(unittest.TestCase):
         self.assertIn("<br>", preserved)
         # Inside code block <br> should NOT be added
         self.assertNotIn("print(1)<br>", preserved)
+
+    # ── 超长 bubble-region 保护（回归 5db9398） ──
+    # Python-Markdown 对超长 HTML 块（reasoning > ~500 字符）解析失败，导致
+    # 该块之前的所有内容丢失。P4 占位符保护 + 倒序恢复锁定此机制。
+
+    def test_markdown_to_html_safe_protects_long_bubble_region(self):
+        """超长 reasoning bubble-region：前置内容不丢失、无占位符残留。"""
+        long_html = (
+            '<div class="msg-row user" markdown="1">\n'
+            '<div class="msg-bubble user" markdown="1">前置消息</div>\n'
+            '</div>\n\n'
+            '<div class="bubble-region reasoning-region">\n'
+            '<div class="reasoning-badge complete"><span>Thought</span></div>\n'
+            '<div class="reasoning-content" style="display:none;">'
+            + ("x" * 3000) +
+            '</div>\n'
+            '</div>\n'
+            '<!-- /bubble-region -->\n'
+        )
+        html = _markdown_to_html_safe(long_html)
+        self.assertIn('class="msg-row user"', html)          # 前置内容不丢失
+        self.assertIn("reasoning-content", html)             # 长区域内容保留
+        self.assertNotIn("TOOL_RESULT_PLACEHOLDER", html)    # 无占位符残留
+
+    def test_rebuild_markdown_preserves_all_turns_with_long_reasoning(self):
+        """完整消息重建含超长 reasoning：所有 user 轮次保留（原始 bug 场景）。"""
+        messages = []
+        for i in range(5):
+            messages.append({"role": "user", "content": f"提问 {i}"})
+            messages.append({
+                "role": "assistant",
+                "content": f"回答 {i}" if i % 2 == 0 else "",
+                "reasoning_content": f"思考 {i} " + ("长" * 800 if i == 2 else "短" * 20),
+            })
+        md = _rebuild_markdown_from_messages(messages, show_details=True)
+        final = _markdown_to_html_safe(md)
+        self.assertEqual(final.count('class="msg-row user"'), 5)
+        self.assertNotIn("TOOL_RESULT_PLACEHOLDER", final)
 
 
 if __name__ == "__main__":

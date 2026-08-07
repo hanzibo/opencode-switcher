@@ -92,15 +92,6 @@ def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) ->
     return _unescape_math(html_text, placeholders)
 
 
-def _escape_tool_results(text: str) -> Tuple[str, List[str]]:
-    """Scan the text for tool result box HTML chunks and escape them using placeholders."""
-    placeholders = []
-
-    def _repl(match):
-        placeholder = f"\n<!--TOOL_RESULT_PLACEHOLDER_{len(placeholders)}-->"
-        placeholders.append(match.group(1))
-        return placeholder
-
 _TOOL_RESULT_PATTERN1 = re.compile(r'(?:^|\n)(<div class="tool-result-box">.*?<!-- tool-result-marker -->)(?=\n|$)', re.DOTALL)
 _TOOL_RESULT_PATTERN2 = re.compile(r'(?:^|\n)(<details class="tool-step-details".*?>.*?<!-- tool-step-marker -->)(?=\n|$)', re.DOTALL)
 _TOOL_RESULT_PATTERN3 = re.compile(r'(?:^|\n)(<div class="tool-ask-user">.*?<!-- tool-step-marker -->)(?=\n|$)', re.DOTALL)
@@ -128,8 +119,10 @@ def _escape_tool_results(text: str) -> Tuple[str, List[str]]:
 
 def _unescape_tool_results(html_text: str, placeholders: List[str]) -> str:
     """Restore the escaped tool result box HTML chunks back to the final document."""
-    # 倒序恢复：bubble-region（外层）占位符内容中包含 tool-step（内层）占位符。
-    # 必须先恢复外层再恢复内层，否则外层恢复时带入的内层占位符无法再次替换。
+    # 契约：_escape_tool_results 中 P4（bubble-region，外层）必须为最后一个
+    # escape 步骤（P1→P2→P3→P4 固定顺序），保证外层占位符编号恒大于内层。
+    # 恢复必须倒序（先外层后内层）：否则外层恢复时带入的内层占位符无法再次替换。
+    # 若未来新增 P5（更深外层），请保持"先 escape 外层、恢复时倒序"的约定。
     for i in range(len(placeholders) - 1, -1, -1):
         original = placeholders[i]
         placeholder = f"<!--TOOL_RESULT_PLACEHOLDER_{i}-->"
