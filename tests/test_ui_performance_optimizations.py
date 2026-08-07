@@ -24,8 +24,8 @@ class TestUIPerformanceOptimizations(unittest.TestCase):
         # Verify classify_text was never called on _clip_store
         panel._clip_store.classify_text.assert_not_called()
 
-    def test_switch_to_conversation_bypasses_markdown_rebuild_on_html_cache_hit(self):
-        """Verify that _switch_to_conversation skips _rebuild_markdown_from_messages when cached_html exists."""
+    def test_switch_to_conversation_updates_token_display_and_cached_html(self):
+        """Verify that _switch_to_conversation updates last_rendered_html and calls _update_token_display when cached_html exists."""
         from views.ai_chat_panel import AIChatPanel
 
         panel = MagicMock(spec=AIChatPanel)
@@ -55,8 +55,8 @@ class TestUIPerformanceOptimizations(unittest.TestCase):
         # Call _switch_to_conversation
         AIChatPanel._switch_to_conversation(panel, "conv_cached", save_current=False)
 
-        # Assert _rebuild_markdown_from_messages was not called
-        panel._rebuild_markdown_from_messages.assert_not_called()
+        # Assert token display was updated and cached html set
+        panel._update_token_display.assert_called()
         self.assertEqual(panel._last_rendered_html, "<div>Cached HTML Content</div>")
 
 

@@ -311,9 +311,11 @@ class ClipboardStore:
                 data = json.load(f)
             items = []
             for d in data[-self._max_clipboard:]:
+                if isinstance(d, dict) and "type" not in d:
+                    d["type"] = "image" if d.get("image_path") else classify_text(d.get("text") or "")
                 item = ClipboardItem(**d)
                 if not getattr(item, "type", None):
-                    item.type = classify_text(item.text or "") if not getattr(item, "image_path", None) else "Text"
+                    item.type = "image" if getattr(item, "image_path", None) else classify_text(item.text or "")
                 items.append(item)
             return items
         except (json.JSONDecodeError, TypeError):

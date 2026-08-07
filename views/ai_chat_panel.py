@@ -4219,8 +4219,10 @@ class AIChatPanel(Gtk.Box):
             cached_html = self._ai_html_cache.get(conv_id)
             if cached_html is not None:
                 self._last_rendered_html = cached_html
+                self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
                 js_code = f"updateContent({json.dumps(cached_html)});"
                 self._ai_webview.run_javascript(js_code, None, None)
+                self._update_token_display()
             else:
                 # 首次渲染：重建 markdown + 转 HTML + token 统计较重
                 # （冷启动可达数秒，pygments/tiktoken 首次加载）。

@@ -713,36 +713,34 @@ function _renderMath(element) {
                     // 刷新缓存
                     _flushReasoningCache();
 
-                    // 在当前流式容器内查找 reasoning badge
-                    const container = document.getElementById(_streamingContainerId);
-                    if (!container) return;
-                    const badge = container.querySelector('.reasoning-badge');
-                    if (badge) {
-                        if (badge.classList.contains('thinking')) {
-                            // thinking badge → 切换为 thought badge
-                            var escapedContent = (_reasoningCache || '')
-                                .replace(/&/g, '&amp;')
-                                .replace(/"/g, '&quot;')
-                                .replace(/</g, '&lt;')
-                                .replace(/>/g, '&gt;');
-                            const region = badge.closest('.bubble-region.reasoning-region');
-                            if (region) {
-                                region.innerHTML = ''
-                                    + '<div class="reasoning-badge complete" onclick="toggleReasoning(this)"'
-                                    + ' data-content="' + escapedContent + '">'
-                                    +   '<span class="reasoning-icon">💭</span>'
-                                    +   '<span class="reasoning-label">Thought</span>'
-                                    +   '<span class="reasoning-expand-icon">▶</span>'
-                                    + '</div>'
-                                    + '<div class="reasoning-content" style="display:none;"></div>';
+                    try {
+                        const container = document.getElementById(_streamingContainerId);
+                        if (container) {
+                            const badge = container.querySelector('.reasoning-badge');
+                            if (badge && badge.classList.contains('thinking')) {
+                                var escapedContent = (_reasoningCache || '')
+                                    .replace(/&/g, '&amp;')
+                                    .replace(/"/g, '&quot;')
+                                    .replace(/</g, '&lt;')
+                                    .replace(/>/g, '&gt;');
+                                const region = badge.closest('.bubble-region.reasoning-region');
+                                if (region) {
+                                    region.innerHTML = ''
+                                        + '<div class="reasoning-badge complete" onclick="toggleReasoning(this)"'
+                                        + ' data-content="' + escapedContent + '">'
+                                        +   '<span class="reasoning-icon">💭</span>'
+                                        +   '<span class="reasoning-label">Thought</span>'
+                                        +   '<span class="reasoning-expand-icon">▶</span>'
+                                        + '</div>'
+                                        + '<div class="reasoning-content" style="display:none;"></div>';
+                                }
                             }
                         }
-                        // 已经是 thought badge，无需改动
+                        _scrollToBottom();
+                    } finally {
+                        _reasoningCache = '';
+                        _reasoningPendingText = '';
                     }
-
-                    _scrollToBottom();
-                    _reasoningCache = '';
-                    _reasoningPendingText = '';
                 }
 
                 /**
