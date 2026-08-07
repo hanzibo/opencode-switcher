@@ -377,6 +377,26 @@ def _perform_llm_call(
 
         # 在开始执行工具前检查取消（流式解析结束但可能已取消）
         if ctx.cancel_event and ctx.cancel_event.is_set():
+            if tool_calls_found:
+                tool_call_msg: Dict[str, Any] = {
+                    "role": "assistant",
+                    "content": assistant_text,
+                    "tool_calls": [tool_call_to_dict(tc) for tc in tool_calls_found],
+                }
+                if reasoning_text:
+                    tool_call_msg["reasoning_content"] = reasoning_text
+                ctx.append_message_fn(tool_call_msg)
+                for tc in tool_calls_found:
+                    if ctx.on_tool_result_fn is not None:
+                        ctx.on_tool_result_fn(
+                            tc.id, tool_registry.TOOL_CANCELLED, "cancelled"
+                        )
+                    ctx.append_message_fn({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "name": tc.name,
+                        "content": tool_registry.TOOL_CANCELLED,
+                    })
             GLib.idle_add(ctx.on_llm_api_finished_fn, ctx.req_id)
             return False
 

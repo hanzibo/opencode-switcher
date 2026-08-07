@@ -1049,7 +1049,9 @@ class AIChatPanel(Gtk.Box):
         if not conv_id or conv_id != getattr(self, "_ai_conversation_id", None):
             return
         st = getattr(self, "_ai_running_convs", {}).get(conv_id)
-        if not st or not st.get("streaming", False):
+        if not st:
+            return
+        if not st.get("streaming", False) and status != "cancelled":
             return
 
         if not hasattr(self, "_ai_webview") or not self._ai_webview:
@@ -1066,7 +1068,44 @@ class AIChatPanel(Gtk.Box):
 
     # ────────────────────────────────────────────────────────────────────
 
+    def _sanitize_tool_calls_schema(self, messages: list) -> bool:
+        """防错兜底：校验并修复消息历史中未回应的 assistant tool_calls，防止发送新消息触发 400 错误。"""
+        if not messages:
+            return False
+        modified = False
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                tool_calls = msg.get("tool_calls")
+                if tool_calls and isinstance(tool_calls, list):
+                    responded_ids = set()
+                    j = i + 1
+                    while j < len(messages) and isinstance(messages[j], dict) and messages[j].get("role") == "tool":
+                        t_id = messages[j].get("tool_call_id")
+                        if t_id:
+                            responded_ids.add(t_id)
+                        j += 1
+                    for tc in tool_calls:
+                        if isinstance(tc, dict):
+                            tc_id = tc.get("id")
+                            if tc_id and tc_id not in responded_ids:
+                                tool_name = tc.get("function", {}).get("name", "tool")
+                                messages.insert(j, {
+                                    "role": "tool",
+                                    "tool_call_id": tc_id,
+                                    "name": tool_name,
+                                    "content": "⚠️ [操作已取消]",
+                                })
+                                responded_ids.add(tc_id)
+                                j += 1
+                                modified = True
+                    i = j - 1
+            i += 1
+        return modified
+
     def _send_user_message(self, text: str):
+        self._sanitize_tool_calls_schema(self._ai_messages)
         self._init_streaming_state()
         # 初始化 MCP（幂等，仅首次有效）
         self._init_mcp()
@@ -2839,6 +2878,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_cancelling = False
         self._ai_running_convs.pop(self._ai_conversation_id, None)
         self._ai_streaming = False
+        if self._sanitize_tool_calls_schema(self._ai_messages):
+            self._re_render_after_tool_cancel()
         self._update_send_button(True, sensitive=True)
         self._ai_entry.placeholder_text = "输入后续问题..."
         self._ai_entry.grab_focus()

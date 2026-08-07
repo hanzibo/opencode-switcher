@@ -565,6 +565,8 @@ class _BashSession:
                     self.process.kill()
                 except OSError:
                     pass
+        self._started = False
+        self.process = None
 
     def stop(self):
         if self.process is None:
