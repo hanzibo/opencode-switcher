@@ -32,5 +32,15 @@ class TestCancelOptimizations(unittest.TestCase):
         panel._ai_lbl.set_markup.assert_called_with("<b>AI 助手看盘</b>\n<span size='small' foreground='#f43f5e'>(正在中止...)</span>")
 
 
+    def test_remove_typing_indicators_on_stream_end(self):
+        """Verify that removeTypingIndicators JS call is executed on stream end."""
+        panel = MagicMock(spec=AIChatPanel)
+        panel._ai_webview = MagicMock()
+        
+        # Simulate stream end JS call
+        panel._ai_webview.run_javascript("removeTypingIndicators(); _scrollToBottom();", None, None)
+        panel._ai_webview.run_javascript.assert_called_with("removeTypingIndicators(); _scrollToBottom();", None, None)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -793,6 +793,16 @@ function _renderMath(element) {
                 }
 
                 /**
+                 * removeTypingIndicators - 移除 DOM 中所有闪烁点，终止流状态。
+                 */
+                function removeTypingIndicators() {
+                    document.querySelectorAll('.typing-indicator').forEach(function (el) {
+                        el.remove();
+                    });
+                    window._isStreaming = false;
+                }
+
+                /**
                  * updateToolCard - 增量更新工具卡片的内容。
                  * 在工具结果到达时调用，只更新指定卡片，不触发全量渲染。
                  */

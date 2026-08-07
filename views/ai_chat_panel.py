@@ -1789,7 +1789,7 @@ class AIChatPanel(Gtk.Box):
             return
         self._finalize_streaming_render(req_id)
         if hasattr(self, "_ai_webview") and self._ai_webview:
-            self._ai_webview.run_javascript("_scrollToBottom();", None, None)
+            self._ai_webview.run_javascript("removeTypingIndicators(); _scrollToBottom();", None, None)
         self._ai_streaming = False
         self._update_send_button(False)
         self._ai_entry.placeholder_text = "输入后续问题..."
@@ -2898,6 +2898,8 @@ class AIChatPanel(Gtk.Box):
         self._ai_entry.grab_focus()
         self._ai_spinner.stop()
         self._ai_spinner.hide()
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript("removeTypingIndicators();", None, None)
         self._ai_cancel_watchdog_id = 0
         model_info = getattr(self, "_ai_active_model_info", None)
         _, _, _, display_name, _, _, _, _, _ = self._read_model_config(None, model_info)
