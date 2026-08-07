@@ -233,7 +233,8 @@ def _render_reasoning_html(
         f'<span class="reasoning-expand-icon">▶</span>\n'
         f'</div>\n'
         f'<div class="reasoning-content" style="display:none;">{escaped_content}</div>\n'
-        f'</div>\n\n'
+        f'</div>\n'
+        f'<!-- /bubble-region -->\n'
     )
 
 
@@ -278,7 +279,8 @@ def _render_tool_steps_html(turn_messages: List[Dict], all_messages: Optional[Li
         f'<div class="tool-steps-container">\n'
         f'{"".join(steps_list)}'
         f'</div>\n'
-        f'</div>\n\n'
+        f'</div>\n'
+        f'<!-- /bubble-region -->\n'
     )
 
 
@@ -307,7 +309,8 @@ def _render_answer_html(
         f'<div class="bubble-region answer-region">\n'
         f'<div class="answer-header">💡 Answer:</div>\n'
         f'{rendered_md}\n'
-        f'</div>\n\n'
+        f'</div>\n'
+        f'<!-- /bubble-region -->\n'
     )
 
 

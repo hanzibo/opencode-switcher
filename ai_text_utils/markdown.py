@@ -104,6 +104,10 @@ def _escape_tool_results(text: str) -> Tuple[str, List[str]]:
 _TOOL_RESULT_PATTERN1 = re.compile(r'(?:^|\n)(<div class="tool-result-box">.*?<!-- tool-result-marker -->)(?=\n|$)', re.DOTALL)
 _TOOL_RESULT_PATTERN2 = re.compile(r'(?:^|\n)(<details class="tool-step-details".*?>.*?<!-- tool-step-marker -->)(?=\n|$)', re.DOTALL)
 _TOOL_RESULT_PATTERN3 = re.compile(r'(?:^|\n)(<div class="tool-ask-user">.*?<!-- tool-step-marker -->)(?=\n|$)', re.DOTALL)
+# bubble-region：reasoning/tool/answer 三个区域，内含嵌套 HTML，Python-Markdown
+# 在超长内容（如 >500 字符的 reasoning）时会解析失败导致后续内容全部丢失。
+# 用 <!-- /bubble-region --> 结束标记锚定，完整保护。
+_TOOL_RESULT_PATTERN4 = re.compile(r'(?:^|\n)(<div class="bubble-region.*?>.*?<!-- /bubble-region -->)(?=\n|$)', re.DOTALL)
 
 
 def _escape_tool_results(text: str) -> Tuple[str, List[str]]:
@@ -118,12 +122,16 @@ def _escape_tool_results(text: str) -> Tuple[str, List[str]]:
     escaped_text = _TOOL_RESULT_PATTERN1.sub(_repl, text)
     escaped_text = _TOOL_RESULT_PATTERN2.sub(_repl, escaped_text)
     escaped_text = _TOOL_RESULT_PATTERN3.sub(_repl, escaped_text)
+    escaped_text = _TOOL_RESULT_PATTERN4.sub(_repl, escaped_text)
     return escaped_text, placeholders
 
 
 def _unescape_tool_results(html_text: str, placeholders: List[str]) -> str:
     """Restore the escaped tool result box HTML chunks back to the final document."""
-    for i, original in enumerate(placeholders):
+    # 倒序恢复：bubble-region（外层）占位符内容中包含 tool-step（内层）占位符。
+    # 必须先恢复外层再恢复内层，否则外层恢复时带入的内层占位符无法再次替换。
+    for i in range(len(placeholders) - 1, -1, -1):
+        original = placeholders[i]
         placeholder = f"<!--TOOL_RESULT_PLACEHOLDER_{i}-->"
         escaped_placeholder = f"&lt;!--TOOL_RESULT_PLACEHOLDER_{i}--&gt;"
 
