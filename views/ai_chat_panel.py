@@ -3663,7 +3663,12 @@ class AIChatPanel(Gtk.Box):
         if hasattr(self, "_ai_hint_label"):
             self._ai_hint_label.set_text(label)
 
-    def _prune_messages(self):
+    def _prune_messages(self, defer_render: bool = False):
+        """按 soft_limit 裁剪超长会话；``defer_render=True`` 时仅裁剪不渲染（异步路径）。
+
+        摘要压缩分支不受影响：无论 defer_render 为何值，启用摘要且未生成中时
+        一律提前 return（启动摘要线程），由摘要完成回调统一裁剪+渲染。
+        """
         # Read latest values from shared settings store (supports live UI changes)
         if self._ai_settings_store is not None:
             soft_limit = self._ai_settings_store.soft_limit
@@ -3699,12 +3704,16 @@ class AIChatPanel(Gtk.Box):
                 ).start()
                 return
 
-        self._apply_prune(trim_target)
+        self._apply_prune(trim_target, defer_render=defer_render)
 
-    def _apply_prune(self, trim_target: int, save_summary: bool = False):
+    def _apply_prune(self, trim_target: int, save_summary: bool = False, defer_render: bool = False):
         """根据 trim_target 从当前 _ai_messages 重新计算裁剪位置。
 
         使用当前 _ai_messages 实时计算，避免异步回调中引用过期导致数据丢失。
+
+        ``defer_render=True`` 时仅裁剪列表、跳过 rebuild/render/token 统计——
+        渲染由 ``_async_render_conversation`` 的 worker 统一完成（避免主线程
+        同步渲染冻结，且不重复渲染）。
         """
         if len(self._ai_messages) <= 1:
             self._clear_summary_status()
@@ -3730,6 +3739,11 @@ class AIChatPanel(Gtk.Box):
                 start_idx += 1
 
         self._ai_messages = first + rest[start_idx:]
+        if defer_render:
+            # 异步渲染路径：仅裁剪列表，rebuild/render/token 由
+            # _async_render_conversation 的 worker 统一完成
+            self._clear_summary_status()
+            return
         self._ai_markdown_text = self._rebuild_markdown_from_messages(self._ai_messages)
         self._render_markdown(self._ai_markdown_text)
         if save_summary:
@@ -4158,7 +4172,7 @@ class AIChatPanel(Gtk.Box):
                 # 首次渲染：重建 markdown + 转 HTML + token 统计较重
                 # （冷启动可达数秒，pygments/tiktoken 首次加载）。
                 # 放后台线程执行，主线程只做状态更新——面板立即响应，内容稍后弹出。
-                self._prune_messages()
+                self._prune_messages(defer_render=True)
                 self._ai_render_async = True
                 self._async_render_conversation(conv_id)
         
@@ -4197,6 +4211,7 @@ class AIChatPanel(Gtk.Box):
         """
         messages = list(self._ai_messages)
         show_details = self._show_tool_details
+        snapshot_len = len(messages)
 
         def _worker():
             try:
@@ -4205,18 +4220,41 @@ class AIChatPanel(Gtk.Box):
                 )
                 html = _markdown_to_html_safe(text, fallback_content="")
                 tokens = self._estimate_token_count(messages)
-                GLib.idle_add(self._apply_async_render, conv_id, html, text, tokens)
+                GLib.idle_add(self._apply_async_render, conv_id, html, text, tokens, snapshot_len)
             except Exception as e:
                 print(f"[AI] async render error: {e}", flush=True)
+                # M1 兜底：渲染失败时回主线程同步渲染，避免内容永不显示、
+                # token 显示陈旧、_ai_render_async 残留。
+                GLib.idle_add(self._fallback_sync_render, conv_id, messages, show_details)
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _apply_async_render(self, conv_id: str, html: str, markdown_text: str, tokens: int) -> bool:
-        """主线程应用后台渲染结果（仅当用户仍停留在目标会话）。"""
+    def _fallback_sync_render(self, conv_id: str, messages: list, show_details: bool) -> bool:
+        """worker 渲染异常时的兜底：主线程同步渲染（原 _render_markdown 路径）。"""
         self._ai_render_async = False
         try:
             if self._ai_conversation_id != conv_id:
+                return False
+            text = _rebuild_markdown_from_messages(messages, show_details=show_details)
+            html = _markdown_to_html_safe(text, fallback_content="")
+            self._last_rendered_html = html
+            self._ai_html_cache[conv_id] = html
+            self._ai_markdown_text = text
+            js_code = f"updateContent({json.dumps(html)});"
+            self._ai_webview.run_javascript(js_code, None, None)
+            self._update_token_display()
+        except Exception as e:
+            print(f"[AI] fallback sync render error: {e}", flush=True)
+        return False
+
+    def _apply_async_render(self, conv_id: str, html: str, markdown_text: str, tokens: int, snapshot_len: int) -> bool:
+        """主线程应用后台渲染结果（仅当用户仍停留在目标会话且快照未过期）。"""
+        try:
+            if self._ai_conversation_id != conv_id:
                 return False  # 渲染期间用户已切换会话，丢弃过期结果
+            if len(self._ai_messages) != snapshot_len:
+                return False  # 快照已被裁剪/摘要化，丢弃过期渲染（避免覆盖摘要显示）
+            self._ai_render_async = False  # 确认归属后才清位
             self._last_rendered_html = html
             self._ai_html_cache[conv_id] = html
             self._ai_markdown_text = markdown_text

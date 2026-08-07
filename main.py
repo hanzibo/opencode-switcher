@@ -161,6 +161,11 @@ class App:
             self._clip_panel.wait_ai_webview_ready(timeout=10.0)
         except Exception as e:
             print(f"[AI] wait webview ready failed: {e}", flush=True)
+        # 等待期间泵主循环会分发托盘菜单事件：用户可能已请求退出/重启
+        # （Gtk.main_quit 在 Gtk.main 进入前是 no-op），此处短路避免应用
+        # "退出"后继续运行；_restart_requested 由 __main__ 重启流程接手。
+        if not self._running or self._restart_requested:
+            return
         self._hotkey.start()
         Gtk.main()
 
