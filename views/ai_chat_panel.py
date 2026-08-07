@@ -2038,20 +2038,25 @@ class AIChatPanel(Gtk.Box):
                 target_messages = state["messages"]
                 self._render_background_conversation(conv_id, target_messages, state)
 
+        # 记录取消状态快照：_ai_cancelling 随后被重置，通知判定需用取消前值。
+        was_cancelling = self._ai_cancelling
         self._ai_running_convs.pop(conv_id, None)
         self._ai_cancelling = False
 
+        # 无条件消费错误标志：即使本轮零输出（错误发生后文本为空），也须消费，
+        # 避免残留到同一会话下一轮成功回答被误判"错误未消费"而吞掉通知。
+        error_pending = getattr(self, "_ai_error_pending_conv", None)
+        if error_pending == conv_id:
+            self._ai_error_pending_conv = None
+
         # 主对话 AI 正式回答输出结束 → 自动弹桌面通知。
-        # 仅在当前可见会话且本轮回有实际回答内容时触发；错误标志未消费时
-        # （_render_llm_error 已渲染错误气泡）跳过，避免"失败也弹完成"误导。
+        # 仅在当前可见会话、未被取消、本轮回有实际回答内容、且本轮无错误时触发。
         if (self._ai_conversation_id == conv_id
+                and not was_cancelling
                 and (assistant_text or reasoning)
+                and error_pending != conv_id
                 and getattr(self._ai_settings_store, "enable_answer_notification", True)):
-            error_pending = getattr(self, "_ai_error_pending_conv", None)
-            if error_pending == conv_id:
-                self._ai_error_pending_conv = None  # 消费错误标志，不通知
-            else:
-                self._notify_ai_answer_finished(assistant_text)
+            self._notify_ai_answer_finished(assistant_text or reasoning)
 
         self._handle_stream_end(req_id, conv_id)
 
@@ -2558,6 +2563,12 @@ class AIChatPanel(Gtk.Box):
                 if active_state and active_state.get("cancel_event"):
                     # 定向取消当前会话（主流 + 摘要），并行会话不受影响
                     self._cancel_streams_for_conversation(self._ai_conversation_id)
+                    # 与 _cancel_streaming_if_active 一致：清空流式缓存，避免
+                    # 取消后 _on_llm_api_finished 误弹"回答完成"通知（半截回答）。
+                    active_state["current_assistant_text"] = ""
+                    active_state["current_reasoning_text"] = ""
+                    self._ai_current_assistant_text = ""
+                    self._ai_current_reasoning_text = ""
                 else:
                     # 兜底：当前会话无活跃 state（如流属于背景会话），
                     # 取消所有运行中的流，避免只关 response 导致 SSE 误报
@@ -2566,6 +2577,8 @@ class AIChatPanel(Gtk.Box):
                         if ce:
                             ce.set()
                     self._llm_client.cancel_active_request()
+                    self._ai_current_assistant_text = ""
+                    self._ai_current_reasoning_text = ""
                 self._update_send_button(False, sensitive=False)
                 self._ai_entry.placeholder_text = "正在中止..."
                 # 看门狗：10 秒后若线程未响应则强制清理
@@ -2794,8 +2807,11 @@ class AIChatPanel(Gtk.Box):
                 self._cancel_streams_for_conversation(self._ai_conversation_id)
                 # L-2：清空流式缓存。partial 由 _on_llm_api_finished 统一追加
                 # （此处不手动追加），避免同一段文本在后台收尾时被重复写入历史。
+                # 推理缓存同步清空，避免取消后因 reasoning 非空误弹"完成"通知。
                 active_state["current_assistant_text"] = ""
+                active_state["current_reasoning_text"] = ""
                 self._ai_current_assistant_text = ""
+                self._ai_current_reasoning_text = ""
             else:
                 for st in list(self._ai_running_convs.values()):
                     ce = st.get("cancel_event")

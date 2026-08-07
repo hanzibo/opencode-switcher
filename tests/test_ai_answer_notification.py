@@ -152,6 +152,48 @@ class TestAnswerFinishedNotification(unittest.TestCase):
         mock_thread, _ = self._call_finished(panel, conv_id="conv2", current_conv="conv1")
         self.assertEqual(mock_thread.call_count, 0)
 
+    def test_pause_cancel_snapshot_suppresses_notification(self):
+        """暂停取消中（_ai_cancelling=True）即使有 partial 文本也不通知。"""
+        panel = _make_panel(_ai_cancelling=True)
+        mock_thread, _ = self._call_finished(panel)
+        self.assertEqual(mock_thread.call_count, 0)
+
+    def test_handle_stream_end_still_called(self):
+        """通知不破坏收尾：_handle_stream_end 必须仍被调用。"""
+        panel = _make_panel()
+        mock_thread, mock_end = self._call_finished(panel)
+        self.assertEqual(mock_thread.call_count, 1)
+        mock_end.assert_called_once()
+
+    def test_zero_output_error_flag_consumed_no_leak(self):
+        """零输出错误（文本为空）：错误标志必须无条件消费，不残留到下一轮。
+
+        场景：请求一开始就 HTTP 失败（assistant/reasoning 均为空），
+        _render_llm_error 已置标志，但 _on_llm_api_finished 因文本为空
+        不会走内层 if——若消费逻辑在外层条件内，标志残留到同会话下一轮
+        成功回答，误判"错误未消费"而吞掉通知。
+        """
+        panel = _make_panel()
+        panel._ai_error_pending_conv = "conv1"
+        empty_state = {
+            "req_id": 1,
+            "current_assistant_text": "",
+            "current_reasoning_text": "",
+            "streaming": False,
+            "messages": [{"role": "user", "content": "hi"}],
+            "response_div_added": True,
+        }
+        mock_thread, _ = self._call_finished(panel, state=empty_state)
+        self.assertEqual(mock_thread.call_count, 0)
+        # 标志已被消费（无条件消费），不应残留
+        self.assertTrue(not hasattr(panel, "_ai_error_pending_conv")
+                        or panel._ai_error_pending_conv is None)
+
+        # 同会话下一轮成功回答：标志已清 → 应正常通知
+        panel._ai_error_pending_conv = None
+        mock_thread2, _ = self._call_finished(panel)
+        self.assertEqual(mock_thread2.call_count, 1)
+
 
 class TestNotifyMethod(unittest.TestCase):
     """``_notify_ai_answer_finished`` 自身行为。"""
