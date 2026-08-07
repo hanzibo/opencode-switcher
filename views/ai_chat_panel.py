@@ -1428,7 +1428,7 @@ class AIChatPanel(Gtk.Box):
             temperature=temperature,
             max_tokens=max_tokens,
             top_p=top_p,
-            timeout=30,
+            timeout=120,
             extra_system_messages=extra_system_messages,
             thinking_enabled=thinking_enabled,
             reasoning_effort=reasoning_effort,
@@ -3837,7 +3837,7 @@ class AIChatPanel(Gtk.Box):
         save_summary = False
         cancel_event = threading.Event()
         summary_key = _ai_summary_request_key(self._ai_conversation_id)
-        idle_timeout_sec = 25  # 流式停顿超时（秒），收到 token 则重置
+        idle_timeout_sec = 120  # 流式停顿超时（秒），收到 token 则重置
         total_timeout_sec = 120  # 总超时硬限制（防止无限等待）
         failure_reason = None
         has_received_token = False  # 是否已收到首个 token

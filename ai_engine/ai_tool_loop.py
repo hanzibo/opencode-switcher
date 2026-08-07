@@ -29,8 +29,8 @@ _MAX_TOOL_ITERATIONS: Optional[int] = None
 # LLM 流式调用超时看门狗（与 _generate_summary_async 的双层超时策略一致）：
 # - 首 token 总超时：从流开始算，收到首个事件后撤销
 # - 流式停顿超时：收到事件后重置；仅覆盖 LLM 流式阶段，不打断工具执行
-_LLM_FIRST_TOKEN_TIMEOUT_SEC = 20
-_LLM_STREAM_IDLE_TIMEOUT_SEC = 25
+_LLM_FIRST_TOKEN_TIMEOUT_SEC = 120
+_LLM_STREAM_IDLE_TIMEOUT_SEC = 120
 
 
 def _get_max_tool_iterations() -> int:

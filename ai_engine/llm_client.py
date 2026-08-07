@@ -87,7 +87,7 @@ class LLMRequestConfig:
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
     top_p: float = DEFAULT_TOP_P
-    timeout: int = 30
+    timeout: int = 120
     tools: Optional[list] = None
     tool_choice: Optional[str] = None
     extra_system_messages: Optional[list] = None
