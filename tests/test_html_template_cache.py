@@ -116,6 +116,18 @@ class TestGetHtmlTemplateContent(unittest.TestCase):
         self.assertIn("_renderMath", html)
         self.assertIn("addCopyButtons", html)
 
+    def test_initial_table_wrap_guard_is_embedded(self):
+        """初始表格包裹（DOMContentLoaded + _wrapTables）必须嵌入模板。
+
+        回归防线：load_html 嵌入 initial_html 的宽表格依赖该监听器包裹成
+        横向滚动；若模板重构移除此逻辑，表格会退回固定宽度+强制换行。
+        """
+        html = get_html_template("dark", "", "")
+        self.assertIn("DOMContentLoaded", html)
+        self.assertIn("_wrapTables", html)
+        # 判空保护也应存在（防止 #content 缺失时退化为全文档扫描）
+        self.assertIn("if (content) _wrapTables(content)", html)
+
     def test_theme_and_pygments_variant_matches_key(self):
         html = get_html_template("light", "x", "PREFIX{color:red}")
         self.assertIn('body class="light"', html)

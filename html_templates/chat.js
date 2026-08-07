@@ -808,10 +808,21 @@ function _renderMath(element) {
                     if (newDetails) {
                         _debouncedRenderMath(newDetails);
                         addCopyButtons();
+                        _wrapTables(newDetails);  // 工具卡片内表格同样包裹成横向滚动
                     }
 
                     _scrollToBottom();
                 }
+
+// ── 初始表格包裹 ──
+// load_html 将 initial_html（可能含宽表格）直接嵌入 #content，页面刚加载时
+// 无 updateContent 调用，嵌入的表格不会被 _wrapTables 包裹（表现为固定宽度
+// + 内容强制换行而非横向滚动）。此处 DOM 就绪后主动包裹一次；此后
+// updateContent / updateMessageContainer 会再次调用（幂等）。
+document.addEventListener('DOMContentLoaded', function () {
+    const content = document.getElementById('content');
+    if (content) _wrapTables(content);  // 判空：防止模板结构变化时退化为全文档扫描
+});
 
 _scrollToBottom();
                 _initRoundNav();

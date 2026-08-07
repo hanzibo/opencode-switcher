@@ -3992,6 +3992,7 @@ class AIChatPanel(Gtk.Box):
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(
                 f"document.getElementById('content').insertAdjacentHTML('beforeend', {escaped});"
+                f"_wrapTables(document.getElementById('content'));"
                 f"_scrollToBottom();",
                 None, None
             )
