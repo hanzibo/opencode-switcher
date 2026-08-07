@@ -2003,9 +2003,7 @@ class AIChatPanel(Gtk.Box):
         # L-2：仅在有实际内容时追加 assistant 消息——防止取消/暂停无输出时
         # 产生空 assistant 消息，也避免与 _cancel_streaming_if_active 的清空
         # 配合后出现 {role: assistant, content: ""} 残留。
-        if target_messages and target_messages[-1].get("role") == "user" and (assistant_text or reasoning):
-            target_messages.append(assistant_msg)
-        elif target_messages and (assistant_text or reasoning):
+        if target_messages and (assistant_text or reasoning):
             target_messages.append(assistant_msg)
 
         # ── 新版路径 ──
