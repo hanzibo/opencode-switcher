@@ -147,7 +147,7 @@ class AIChatPanel(Gtk.Box):
         ("/summary", "压缩上下文（/summary keep=N，保留最近N条，默认50）"),
         ("/skill", "查看与手动触发 AI Skill"),
     ]
-    _SUSPEND_DELAY_SECONDS = 5
+    _SUSPEND_DELAY_SECONDS = 60
     # ── Streaming: Token batching ──
     _BATCH_FLUSH_MS = 60                    # 批处理窗口（ms）
     _STREAM_PERF_LOG = False
