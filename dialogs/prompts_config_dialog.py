@@ -657,10 +657,13 @@ class PromptsConfigDialog:
             confirm_dialog.destroy()
             if resp == Gtk.ResponseType.YES:
                 was_default = local_models[self._active_model_idx].is_default
+                was_polish = getattr(local_models[self._active_model_idx], "is_polish_default", False)
                 local_models.pop(self._active_model_idx)
                 self._active_model_idx = max(0, self._active_model_idx - 1)
                 if was_default and local_models:
                     local_models[self._active_model_idx].is_default = True
+                if was_polish and local_models:
+                    local_models[self._active_model_idx].is_polish_default = True
                 rebuild_model_list()
                 load_model_to_fields(self._active_model_idx)
 

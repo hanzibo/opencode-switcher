@@ -3738,16 +3738,22 @@ class AIChatPanel(Gtk.Box):
                 last_asst_text = msg.get("content")
                 break
 
-        # 2. 从 AI 设置中获取自定义润色 Prompt 模板并动态替换占位符
+        # 2. 从 AI 设置中获取自定义润色 Prompt 模板并动态替换占位符（支持 - 与 _ 两种写法）
         from stores.clipboard_store import _DEFAULT_POLISH_TEMPLATE
         template = getattr(self._ai_settings_store, "polish_prompt_template", "") or _DEFAULT_POLISH_TEMPLATE
         last_answer_fill = last_asst_text if last_asst_text else "(无历史对话，此为首条提问)"
 
-        if "{model-last-answer}" in template or "{user-original-message}" in template:
+        has_placeholder = (
+            "{model-last-answer}" in template or "{model_last_answer}" in template or
+            "{user-original-message}" in template or "{user_original_message}" in template
+        )
+        if has_placeholder:
             prompt = (
                 template
                 .replace("{model-last-answer}", last_answer_fill)
+                .replace("{model_last_answer}", last_answer_fill)
                 .replace("{user-original-message}", raw_input)
+                .replace("{user_original_message}", raw_input)
             )
         else:
             # 兜底：若用户修改后未包含任何占位符，直接追加用户原始文本
@@ -3760,6 +3766,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_entry.placeholder_text = "✨ 等待 AI 润色中..."
         self._ai_entry.set_sensitive(False)
         self._update_send_button(False, sensitive=False)
+        target_conv_id = getattr(self, "_ai_conversation_id", None)
 
         # 4. 获取润色模型配置
         polish_config = self._llm_settings_store.get_polish_model()
@@ -3780,25 +3787,28 @@ class AIChatPanel(Gtk.Box):
             self._ai_entry.placeholder_text = old_placeholder
             self._ai_entry.set_sensitive(True)
             self._update_send_button(False, sensitive=True)
-            if success and result_text:
-                buf.set_text(result_text)
-                self._ai_entry.grab_focus()
-                info_html = (
-                    '<div class="chat-model-info" style="color: #10b981; border-color: #10b981;">'
-                    '✨ <strong>AI 润色成功</strong>：已将优化后的文本填回输入框，请确认或修改后按 Enter 发送。'
-                    '</div>'
-                )
-                self.append_html_to_webview(info_html)
-            else:
-                buf.set_text(raw_input)
-                self._ai_entry.grab_focus()
-                err_msg = result_text if result_text else "超时（30秒）或服务响应异常"
-                info_html = (
-                    '<div class="chat-model-info" style="color: #f59e0b; border-color: #f59e0b;">'
-                    f'⚠️ <strong>AI 润色失败</strong>（{err_msg}），已自动恢复未润色的原始提问。'
-                    '</div>'
-                )
-                self.append_html_to_webview(info_html)
+            # 会话竞态防护：仅当当前展示的会话依然是发起润色时的会话，才向输入框填充文本
+            if getattr(self, "_ai_conversation_id", None) == target_conv_id:
+                if success and result_text:
+                    buf.set_text(result_text)
+                    self._ai_entry.grab_focus()
+                    info_html = (
+                        '<div class="chat-model-info" style="color: #10b981; border-color: #10b981;">'
+                        '✨ <strong>AI 润色成功</strong>：已将优化后的文本填回输入框，请确认或修改后按 Enter 发送。'
+                        '</div>'
+                    )
+                    self.append_html_to_webview(info_html)
+                else:
+                    buf.set_text(raw_input)
+                    self._ai_entry.grab_focus()
+                    err_msg = result_text if result_text else "超时（30秒）或服务响应异常"
+                    escaped_err = html.escape(err_msg)
+                    info_html = (
+                        '<div class="chat-model-info" style="color: #f59e0b; border-color: #f59e0b;">'
+                        f'⚠️ <strong>AI 润色失败</strong>（{escaped_err}），已自动恢复未润色的原始提问。'
+                        '</div>'
+                    )
+                    self.append_html_to_webview(info_html)
 
         def _worker_thread():
             try:
