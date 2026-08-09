@@ -62,6 +62,21 @@ class TestAIPolishCommand(unittest.TestCase):
         )
         panel._llm_client = MagicMock()
 
+        captured_prompt = []
+
+        def fake_thread_init(target, daemon):
+            closure_vars = target.__closure__
+            for cell in closure_vars:
+                val = cell.cell_contents
+                if isinstance(val, str) and "(无历史对话" in val:
+                    captured_prompt.append(val)
+            return MagicMock()
+
+        with patch("threading.Thread", side_effect=fake_thread_init):
+            AIChatPanel._handle_ai_polish_command(panel, "帮我写一段 Python 脚本")
+            self.assertTrue(len(captured_prompt) > 0)
+            self.assertIn("(无历史对话，此为首条提问)", captured_prompt[0])
+
     def test_handle_ai_polish_placeholder_substitution(self):
         """Test placeholder substitution for {model-last-answer} and {user-original-message}."""
         panel = MagicMock(spec=AIChatPanel)

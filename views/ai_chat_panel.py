@@ -3734,13 +3734,14 @@ class AIChatPanel(Gtk.Box):
         # 1. 从 _ai_messages 逆向提取最近一次 assistant 的正式回答
         last_asst_text = ""
         for msg in reversed(self._ai_messages):
-            if msg.get("role") == "assistant" and msg.get("content"):
-                last_asst_text = msg.get("content")
+            if msg.get("role") == "assistant" and isinstance(msg.get("content"), str) and msg.get("content").strip():
+                last_asst_text = msg.get("content").strip()
                 break
 
         # 2. 从 AI 设置中获取自定义润色 Prompt 模板并动态替换占位符（支持 - 与 _ 两种写法）
         from stores.clipboard_store import _DEFAULT_POLISH_TEMPLATE
-        template = getattr(self._ai_settings_store, "polish_prompt_template", "") or _DEFAULT_POLISH_TEMPLATE
+        raw_template = getattr(self._ai_settings_store, "polish_prompt_template", "") or ""
+        template = raw_template.strip() or _DEFAULT_POLISH_TEMPLATE
         last_answer_fill = last_asst_text if last_asst_text else "(无历史对话，此为首条提问)"
 
         has_placeholder = (
@@ -3770,7 +3771,7 @@ class AIChatPanel(Gtk.Box):
 
         # 4. 获取润色模型配置
         polish_config = self._llm_settings_store.get_polish_model()
-        if not polish_config or not polish_config.api_key or not polish_config.base_url:
+        if not polish_config or not getattr(polish_config, "api_key", "").strip() or not getattr(polish_config, "base_url", "").strip():
             self._ai_entry.placeholder_text = old_placeholder
             self._ai_entry.set_sensitive(True)
             self._update_send_button(False, sensitive=True)
@@ -3784,11 +3785,11 @@ class AIChatPanel(Gtk.Box):
             return
 
         def _on_polish_complete(success: bool, result_text: str):
-            self._ai_entry.placeholder_text = old_placeholder
-            self._ai_entry.set_sensitive(True)
-            self._update_send_button(False, sensitive=True)
-            # 会话竞态防护：仅当当前展示的会话依然是发起润色时的会话，才向输入框填充文本
+            # 会话竞态防护：仅当当前展示的会话依然是发起润色时的会话，才向输入框与控件恢复状态
             if getattr(self, "_ai_conversation_id", None) == target_conv_id:
+                self._ai_entry.placeholder_text = old_placeholder
+                self._ai_entry.set_sensitive(True)
+                self._update_send_button(False, sensitive=True)
                 if success and result_text:
                     buf.set_text(result_text)
                     self._ai_entry.grab_focus()
@@ -3817,7 +3818,7 @@ class AIChatPanel(Gtk.Box):
                     base_url=polish_config.base_url,
                     api_key=polish_config.api_key,
                     model_name=polish_config.model_name,
-                    temperature=getattr(polish_config, "temperature", 0.7),
+                    temperature=getattr(polish_config, "temperature", 1.0),
                     max_tokens=getattr(polish_config, "max_tokens", 4096),
                     top_p=getattr(polish_config, "top_p", 1.0),
                     timeout=30,
