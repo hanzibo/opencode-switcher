@@ -146,6 +146,7 @@ class AIChatPanel(Gtk.Box):
         ("/cd", "切换 bash 工作路径"),
         ("/summary", "压缩上下文（/summary keep=N，保留最近N条，默认50）"),
         ("/skill", "查看与手动触发 AI Skill"),
+        ("/ai-polish", "扩展润色提问，去除歧义与不严谨"),
     ]
     _SUSPEND_DELAY_SECONDS = 60
     # ── Streaming: Token batching ──
@@ -2740,6 +2741,25 @@ class AIChatPanel(Gtk.Box):
             buf.set_text("")
             self._handle_skill_command(text)
             return
+        if text == "/ai-polish" or text.startswith("/ai-polish ") or text == "/ai_polish" or text.startswith("/ai_polish "):
+            buf.set_text("")
+            raw_input = ""
+            if text.startswith("/ai-polish "):
+                raw_input = text[len("/ai-polish "):].strip()
+            elif text.startswith("/ai_polish "):
+                raw_input = text[len("/ai_polish "):].strip()
+
+            if not raw_input:
+                info_html = (
+                    '<div class="chat-model-info" style="color: #f43f5e; border-color: #f43f5e;">'
+                    '❌ <strong>用法错误</strong>：用法为 <code>/ai-polish &lt;原始提问文本&gt;</code>'
+                    '</div>'
+                )
+                self.append_html_to_webview(info_html)
+                return
+
+            self._handle_ai_polish_command(raw_input)
+            return
         # Handle selected sub-agent blocks: build notification text and send
         if self._ai_selected_subagents:
             from tool_registry import get_subagent_status_map, check_background_subagents
@@ -3706,6 +3726,116 @@ class AIChatPanel(Gtk.Box):
         buf = self._ai_entry.get_buffer()
         buf.set_text(prompt_payload)
         self._on_send_clicked()
+
+    def _handle_ai_polish_command(self, raw_input: str):
+        """处理 /ai-polish <raw_text> 命令：
+        使用无上下文的独立润色模型请求，设置 30s 超时控制，成功后自动回填至输入框供用户二次确认。
+        """
+        # 1. 从 _ai_messages 逆向提取最近一次 assistant 的正式回答
+        last_asst_text = ""
+        for msg in reversed(self._ai_messages):
+            if msg.get("role") == "assistant" and msg.get("content"):
+                last_asst_text = msg.get("content")
+                break
+
+        # 2. 动态 Prompt 组装（处理首条消息无历史回答边界降级）
+        if last_asst_text:
+            prompt = (
+                "以下是对话背景：\n"
+                "```\n"
+                f"{last_asst_text}\n"
+                "```\n\n"
+                "---\n\n"
+                "以下是用户的下一轮原始提问：\n"
+                "```\n"
+                f"{raw_input}\n"
+                "```\n\n"
+                "---\n\n"
+                "请将用户原始提问进行扩展，润色，使其严谨，无歧异。\n"
+                "仅输出润色后完整改进语句即可。"
+            )
+        else:
+            prompt = (
+                "以下是用户的原始提问：\n"
+                "```\n"
+                f"{raw_input}\n"
+                "```\n\n"
+                "---\n\n"
+                "请将用户原始提问进行扩展，润色，使其严谨，无歧异。\n"
+                "仅输出润色后完整改进语句即可。"
+            )
+
+        # 3. 设置输入框青绿色状态并禁用输入
+        buf = self._ai_entry.get_buffer()
+        buf.set_text("")
+        old_placeholder = getattr(self._ai_entry, "placeholder_text", "给 AI 助手发送消息...")
+        self._ai_entry.placeholder_text = "✨ 等待 AI 润色中..."
+        self._ai_entry.set_sensitive(False)
+        self._update_send_button(False, sensitive=False)
+
+        # 4. 获取润色模型配置
+        polish_config = self._llm_settings_store.get_polish_model()
+        if not polish_config or not polish_config.api_key or not polish_config.base_url:
+            self._ai_entry.placeholder_text = old_placeholder
+            self._ai_entry.set_sensitive(True)
+            self._update_send_button(False, sensitive=True)
+            buf.set_text(raw_input)
+            info_html = (
+                '<div class="chat-model-info" style="color: #f43f5e; border-color: #f43f5e;">'
+                '❌ <strong>润色失败</strong>：未配置有效润色/默认模型 API Key 或 Base URL。'
+                '</div>'
+            )
+            self.append_html_to_webview(info_html)
+            return
+
+        def _on_polish_complete(success: bool, result_text: str):
+            self._ai_entry.placeholder_text = old_placeholder
+            self._ai_entry.set_sensitive(True)
+            self._update_send_button(False, sensitive=True)
+            if success and result_text:
+                buf.set_text(result_text)
+                self._ai_entry.grab_focus()
+                info_html = (
+                    '<div class="chat-model-info" style="color: #10b981; border-color: #10b981;">'
+                    '✨ <strong>AI 润色成功</strong>：已将优化后的文本填回输入框，请确认或修改后按 Enter 发送。'
+                    '</div>'
+                )
+                self.append_html_to_webview(info_html)
+            else:
+                buf.set_text(raw_input)
+                self._ai_entry.grab_focus()
+                err_msg = result_text if result_text else "超时（30秒）或服务响应异常"
+                info_html = (
+                    '<div class="chat-model-info" style="color: #f59e0b; border-color: #f59e0b;">'
+                    f'⚠️ <strong>AI 润色失败</strong>（{err_msg}），已自动恢复未润色的原始提问。'
+                    '</div>'
+                )
+                self.append_html_to_webview(info_html)
+
+        def _worker_thread():
+            try:
+                from ai_engine.llm_client import LLMRequestConfig
+                config = LLMRequestConfig(
+                    base_url=polish_config.base_url,
+                    api_key=polish_config.api_key,
+                    model_name=polish_config.model_name,
+                    temperature=getattr(polish_config, "temperature", 0.7),
+                    max_tokens=getattr(polish_config, "max_tokens", 4096),
+                    top_p=getattr(polish_config, "top_p", 1.0),
+                    timeout=30,
+                )
+                messages = [{"role": "user", "content": prompt}]
+                msg = self._llm_client.sync_chat_completion(config, messages)
+                content = msg.get("content") if msg else None
+                if content:
+                    GLib.idle_add(_on_polish_complete, True, content.strip())
+                else:
+                    GLib.idle_add(_on_polish_complete, False, "模型响应为空")
+            except Exception as e:
+                GLib.idle_add(_on_polish_complete, False, str(e))
+
+        t = threading.Thread(target=_worker_thread, daemon=True)
+        t.start()
 
     def _on_ai_entry_changed(self):
         buf = self._ai_entry.get_buffer()

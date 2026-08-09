@@ -175,6 +175,7 @@ class ClipboardPanel(Gtk.Box):
         ("/rollback", "回滚到任意轮"),
         ("/title", "设置/生成标题"),
         ("/model", "切换模型"),
+        ("/ai-polish", "扩展润色提问"),
     ]
 
     def __init__(self, clip_store, cat_store):

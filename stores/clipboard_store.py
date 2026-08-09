@@ -1183,6 +1183,7 @@ class LLMModelConfig:
     is_default: bool = False
     is_title_model: bool = False
     is_subagent_default: bool = False  # 标记为子代理（sub_agent 工具）默认模型
+    is_polish_default: bool = False  # 标记为提问润色（/ai-polish 命令）默认模型
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
     top_p: float = DEFAULT_TOP_P
@@ -1225,6 +1226,7 @@ class LLMSettingsStore:
                         is_default=m.get("is_default", False),
                         is_title_model=m.get("is_title_model", False),
                         is_subagent_default=m.get("is_subagent_default", False),
+                        is_polish_default=m.get("is_polish_default", False),
                         temperature=m.get("temperature", DEFAULT_TEMPERATURE),
                         max_tokens=m.get("max_tokens", DEFAULT_MAX_TOKENS),
                         top_p=m.get("top_p", DEFAULT_TOP_P),
@@ -1277,6 +1279,21 @@ class LLMSettingsStore:
         if not default_model and self.models:
             default_model = self.models[0]
         return default_model.model_name if default_model else "deepseek-chat"
+
+    def get_polish_model(self) -> Optional[LLMModelConfig]:
+        """获取润色默认模型。优先取 is_polish_default，回退取 is_default，再回退取列表首个。"""
+        model = next((m for m in self.models if getattr(m, "is_polish_default", False)), None)
+        if not model:
+            model = next((m for m in self.models if m.is_default), None)
+        if not model and self.models:
+            model = self.models[0]
+        return model
+
+    def set_polish_default(self, alias: str):
+        """设置指定的润色默认模型（单选）。"""
+        for m in self.models:
+            m.is_polish_default = (m.alias == alias)
+        self.save_all()
 
     def save_all(self):
         os.makedirs(CONFIG_DIR, exist_ok=True)

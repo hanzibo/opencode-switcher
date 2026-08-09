@@ -285,15 +285,18 @@ class PromptsConfigDialog:
         model_hbox.pack_start(model_name_entry, True, True, 0)
         vbox_right.pack_start(model_hbox, False, False, 0)
 
-        # Check button row: default model + title generation model + subagent default model
+        # Check button row: default model + title generation model + subagent default model + polish default model
         check_hbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 16)
         default_check = Gtk.CheckButton.new_with_label("设为默认模型")
         title_check = Gtk.CheckButton.new_with_label("标题生成模型")
         subagent_check = Gtk.CheckButton.new_with_label("子代理默认模型")
         subagent_check.set_tooltip_text("指定该模型作为子代理（sub_agent 工具）的默认模型；未设置时回退到全局默认模型")
+        polish_check = Gtk.CheckButton.new_with_label("润色默认模型")
+        polish_check.set_tooltip_text("指定该模型作为斜杠命令 /ai-polish 提问润色的默认模型；未设置时回退到全局默认模型")
         check_hbox.pack_start(default_check, False, False, 0)
         check_hbox.pack_start(title_check, False, False, 0)
         check_hbox.pack_start(subagent_check, False, False, 0)
+        check_hbox.pack_start(polish_check, False, False, 0)
         default_check.set_margin_top(4)
         default_check.set_margin_bottom(4)
 
@@ -487,6 +490,7 @@ class PromptsConfigDialog:
                 m.is_default = default_check.get_active()
                 m.is_title_model = title_check.get_active()
                 m.is_subagent_default = subagent_check.get_active()
+                m.is_polish_default = polish_check.get_active()
                 m.temperature = temperature_spin.get_value()
                 m.max_tokens = int(max_tokens_spin.get_value())
                 m.top_p = top_p_spin.get_value()
@@ -501,6 +505,8 @@ class PromptsConfigDialog:
                 parts.append("标题")
             if getattr(m, "is_subagent_default", False):
                 parts.append("子代理")
+            if getattr(m, "is_polish_default", False):
+                parts.append("润色")
             suffix = f" ({', '.join(parts)})" if parts else ""
             return m.alias + suffix
 
@@ -545,6 +551,7 @@ class PromptsConfigDialog:
                 default_check.set_active(m.is_default)
                 title_check.set_active(m.is_title_model)
                 subagent_check.set_active(getattr(m, "is_subagent_default", False))
+                polish_check.set_active(getattr(m, "is_polish_default", False))
                 temperature_spin.set_value(m.temperature)
                 max_tokens_spin.set_value(m.max_tokens)
                 top_p_spin.set_value(m.top_p)
@@ -559,6 +566,8 @@ class PromptsConfigDialog:
                 model_name_entry.set_sensitive(True)
                 default_check.set_sensitive(True)
                 title_check.set_sensitive(True)
+                subagent_check.set_sensitive(True)
+                polish_check.set_sensitive(True)
                 temperature_spin.set_sensitive(True)
                 max_tokens_spin.set_sensitive(True)
                 top_p_spin.set_sensitive(True)
@@ -574,6 +583,7 @@ class PromptsConfigDialog:
                 default_check.set_active(False)
                 title_check.set_active(False)
                 subagent_check.set_active(False)
+                polish_check.set_active(False)
                 temperature_spin.set_value(DEFAULT_TEMPERATURE)
                 max_tokens_spin.set_value(DEFAULT_MAX_TOKENS)
                 top_p_spin.set_value(DEFAULT_TOP_P)
@@ -589,6 +599,7 @@ class PromptsConfigDialog:
                 default_check.set_sensitive(False)
                 title_check.set_sensitive(False)
                 subagent_check.set_sensitive(False)
+                polish_check.set_sensitive(False)
                 temperature_spin.set_sensitive(False)
                 max_tokens_spin.set_sensitive(False)
                 top_p_spin.set_sensitive(False)
@@ -639,6 +650,8 @@ class PromptsConfigDialog:
             secondary = f"模型 '{target.alias}' 将被永久删除。"
             if getattr(target, "is_subagent_default", False):
                 secondary += "\n该模型是子代理默认模型，删除后子代理将使用全局默认模型。"
+            if getattr(target, "is_polish_default", False):
+                secondary += "\n该模型是润色默认模型，删除后润色将使用全局默认模型。"
             confirm_dialog.format_secondary_text(secondary)
             resp = confirm_dialog.run()
             confirm_dialog.destroy()
@@ -715,6 +728,21 @@ class PromptsConfigDialog:
                 # 取消时允许无子代理默认（回退到全局默认模型），不做强制保持。
                 for idx, m in enumerate(local_models):
                     m.is_subagent_default = (active and idx == self._active_model_idx)
+                    row = model_list_box.get_row_at_index(idx)
+                    if row:
+                        lbl = row.get_child()
+                        if isinstance(lbl, Gtk.Label):
+                            lbl.set_text(_model_label(m))
+
+        def on_polish_toggled(widget):
+            if self._updating_model_ui:
+                return
+            if 0 <= self._active_model_idx < len(local_models):
+                active = widget.get_active()
+                # 勾选时互斥：其他模型清除润色默认标记；
+                # 取消时允许无润色默认（回退到全局默认模型），不做强制保持。
+                for idx, m in enumerate(local_models):
+                    m.is_polish_default = (active and idx == self._active_model_idx)
                     row = model_list_box.get_row_at_index(idx)
                     if row:
                         lbl = row.get_child()
