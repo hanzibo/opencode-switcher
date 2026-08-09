@@ -3738,32 +3738,20 @@ class AIChatPanel(Gtk.Box):
                 last_asst_text = msg.get("content")
                 break
 
-        # 2. 动态 Prompt 组装（处理首条消息无历史回答边界降级）
-        if last_asst_text:
+        # 2. 从 AI 设置中获取自定义润色 Prompt 模板并动态替换占位符
+        from stores.clipboard_store import _DEFAULT_POLISH_TEMPLATE
+        template = getattr(self._ai_settings_store, "polish_prompt_template", "") or _DEFAULT_POLISH_TEMPLATE
+        last_answer_fill = last_asst_text if last_asst_text else "(无历史对话，此为首条提问)"
+
+        if "{model-last-answer}" in template or "{user-original-message}" in template:
             prompt = (
-                "以下是对话背景：\n"
-                "```\n"
-                f"{last_asst_text}\n"
-                "```\n\n"
-                "---\n\n"
-                "以下是用户的下一轮原始提问：\n"
-                "```\n"
-                f"{raw_input}\n"
-                "```\n\n"
-                "---\n\n"
-                "请将用户原始提问进行扩展，润色，使其严谨，无歧异。\n"
-                "仅输出润色后完整改进语句即可。"
+                template
+                .replace("{model-last-answer}", last_answer_fill)
+                .replace("{user-original-message}", raw_input)
             )
         else:
-            prompt = (
-                "以下是用户的原始提问：\n"
-                "```\n"
-                f"{raw_input}\n"
-                "```\n\n"
-                "---\n\n"
-                "请将用户原始提问进行扩展，润色，使其严谨，无歧异。\n"
-                "仅输出润色后完整改进语句即可。"
-            )
+            # 兜底：若用户修改后未包含任何占位符，直接追加用户原始文本
+            prompt = f"{template}\n\n{raw_input}"
 
         # 3. 设置输入框青绿色状态并禁用输入
         buf = self._ai_entry.get_buffer()

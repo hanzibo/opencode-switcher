@@ -1494,6 +1494,22 @@ _DEFAULT_SUMMARY_TEMPLATE = (
     "要求：第三人称、客观简洁、不超过{max_chars}字。"
 )
 
+# 提问润色默认模板
+_DEFAULT_POLISH_TEMPLATE = (
+    "以下是对话背景：\n"
+    "```\n"
+    "{model-last-answer}\n"
+    "```\n\n"
+    "---\n\n"
+    "以下是用户的下一轮原始提问：\n"
+    "```\n"
+    "{user-original-message}\n"
+    "```\n\n"
+    "---\n\n"
+    "请将用户原始提问进行扩展，润色，使其严谨，无歧异。\n"
+    "仅输出润色后完整改进语句即可。"
+)
+
 
 class AISettingsStore:
     """应用设置存储（AI 对话设置 + 常量配置），遵循 QQMailCredentialsStore 模式。"""
@@ -1505,6 +1521,7 @@ class AISettingsStore:
         self.summary_threshold: int = 80      # 剩余多少条消息时触发摘要
         self.summary_max_chars: int = 500     # 摘要最大字符数
         self.summary_prompt_template: str = _DEFAULT_SUMMARY_TEMPLATE
+        self.polish_prompt_template: str = _DEFAULT_POLISH_TEMPLATE
         self.system_prompt: str = ""  # 全局 AI 对话系统提示词（新对话建立时快照注入）
         self.max_clipboard: int = 150   # 剪切板最大历史项目数
         self.max_tool_iterations: int = 25  # AI 工具调用最大次数
@@ -1533,6 +1550,9 @@ class AISettingsStore:
             self.summary_prompt_template = data.get(
                 "summary_prompt_template", _DEFAULT_SUMMARY_TEMPLATE
             )
+            self.polish_prompt_template = data.get(
+                "polish_prompt_template", _DEFAULT_POLISH_TEMPLATE
+            )
             self.system_prompt = data.get("system_prompt", "")
             self.max_clipboard = data.get("max_clipboard", 150)
             self.max_tool_iterations = data.get("max_tool_iterations", 25)
@@ -1554,13 +1574,14 @@ class AISettingsStore:
             fd = os.open(AI_SETTINGS_PATH, flags, 0o600)
             with os.fdopen(fd, "w") as f:
                 json.dump({
-                    "version": 6,
+                    "version": 7,
                     "soft_limit": self.soft_limit,
                     "trim_target": self.trim_target,
                     "enable_summary": self.enable_summary,
                     "summary_threshold": self.summary_threshold,
                     "summary_max_chars": self.summary_max_chars,
                     "summary_prompt_template": self.summary_prompt_template,
+                    "polish_prompt_template": self.polish_prompt_template,
                     "system_prompt": self.system_prompt,
                     "max_clipboard": self.max_clipboard,
                     "max_tool_iterations": self.max_tool_iterations,

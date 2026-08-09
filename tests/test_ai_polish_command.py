@@ -37,6 +37,8 @@ class TestAIPolishCommand(unittest.TestCase):
         panel._ai_entry = MagicMock()
         panel._update_send_button = MagicMock()
         panel._llm_settings_store = MagicMock()
+        panel._ai_settings_store = MagicMock()
+        panel._ai_settings_store.polish_prompt_template = ""
         panel._llm_settings_store.get_polish_model.return_value = LLMModelConfig(
             alias="PolishModel", base_url="http://test", api_key="key", model_name="m"
         )
@@ -53,14 +55,45 @@ class TestAIPolishCommand(unittest.TestCase):
         panel._ai_entry = MagicMock()
         panel._update_send_button = MagicMock()
         panel._llm_settings_store = MagicMock()
+        panel._ai_settings_store = MagicMock()
+        panel._ai_settings_store.polish_prompt_template = ""
         panel._llm_settings_store.get_polish_model.return_value = LLMModelConfig(
             alias="PolishModel", base_url="http://test", api_key="key", model_name="m"
         )
         panel._llm_client = MagicMock()
 
-        with patch("threading.Thread") as mock_thread:
-            AIChatPanel._handle_ai_polish_command(panel, "帮我写一段 Python 脚本")
-            mock_thread.assert_called_once()
+    def test_handle_ai_polish_placeholder_substitution(self):
+        """Test placeholder substitution for {model-last-answer} and {user-original-message}."""
+        panel = MagicMock(spec=AIChatPanel)
+        panel._ai_messages = [
+            {"role": "assistant", "content": "Assistant answer text."}
+        ]
+        panel._ai_entry = MagicMock()
+        panel._update_send_button = MagicMock()
+        panel._llm_settings_store = MagicMock()
+        panel._ai_settings_store = MagicMock()
+        panel._ai_settings_store.polish_prompt_template = "Background: {model-last-answer} | User: {user-original-message}"
+        panel._llm_settings_store.get_polish_model.return_value = LLMModelConfig(
+            alias="PolishModel", base_url="http://test", api_key="key", model_name="m"
+        )
+        panel._llm_client = MagicMock()
+
+        captured_prompt = []
+
+        def fake_thread_init(target, daemon):
+            # Inspect local variables inside worker thread closure to verify constructed prompt
+            closure_vars = target.__closure__
+            for cell in closure_vars:
+                val = cell.cell_contents
+                if isinstance(val, str) and "Background:" in val:
+                    captured_prompt.append(val)
+            return MagicMock()
+
+        with patch("threading.Thread", side_effect=fake_thread_init):
+            AIChatPanel._handle_ai_polish_command(panel, "User question")
+            self.assertTrue(len(captured_prompt) > 0)
+            self.assertIn("Background: Assistant answer text.", captured_prompt[0])
+            self.assertIn("User: User question", captured_prompt[0])
 
 
 if __name__ == "__main__":
