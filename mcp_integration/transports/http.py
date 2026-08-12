@@ -123,7 +123,11 @@ class HttpTransport(BaseTransport):
     url : str
         MCP Server 的 HTTP 端点 URL（如 http://localhost:8123/mcp）。
     api_key : str, optional
-        Bearer token 认证。
+        Bearer token 认证（静态；与 auth_provider 二选一，api_key 优先
+        用于构造 StaticBearerAuthProvider）。
+    auth_provider : AuthProvider, optional
+        认证策略（OAuth 2.1 自动认证等）。未提供时按 api_key 构造
+        StaticBearerAuthProvider；两者皆空则不认证。
     protocol_version : str
         MCP 协议版本，默认 "2025-11-25"。
     session_id : str, optional
@@ -149,6 +153,7 @@ class HttpTransport(BaseTransport):
         extra_headers: Optional[Dict[str, str]] = None,
         force_2025_headers: bool = False,
         enable_2026_headers: bool = False,
+        auth_provider: Optional["AuthProvider"] = None,
     ) -> None:
         self._url = url.rstrip("/")
         self._api_key = api_key
@@ -158,6 +163,14 @@ class HttpTransport(BaseTransport):
         self._extra_headers = extra_headers or {}
         self._force_2025_headers = force_2025_headers
         self._enable_2026_headers = enable_2026_headers
+        # 认证策略：显式注入优先，否则按 api_key 构造静态 Bearer
+        if auth_provider is not None:
+            self._auth_provider = auth_provider
+        elif api_key:
+            from mcp_integration.oauth.provider import StaticBearerAuthProvider
+            self._auth_provider: Optional["AuthProvider"] = StaticBearerAuthProvider(api_key)
+        else:
+            self._auth_provider = None
 
         # aiohttp
         self._session: Optional["aiohttp.ClientSession"] = None
@@ -195,8 +208,8 @@ class HttpTransport(BaseTransport):
             "Accept": "application/json, text/event-stream",
             "MCP-Protocol-Version": self._protocol_version,
         }
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+        # 注意：Authorization 由 auth_provider 在 send_line 中动态注入
+        # （OAuth token 会过期刷新，不能在连接级别固定）。
         # 注意：Mcp-Session-Id 不由连接级别 headers 发送，
         # 而是在 send_line 中动态添加（因为 session ID 在 initialize 之后才获得）
         if self._force_2025_headers and self._session_id:
@@ -236,6 +249,11 @@ class HttpTransport(BaseTransport):
         """发送 JSON-RPC 消息并等待响应。
 
         data 为 JSON 字符串（可能含尾随换行符，会被剥离）。
+
+        认证流程：
+        1. 每次请求前从 auth_provider 获取最新认证 headers（OAuth token 自动管理）
+        2. 收到 401/403 且带 OAuth challenge 时，调用 auth_provider.handle_challenge()
+           自动完成（重新）认证，并重试原请求一次
         """
         if not self._session or self._session.closed:
             raise HttpTransportError("连接未建立")
@@ -252,65 +270,106 @@ class HttpTransport(BaseTransport):
             raise HttpTransportError(f"无效 JSON: {payload[:100]}")
 
         is_notification = "id" not in obj
+        method_name = obj.get("method", "")
 
-        # ── 动态添加 Mcp-Session-Id（若已有 session ID） ──
-        request_headers: Dict[str, str] = {}
-        if self._session_id:
-            request_headers["Mcp-Session-Id"] = self._session_id
+        retry_count = 0
+        max_auth_retries = 1  # 自动认证后最多重试一次
 
-        # ── 构建 2026-07-28 headers（可选） ──
-        if self._enable_2026_headers:
-            method = obj.get("method", "")
-            request_headers["Mcp-Method"] = method
-            request_headers["Mcp-Name"] = method.rpartition("/")[-1] or method
+        while True:
+            # ── 动态添加 Mcp-Session-Id（若已有 session ID） ──
+            request_headers: Dict[str, str] = {}
+            if self._session_id:
+                request_headers["Mcp-Session-Id"] = self._session_id
 
-        try:
-            async with self._session.post(
-                self._url,
-                data=payload.encode("utf-8"),
-                headers=request_headers or None,
-            ) as resp:
-                status = resp.status
+            # ── 构建 2026-07-28 headers（可选） ──
+            if self._enable_2026_headers:
+                request_headers["Mcp-Method"] = method_name
+                request_headers["Mcp-Name"] = method_name.rpartition("/")[-1] or method_name
 
-                # ── 认证错误 ──
-                if status in (401, 403):
-                    body = await resp.read()
-                    raise HttpTransportAuthError(
-                        f"HTTP {status}: {body.decode('utf-8', errors='replace')[:200]}"
-                    )
+            # ── 注入认证 headers（每次请求动态获取） ──
+            if self._auth_provider is not None:
+                try:
+                    auth_headers = await self._auth_provider.get_auth_headers()
+                    request_headers.update(auth_headers)
+                except Exception as e:
+                    raise HttpTransportAuthError(f"认证凭据获取失败: {e}")
 
-                # ── 非预期错误 ──
-                if status >= 400:
-                    body = await resp.read()
-                    raise HttpTransportStatusError(
-                        status, body.decode("utf-8", errors="replace")
-                    )
+            try:
+                async with self._session.post(
+                    self._url,
+                    data=payload.encode("utf-8"),
+                    headers=request_headers or None,
+                ) as resp:
+                    status = resp.status
 
-                # ── Notification（202 Accepted，无响应体） ──
-                if status == 202 and is_notification:
-                    # 无响应需要读取，直接返回
+                    # ── OAuth challenge：尝试自动重认证并重试一次 ──
+                    if (
+                        status in (401, 403)
+                        and self._auth_provider is not None
+                        and retry_count < max_auth_retries
+                    ):
+                        www_authenticate = resp.headers.get("WWW-Authenticate", "")
+                        body = await resp.read()  # 消费 body，释放连接
+                        try:
+                            new_headers = await self._auth_provider.handle_challenge(
+                                www_authenticate
+                            )
+                        except Exception as e:
+                            raise HttpTransportAuthError(
+                                f"自动认证失败: {e}"
+                            )
+                        if new_headers:
+                            retry_count += 1
+                            logger.info(
+                                "自动认证完成，重试请求: %s (attempt %d)",
+                                self._url, retry_count,
+                            )
+                            continue
+                        raise HttpTransportAuthError(
+                            f"HTTP {status}: "
+                            f"{body.decode('utf-8', errors='replace')[:200]}"
+                        )
+
+                    # ── 认证错误（最终） ──
+                    if status in (401, 403):
+                        body = await resp.read()
+                        raise HttpTransportAuthError(
+                            f"HTTP {status}: {body.decode('utf-8', errors='replace')[:200]}"
+                        )
+
+                    # ── 非预期错误 ──
+                    if status >= 400:
+                        body = await resp.read()
+                        raise HttpTransportStatusError(
+                            status, body.decode("utf-8", errors="replace")
+                        )
+
+                    # ── Notification（202 Accepted，无响应体） ──
+                    if status == 202 and is_notification:
+                        # 无响应需要读取，直接返回
+                        return
+
+                    # ── 读取响应 ──
+                    content_type = resp.headers.get("Content-Type", "").lower()
+
+                    # 从响应头提取 session ID（2025-11-25 协议）
+                    resp_session_id = resp.headers.get("Mcp-Session-Id", "")
+                    if resp_session_id and not self._session_id:
+                        self._session_id = resp_session_id
+                        logger.debug("HttpTransport 收到 session_id: %s", resp_session_id)
+
+                    if "text/event-stream" in content_type:
+                        await self._handle_sse_response(resp)
+                    else:
+                        await self._handle_json_response(resp)
                     return
 
-                # ── 读取响应 ──
-                content_type = resp.headers.get("Content-Type", "").lower()
-
-                # 从响应头提取 session ID（2025-11-25 协议）
-                resp_session_id = resp.headers.get("Mcp-Session-Id", "")
-                if resp_session_id and not self._session_id:
-                    self._session_id = resp_session_id
-                    logger.debug("HttpTransport 收到 session_id: %s", resp_session_id)
-
-                if "text/event-stream" in content_type:
-                    await self._handle_sse_response(resp)
-                else:
-                    await self._handle_json_response(resp)
-
-        except (HttpTransportAuthError, HttpTransportStatusError):
-            raise
-        except asyncio.TimeoutError:
-            raise HttpTransportError(f"请求超时 ({self._request_timeout}s)")
-        except Exception as e:
-            raise HttpTransportError(f"HTTP 请求失败: {e}")
+            except (HttpTransportAuthError, HttpTransportStatusError):
+                raise
+            except asyncio.TimeoutError:
+                raise HttpTransportError(f"请求超时 ({self._request_timeout}s)")
+            except Exception as e:
+                raise HttpTransportError(f"HTTP 请求失败: {e}")
 
     async def read_line(self) -> Optional[str]:
         """从响应缓冲读取一行。

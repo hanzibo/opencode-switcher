@@ -124,7 +124,7 @@ class OAuthToken:
 
     def is_expired(self, leeway: float = 30.0) -> bool:
         """token 是否已过期（带 leeway 秒的提前量）。无过期时间视为不过期。"""
-        if not self.expires_at:
+        if self.expires_at is None:
             return False
         return time.time() >= (self.expires_at - leeway)
 

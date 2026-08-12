@@ -115,14 +115,22 @@ async def open_browser(url: str, opener: Optional[BrowserOpener] = None) -> None
 
 
 class LoopbackRedirectServer:
-    """监听 127.0.0.1:<随机端口> 的 asyncio 回调服务器。
+    """监听 127.0.0.1 的 asyncio 回调服务器。
 
     收到 GET /callback?code=...&state=... 后完成 future，
     向浏览器返回「授权成功，可关闭此窗口」页面。
+
+    Parameters
+    ----------
+    port : int, optional
+        固定监听端口（DCR 预注册 redirect_uri 场景）；默认 0（随机）。
+    timeout : float
+        等待回调超时秒数。
     """
 
-    def __init__(self, timeout: float = _DEFAULT_FLOW_TIMEOUT) -> None:
+    def __init__(self, timeout: float = _DEFAULT_FLOW_TIMEOUT, port: int = 0) -> None:
         self._timeout = timeout
+        self._port_requested = port
         self._server: Optional[asyncio.AbstractServer] = None
         self._port = 0
         self._result_fut: Optional[asyncio.Future] = None
@@ -137,7 +145,9 @@ class LoopbackRedirectServer:
         """启动服务器并返回 redirect_uri。"""
         loop = asyncio.get_running_loop()
         self._result_fut = loop.create_future()
-        self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        self._server = await asyncio.start_server(
+            self._handle, "127.0.0.1", self._port_requested
+        )
         sock = self._server.sockets[0]
         self._port = sock.getsockname()[1]
         logger.debug("Loopback 回调服务器已启动: %s", self.redirect_uri)
@@ -371,6 +381,7 @@ async def run_authorization_flow(
     scope: str = "",
     *,
     redirect_uri: Optional[str] = None,
+    callback_port: int = 0,
     timeout: float = _DEFAULT_FLOW_TIMEOUT,
     browser_opener: Optional[BrowserOpener] = None,
 ) -> OAuthToken:
@@ -388,6 +399,8 @@ async def run_authorization_flow(
         请求的 scope（空格分隔）；为空则省略 scope 参数。
     redirect_uri : str, optional
         固定回调 URI（预注册场景）；默认启动动态 loopback。
+    callback_port : int, optional
+        回调服务器固定端口（DCR 注册 redirect_uri 场景）；默认 0（随机）。
     timeout : float
         授权流总超时。
     browser_opener : callable, optional
@@ -407,7 +420,7 @@ async def run_authorization_flow(
 
     server: Optional[LoopbackRedirectServer] = None
     if redirect_uri is None:
-        server = LoopbackRedirectServer(timeout=timeout)
+        server = LoopbackRedirectServer(timeout=timeout, port=callback_port)
         actual_redirect_uri = await server.start()
     else:
         actual_redirect_uri = redirect_uri
