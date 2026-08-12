@@ -150,8 +150,12 @@
 
 ## 6. 验收标准 (Acceptance Criteria)
 
-- [ ] `tests/test_mcp_oauth.py` 全部通过（解析/发现/PKCE/token_store/flow）
-- [ ] Mock OAuth 服务器集成测试通过（401 → 自动认证 → 重试成功 → 刷新）
-- [ ] `client_manager.connect_http` 对 `auth_type="oauth2"` 配置可端到端自动认证（smithery 实连）
-- [ ] 既有 MCP 测试（15 用例）不回归
-- [ ] 静态 Bearer 路径行为不变（向后兼容）
+- [x] `tests/test_mcp_oauth.py` 全部通过（42 用例：解析/发现/PKCE/token_store/flow）
+- [x] Mock OAuth 服务器集成测试通过（`tests/test_mcp_oauth_http.py`：401 → 自动认证 → 重试成功 → 刷新）
+- [x] `client_manager.connect_http` 对 `auth_type="oauth2"` 配置端到端自动认证（mock 环境验证 + 重连复用缓存 token）
+- [x] 既有 MCP 测试（15 用例）与全部 MCP 相关测试（103 用例）不回归
+- [x] 静态 Bearer 路径行为不变（向后兼容，专项测试覆盖）
+- [ ] smithery 实连集成测试（`https://mcp.smithery.ai/jibo96701436`，需真实浏览器授权，手动验证）：
+  - 在 Settings → MCP 服务器 添加 http + OAuth 2.1 服务器
+  - 点「开始授权」→ 浏览器打开 smithery 授权页 → 完成授权 → 状态变「已授权」
+  - 保存后启用该服务器 → 工具列表可用；重启应用后 token 复用免登录；token 过期自动刷新
