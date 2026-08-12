@@ -23,6 +23,7 @@ import urllib.parse
 from gi.repository import Gtk, Gdk, GLib, Gio, Pango, GdkPixbuf, PangoCairo, WebKit2
 from typing import Optional, Callable, List, Dict, Any, Tuple, Set
 from copy import deepcopy
+from stores.theme_config import get_theme, get_panel_css_vals
 from uuid import uuid4
 from stores.clipboard_store import ClipboardItem, CategoryItem, CategoryStore, CustomCategory, capture_clipboard_once, CustomPrompt, CustomPromptsStore, LLMSettingsStore, LLMModelConfig, ConversationStore, ChatMessage, Conversation, AISettingsStore, DEFAULT_TEMPERATURE, DEFAULT_MAX_TOKENS, DEFAULT_TOP_P, CONFIG_DIR
 from dialogs.settings_dialog import show_settings_dialog
@@ -471,81 +472,14 @@ class ClipboardPanel(Gtk.Box):
 
     def _set_theme(self, name: str):
         self._theme = name
-        if name == "dark-moon":
-            self._bg_color = Gdk.RGBA(0.059, 0.035, 0.078, 1.0)
-            self._title_color = Gdk.RGBA(0.96, 0.94, 0.98, 1.0)
-            self._dir_color = Gdk.RGBA(0.66, 0.52, 0.78, 1.0)
-            self._snippet_color = Gdk.RGBA(0.48, 0.38, 0.58, 1.0)
-            self._sep_rgba = (0.66, 0.33, 0.97, 0.08)
-            vals = dict(
-                text_fg="rgba(250,245,255,0.95)",
-                text_secondary="rgba(245,240,250,0.50)",
-                hover_bg="rgba(168,85,247,0.07)",
-                sel_bg="rgba(168,85,247,0.14)",
-                sel_border="#c084fc",
-                cat_hover="rgba(168,85,247,0.07)",
-                cat_sel="rgba(168,85,247,0.14)",
-                cat_sel_border="#c084fc",
-                btn_bg="rgba(168,85,247,0.08)",
-                btn_border="rgba(168,85,247,0.20)",
-                btn_hover="rgba(168,85,247,0.18)",
-                btn_active="rgba(168,85,247,0.28)",
-                cat_sep_color="rgba(168,85,247,0.25)",
-                dialog_bg="#0f0914",
-                input_bg="#181124",
-                input_fg="#faf5ff",
-                input_border="rgba(168,85,247,0.22)",
-            )
-        elif name == "dark":
-            self._bg_color = Gdk.RGBA(0.039, 0.043, 0.063, 1.0)
-            self._title_color = Gdk.RGBA(0.95, 0.96, 0.98, 1.0)
-            self._dir_color = Gdk.RGBA(0.39, 0.45, 0.55, 1.0)
-            self._snippet_color = Gdk.RGBA(0.28, 0.33, 0.41, 1.0)
-            self._sep_rgba = (1, 1, 1, 0.05)
-            vals = dict(
-                text_fg="rgba(255,255,255,0.95)",
-                text_secondary="rgba(255,255,255,0.45)",
-                hover_bg="rgba(255,255,255,0.03)",
-                sel_bg="rgba(129,140,248,0.10)",
-                sel_border="#818cf8",
-                cat_hover="rgba(255,255,255,0.03)",
-                cat_sel="rgba(129,140,248,0.10)",
-                cat_sel_border="#818cf8",
-                btn_bg="rgba(255,255,255,0.04)",
-                btn_border="rgba(255,255,255,0.06)",
-                btn_hover="rgba(129,140,248,0.12)",
-                btn_active="rgba(129,140,248,0.18)",
-                cat_sep_color="rgba(129,140,248,0.25)",
-                dialog_bg="#0a0b10",
-                input_bg="#12131a",
-                input_fg="#f1f5f9",
-                input_border="rgba(255,255,255,0.06)",
-            )
-        else:
-            self._bg_color = Gdk.RGBA(0.965, 0.973, 0.980, 1.0)
-            self._title_color = Gdk.RGBA(0.09, 0.09, 0.11, 1.0)
-            self._dir_color = Gdk.RGBA(0.39, 0.45, 0.55, 1.0)
-            self._snippet_color = Gdk.RGBA(0.39, 0.45, 0.55, 0.70)
-            self._sep_rgba = (0, 0, 0, 0.08)
-            vals = dict(
-                text_fg="rgba(15,23,42,0.92)",
-                text_secondary="rgba(15,23,42,0.55)",
-                hover_bg="rgba(0,0,0,0.03)",
-                sel_bg="rgba(79,70,229,0.08)",
-                sel_border="#4f46e5",
-                cat_hover="rgba(0,0,0,0.02)",
-                cat_sel="rgba(79,70,229,0.06)",
-                cat_sel_border="#4f46e5",
-                btn_bg="rgba(0,0,0,0.04)",
-                btn_border="rgba(0,0,0,0.08)",
-                btn_hover="rgba(0,0,0,0.06)",
-                btn_active="rgba(0,0,0,0.10)",
-                cat_sep_color="rgba(0,0,0,0.08)",
-                dialog_bg="#ffffff",
-                input_bg="#ffffff",
-                input_fg="#0f172a",
-                input_border="rgba(0,0,0,0.08)",
-            )
+        t = get_theme(name)
+        def bg(r, g, b, a=1.0): return Gdk.RGBA(r / 255.0, g / 255.0, b / 255.0, a)
+        self._bg_color = bg(*t["bg"])
+        self._title_color = bg(*t["panel_title"])
+        self._dir_color = bg(*t["panel_dir"])
+        self._snippet_color = bg(*t["panel_snippet"])
+        self._sep_rgba = t["panel_separator"]
+        vals = get_panel_css_vals(name)
         css = (
             ".cat-row { padding: 12px 18px; border-radius: 12px; margin: 2px 8px; border-left: 4px solid transparent; }"
             ".cat-row:hover { background: %(cat_hover)s; }"

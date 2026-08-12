@@ -250,6 +250,21 @@ def get_ai_gtk_colors(name: str) -> dict:
     }
 
 
+def parse_css_rgba(css_color: str, fallback=(0.66, 0.33, 0.97, 0.18)) -> tuple:
+    """Parse a CSS rgba(...) string into a 4-tuple of floats (r, g, b, a)."""
+    if not isinstance(css_color, str):
+        return fallback
+    css_color = css_color.strip()
+    if css_color.startswith("rgba(") and css_color.endswith(")"):
+        try:
+            parts = [float(x.strip()) for x in css_color[5:-1].split(",")]
+            if len(parts) == 4:
+                return (parts[0] / 255.0, parts[1] / 255.0, parts[2] / 255.0, parts[3])
+        except (ValueError, IndexError):
+            pass
+    return fallback
+
+
 # ── Persistence (theme choice) ────────────────────────────────────────────────
 
 def load_theme_config() -> str:

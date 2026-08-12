@@ -8,7 +8,7 @@ import difflib
 import os
 import time
 from system.utils import relative_time, request_window_focus, PANEL_WIDTH
-from stores.theme_config import get_theme, get_panel_css_vals
+from stores.theme_config import get_theme, get_panel_css_vals, parse_css_rgba
 
 
 def _get_active_monitor_geometry():
@@ -224,15 +224,7 @@ class SearchPanel:
         self._dot_recent = t["dot_recent"]
         self._dot_closed = t["dot_closed"]
         vals = get_panel_css_vals(name)
-        border_str = vals.get("window_border", "rgba(255,255,255,0.04)")
-        if border_str.startswith("rgba(") and border_str.endswith(")"):
-            try:
-                parts = [float(x.strip()) for x in border_str[5:-1].split(",")]
-                self._window_border_rgba = (parts[0]/255.0, parts[1]/255.0, parts[2]/255.0, parts[3])
-            except Exception:
-                self._window_border_rgba = (0.66, 0.33, 0.97, 0.18)
-        else:
-            self._window_border_rgba = (0.66, 0.33, 0.97, 0.18)
+        self._window_border_rgba = parse_css_rgba(vals.get("window_border", ""))
 
         css = (
             "window { border: 1px solid %(window_border)s; border-radius: 16px; background-color: transparent; }"
