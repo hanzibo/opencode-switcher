@@ -408,7 +408,8 @@
                 .msg-bubble.assistant {
                     background: rgba(255, 255, 255, 0.04);
                     border: 1px solid {pre_border};
-                    border-bottom-left-radius: 4px;
+                    border-radius: 16px;
+                    border-top-left-radius: 4px;
                     width: calc(100% - 44px);
                     padding-bottom: 32px; /* room for absolute copy/retry row */
                 }
