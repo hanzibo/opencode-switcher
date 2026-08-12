@@ -501,9 +501,30 @@ class TestClientManagerOAuth(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.mock.token_requests), 1)
 
 
+class TestMCPOAuthStoreKey(unittest.TestCase):
+    """M6：token 存储以 canonical URL 为 key，URL 微调不丢失授权状态。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_trailing_slash_does_not_change_key(self):
+        from mcp_integration.oauth.provider import OAuth2AuthProvider
+
+        p1 = OAuth2AuthProvider("https://mcp.example.com/mcp/", config_dir=self._tmp.name)
+        p2 = OAuth2AuthProvider("https://mcp.example.com/mcp", config_dir=self._tmp.name)
+        self.assertEqual(p1.store.path, p2.store.path)
+
+    def test_query_fragment_stripped(self):
+        from mcp_integration.oauth.provider import OAuth2AuthProvider
+
+        p1 = OAuth2AuthProvider("https://mcp.example.com/mcp?x=1", config_dir=self._tmp.name)
+        p2 = OAuth2AuthProvider("https://mcp.example.com/mcp#frag", config_dir=self._tmp.name)
+        self.assertEqual(p1.store.path, p2.store.path)
+
+
 class TestMCPServerConfigOAuthFields(unittest.TestCase):
     """server_config oauth 字段序列化与校验。"""
-
     def test_oauth_scopes_roundtrip(self):
         from mcp_integration.server_config import MCPServerConfig
 
@@ -641,6 +662,29 @@ class TestClientManagerToolNameMapping(unittest.IsolatedAsyncioTestCase):
         # 不抛 RuntimeError 即通过；结果包含净化后的工具
         names = {t["function"]["name"] for r in results for t in r}
         self.assertIn("srv0__tool_0", names)
+
+    async def test_tool_name_map_cleaned_on_refresh(self):
+        """M2：工具改名后旧映射被清理，不残留陈旧条目。"""
+        from mcp_integration.client_manager import MCPClientManager
+
+        mgr = MCPClientManager()
+        # 第一次：工具名为 tool.old（净化后 tool_old）
+        session = self._make_fake_session(["tool.old"])
+        mgr._sessions["srv"] = session
+        await mgr.list_all_tools()
+        self.assertIn("srv__tool_old", mgr._tool_name_map)
+        self.assertEqual(mgr._tool_name_map["srv__tool_old"], "tool.old")
+
+        # 第二次：工具改名（tool.old → tool.new，仍需净化）
+        session._tools = ["tool.new"]
+        await mgr.list_all_tools()
+        self.assertNotIn("srv__tool_old", mgr._tool_name_map)  # 旧映射被清理
+        self.assertIn("srv__tool_new", mgr._tool_name_map)     # 新映射已更新
+        self.assertEqual(mgr._tool_name_map["srv__tool_new"], "tool.new")
+        # 调用净化名 → 还原为新的原始名
+        result = await mgr.call_tool("srv", "tool_new", {})
+        self.assertEqual(result, "ok")
+        self.assertEqual(session.called_with, ["tool.new"])
 
 
 if __name__ == "__main__":

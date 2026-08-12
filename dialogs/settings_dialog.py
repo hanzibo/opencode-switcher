@@ -1466,6 +1466,10 @@ class SettingsDialog:
         oauth_auth_btn.set_tooltip_text("在浏览器中完成 OAuth 授权（PKCE）")
         row5_oauth.pack_start(oauth_auth_btn, False, False, 0)
 
+        oauth_clear_btn = Gtk.Button.new_with_label("清除授权")
+        oauth_clear_btn.set_tooltip_text("删除本地保存的 OAuth token 与客户端信息（换账号/吊销后清理）")
+        row5_oauth.pack_start(oauth_clear_btn, False, False, 0)
+
         oauth_status_label = Gtk.Label.new()
         oauth_status_label.set_markup("<span foreground='#888'>未授权</span>")
         row5_oauth.pack_start(oauth_status_label, False, False, 0)
@@ -1507,6 +1511,7 @@ class SettingsDialog:
             "oauth_token_url": oauth_token_url_entry,
             "oauth_scopes": oauth_scopes_entry,
             "oauth_auth_btn": oauth_auth_btn,
+            "oauth_clear_btn": oauth_clear_btn,
             "oauth_status_label": oauth_status_label,
             "protocol_version": proto_combo,
             "enable_2026_headers": header_check,
@@ -1544,14 +1549,15 @@ class SettingsDialog:
 
         # ── 认证方式切换 ──
         def _update_oauth_status():
-            """从 token store 读取授权状态显示。"""
+            """从 token store 读取授权状态显示（canonical key，M6）。"""
             try:
+                from mcp_integration.oauth.discovery import canonical_server_uri
                 from mcp_integration.oauth.token_store import OAuthTokenStore
                 url = url_entry.get_text().strip()
                 if not url:
                     oauth_status_label.set_markup("<span foreground='#888'>未授权</span>")
                     return
-                status = OAuthTokenStore(url).get_status()
+                status = OAuthTokenStore(canonical_server_uri(url)).get_status()
                 if status == "已授权":
                     oauth_status_label.set_markup("<span foreground='green'>● 已授权</span>")
                 elif status == "已过期":
@@ -1612,6 +1618,24 @@ class SettingsDialog:
             threading.Thread(target=_do_auth, daemon=True).start()
 
         oauth_auth_btn.connect("clicked", _on_start_oauth_clicked)
+
+        # ── 清除授权回调（M7） ──
+        def _on_clear_oauth_clicked(_btn):
+            url = url_entry.get_text().strip()
+            if not url:
+                oauth_status_label.set_markup("<span foreground='#888'>未授权</span>")
+                return
+            try:
+                from mcp_integration.oauth.discovery import canonical_server_uri
+                from mcp_integration.oauth.token_store import OAuthTokenStore
+                OAuthTokenStore(canonical_server_uri(url)).clear()
+                oauth_status_label.set_markup("<span foreground='#888'>已清除授权</span>")
+            except Exception as e:
+                oauth_status_label.set_markup(
+                    f"<span foreground='red'>● 清除失败: {e}</span>"
+                )
+
+        oauth_clear_btn.connect("clicked", _on_clear_oauth_clicked)
 
         # ── 测试连接回调 ──
         test_btn.connect("clicked", lambda _: self._on_test_mcp_connection(

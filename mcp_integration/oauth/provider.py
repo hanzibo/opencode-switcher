@@ -128,7 +128,10 @@ class OAuth2AuthProvider:
         self._browser_opener = browser_opener
         self._flow_timeout = flow_timeout
 
-        self._store = OAuthTokenStore(server_url, config_dir=config_dir)
+        # M6：token 存储以 canonical URL 为 key，URL 微调不丢失授权状态
+        self._store = OAuthTokenStore(
+            canonical_server_uri(server_url), config_dir=config_dir,
+        )
 
         # 内存缓存
         self._current_token: Optional[OAuthToken] = None

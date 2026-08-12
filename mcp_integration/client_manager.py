@@ -283,6 +283,10 @@ class MCPClientManager:
                 if session is None or not session.is_connected:
                     continue
                 tools = await self.list_tools(name)
+                # M2：先清理本 server 前缀的旧映射，避免工具改名/删除后残留
+                prefix = f"{name}__"
+                for k in [k for k in self._tool_name_map if k.startswith(prefix)]:
+                    del self._tool_name_map[k]
                 for tool in tools:
                     schema = mcp_tool_to_openai_schema(name, self._tool_dict_to_obj(tool))
                     # 记录净化名 → 原始名 映射（净化发生在 tool_adapter 内）
