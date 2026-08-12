@@ -96,6 +96,10 @@ class SearchPanel:
         self._window.connect("size-allocate", self._on_window_size_allocate)
 
         screen = self._window.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual and screen.is_composited():
+            self._window.set_visual(visual)
+
         self._css_provider = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_screen(
             screen, self._css_provider, Gtk.STYLE_PROVIDER_PRIORITY_USER
@@ -218,9 +222,19 @@ class SearchPanel:
         self._dot_recent = t["dot_recent"]
         self._dot_closed = t["dot_closed"]
         vals = get_panel_css_vals(name)
+        border_str = vals.get("window_border", "rgba(255,255,255,0.04)")
+        if border_str.startswith("rgba(") and border_str.endswith(")"):
+            try:
+                parts = [float(x.strip()) for x in border_str[5:-1].split(",")]
+                self._window_border_rgba = (parts[0]/255.0, parts[1]/255.0, parts[2]/255.0, parts[3])
+            except Exception:
+                self._window_border_rgba = (0.66, 0.33, 0.97, 0.18)
+        else:
+            self._window_border_rgba = (0.66, 0.33, 0.97, 0.18)
+
         css = (
-            "window { border: 1px solid %(window_border)s; }"
-            ".custom-dialog { border: none; }"
+            "window { border: 1px solid %(window_border)s; border-radius: 16px; background-color: transparent; }"
+            ".custom-dialog { border: none; border-radius: 16px; }"
             "#searchEntry { font-size: 24px; padding: 12px 16px; background: %(search_bg)s;"
             " color: %(search_fg)s; border: 1px solid %(input_border)s; border-radius: 14px;"
             " caret-color: %(caret)s; margin: 16px 20px 10px 20px; }"
@@ -499,23 +513,45 @@ class SearchPanel:
         self._menu_active = False
         self._opened_by_ai_hotkey = False
 
-    _opaque_region_supported = True
-
     def _on_window_draw(self, widget, cr):
         try:
+            import math
+            import cairo
+            w = widget.get_allocated_width()
+            h = widget.get_allocated_height()
+            r = 16.0
+
+            cr.set_operator(cairo.OPERATOR_CLEAR)
+            cr.paint()
+            cr.set_operator(cairo.OPERATOR_OVER)
+
+            cr.new_sub_path()
+            cr.arc(w - r, r, r, -math.pi / 2, 0)
+            cr.arc(w - r, h - r, r, 0, math.pi / 2)
+            cr.arc(r, h - r, r, math.pi / 2, math.pi)
+            cr.arc(r, r, r, math.pi, 3 * math.pi / 2)
+            cr.close_path()
+
             cr.set_source_rgba(
                 self._bg_color.red,
                 self._bg_color.green,
                 self._bg_color.blue,
                 self._bg_color.alpha,
             )
-            cr.paint()
+            cr.fill_preserve()
+
+            if hasattr(self, "_window_border_rgba"):
+                cr.set_source_rgba(*self._window_border_rgba)
+                cr.set_line_width(1.5)
+                cr.stroke()
+            else:
+                cr.new_path()
         except Exception:
             pass
         return False
 
     def _on_window_realize(self, widget):
-        """Set the entire window as opaque to prevent compositor from showing through."""
+        """Set window opaque region."""
         self._update_opaque_region(widget)
 
     def _on_window_size_allocate(self, widget, alloc):
@@ -523,33 +559,13 @@ class SearchPanel:
         self._update_opaque_region(widget, alloc)
 
     def _update_opaque_region(self, widget, alloc=None):
-        """Update the opaque region to cover the entire window allocation."""
-        if not SearchPanel._opaque_region_supported:
-            return
+        """Unset opaque region so rounded window corners remain transparent."""
         gdk_win = widget.get_window()
-        if gdk_win is None:
-            return
-        try:
-            if alloc is None:
-                alloc = widget.get_allocation()
-            w = max(alloc.width, 1)
-            h = max(alloc.height, 1)
-            import cairo
+        if gdk_win is not None:
             try:
-                region = cairo.Region(cairo.RectangleInt(0, 0, w, h))
+                gdk_win.set_opaque_region(None)
             except Exception:
-                surface = cairo.ImageSurface(cairo.FORMAT_A1, w, h)
-                cr = cairo.Context(surface)
-                cr.set_source_rgba(1, 1, 1, 1)
-                cr.paint()
-                del cr
-                region = Gdk.cairo_region_create_from_surface(surface)
-                surface.finish()
-            gdk_win.set_opaque_region(region)
-        except Exception as e:
-            SearchPanel._opaque_region_supported = False
-            import logging
-            logging.getLogger(__name__).warning("Opaque region update not supported on this environment: %s", e)
+                pass
 
     def _on_separator_draw(self, widget, cr):
         try:
