@@ -73,7 +73,7 @@ class _MockOAuthMCPServer:
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, "127.0.0.1", 0)
         await self._site.start()
-        port = self._site._server.sockets[0].getsockname()[1]
+        port = self._runner.addresses[0][1]
         self.base_url = f"http://127.0.0.1:{port}"
         return self.base_url
 
@@ -407,6 +407,38 @@ class TestHttpTransportOAuthAutoAuth(unittest.IsolatedAsyncioTestCase):
 
         grants = [r.get("grant_type") for r in self.mock.token_requests]
         self.assertEqual(grants.count("authorization_code"), 2)
+
+    async def test_401_no_expiry_token_refreshes(self):
+        """L8：无 expires_at 的 token 被服务端拒绝时，401 → 静默刷新自愈。"""
+        transport = self._make_transport()
+        await transport.connect()
+        try:
+            await transport.send_line(
+                json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+            )
+            await transport.read_line()
+            # 清除过期时间（模拟 AS 未返回 expires_in）并吊销服务端 token
+            data = self.provider.store.load()
+            assert data is not None
+            token = data["token"]
+            token.expires_at = None
+            self.provider.store.save(
+                token, client=data.get("client"), oauth_metadata=data.get("oauth_metadata")
+            )
+            self.mock.valid_tokens.clear()
+
+            await transport.send_line(
+                json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"})
+            )
+            line = await transport.read_line()
+            self.assertIsNotNone(line)
+            self.assertEqual(json.loads(line)["id"], 2)
+        finally:
+            await transport.disconnect()
+
+        grants = [r.get("grant_type") for r in self.mock.token_requests]
+        self.assertIn("refresh_token", grants)
+        self.assertEqual(grants.count("authorization_code"), 1)
 
 
 class TestHttpTransportStaticBearer(unittest.IsolatedAsyncioTestCase):

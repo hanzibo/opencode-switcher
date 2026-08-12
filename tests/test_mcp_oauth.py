@@ -454,8 +454,7 @@ class _MockDiscoveryServer:
         await self._runner.setup()
         site = web.TCPSite(self._runner, "127.0.0.1", 0)
         await site.start()
-        server = site._server
-        port = server.sockets[0].getsockname()[1]
+        port = self._runner.addresses[0][1]
         self.base_url = f"http://127.0.0.1:{port}"
         return self.base_url
 
@@ -575,8 +574,7 @@ class _MockTokenServer:
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, "127.0.0.1", 0)
         await self._site.start()
-        server = self._site._server
-        port = server.sockets[0].getsockname()[1]
+        port = self._runner.addresses[0][1]
         self.url = f"http://127.0.0.1:{port}"
 
     async def close(self):
@@ -731,12 +729,37 @@ class TestLoopbackRedirectServer(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("redirect_uri", sig.parameters)
 
 
+class TestExtractErrorDetail(unittest.TestCase):
+    """L7：token 端点错误消息脱敏。"""
+
+    def test_json_error_fields(self):
+        from mcp_integration.oauth.flow import _extract_error_detail
+
+        detail = _extract_error_detail(
+            '{"error":"invalid_grant","error_description":"token expired"}'
+        )
+        self.assertEqual(detail, "invalid_grant: token expired")
+
+    def test_masks_sensitive_fields(self):
+        from mcp_integration.oauth.flow import _extract_error_detail
+
+        body = '{"error":"x","access_token":"SECRET123","refresh_token":"RT-SECRET"}'
+        detail = _extract_error_detail(body)
+        self.assertNotIn("SECRET123", detail)
+        self.assertNotIn("RT-SECRET", detail)
+
+    def test_non_json_truncated(self):
+        from mcp_integration.oauth.flow import _extract_error_detail
+
+        detail = _extract_error_detail("plain text " * 100)
+        self.assertLessEqual(len(detail), 200)
+
+
 class TestTokenExchange(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.token_srv = _MockTokenServer()
         await self.token_srv.start()
         self.meta = _make_meta(self.token_srv.url + "/token")
-
     async def asyncTearDown(self):
         await self.token_srv.close()
 

@@ -318,6 +318,34 @@ def _parse_token_response(data: Dict[str, Any]) -> OAuthToken:
     return token
 
 
+def _extract_error_detail(body: str) -> str:
+    """从 token 端点错误响应提取脱敏的错误详情（L7）。
+
+    优先取 JSON 的 error / error_description 字段；解析失败或字段缺失时
+    截断 body 并打码疑似凭据字段，避免敏感信息进入日志/UI。
+    """
+    try:
+        data = json.loads(body)
+        if isinstance(data, dict):
+            parts = []
+            if data.get("error"):
+                parts.append(str(data["error"]))
+            if data.get("error_description"):
+                parts.append(str(data["error_description"]))
+            if parts:
+                return ": ".join(parts)[:200]
+    except Exception:
+        pass
+    # 回退：打码敏感字段后截断
+    import re
+    cleaned = re.sub(
+        r'"(access_token|refresh_token|id_token)"\s*:\s*"[^"]*"',
+        r'"\1":"***"',
+        body,
+    )
+    return cleaned[:200]
+
+
 async def _post_token_form(
     token_endpoint: str,
     form: Dict[str, str],
@@ -340,12 +368,14 @@ async def _post_token_form(
                 body = await resp.text()
                 if resp.status >= 400:
                     raise OAuthTokenError(
-                        f"token 端点 HTTP {resp.status}: {body[:200]}"
+                        f"token 端点 HTTP {resp.status}: {_extract_error_detail(body)}"
                     )
                 try:
                     return json.loads(body)
                 except json.JSONDecodeError:
-                    raise OAuthTokenError(f"token 端点返回非 JSON: {body[:200]}")
+                    raise OAuthTokenError(
+                        f"token 端点返回非 JSON: {_extract_error_detail(body)}"
+                    )
     except OAuthTokenError:
         raise
     except Exception as e:

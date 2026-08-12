@@ -11,7 +11,7 @@ HttpTransport 在每次请求前调用 get_auth_headers() 注入凭据；
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, Optional, Protocol
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from mcp_integration.oauth.discovery import (
     canonical_server_uri,
@@ -34,7 +34,7 @@ from mcp_integration.oauth.registration import (
     OAuthRegistrationError,
     dynamic_register,
 )
-from mcp_integration.oauth.token_store import OAuthTokenStore, _safe_filename
+from mcp_integration.oauth.token_store import OAuthTokenStore
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +282,7 @@ class OAuth2AuthProvider:
             self._prm = prm
 
         # 收集 issuer 候选：PRM authorization_servers → 服务器 URL 本身
-        issuers: list = []
+        issuers: List[str] = []
         if prm and prm.authorization_servers:
             issuers.extend(prm.authorization_servers)
         if not issuers:
