@@ -154,14 +154,30 @@ class OAuth2AuthProvider:
     async def handle_challenge(
         self, www_authenticate: str = "",
     ) -> Optional[Dict[str, str]]:
-        """401/403 时强制重新认证（token 失效 / scope 不足）。
+        """401/403 时自动重认证（token 失效 / scope 不足）。
 
-        清空内存 token，按 challenge 的 scope 重新走刷新/授权流程。
+        策略（对齐 _ensure_token）：先尝试静默刷新（401 常因 token 被吊销 /
+        服务端侧过期，持有 refresh_token 时应优先复用），刷新失败或不可用
+        才走完整浏览器授权流，避免用户被无谓弹窗。
         """
         if self._lock is None:
             import asyncio
             self._lock = asyncio.Lock()
         async with self._lock:
+            # 1. 尝试静默刷新
+            candidate = self._current_token
+            if candidate is None:
+                stored = self._store.load()
+                if stored:
+                    self._client = stored.get("client")
+                    self._oauth_metadata = stored.get("oauth_metadata")
+                    candidate = stored.get("token")
+            if candidate is not None:
+                refreshed = await self._try_refresh(candidate)
+                if refreshed is not None:
+                    return {"Authorization": f"Bearer {refreshed.access_token}"}
+
+            # 2. 刷新失败/不可用 → 完整授权流
             self._current_token = None
             token = await self._authorize(www_authenticate=www_authenticate)
             return {"Authorization": f"Bearer {token.access_token}"}

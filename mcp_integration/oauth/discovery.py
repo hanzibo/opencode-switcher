@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -302,11 +303,19 @@ async def _get_shared_session() -> Any:
     """获取共享 aiohttp session（首次调用创建；连接池/SSL 上下文复用）。
 
     M4：避免每次发现新建 ClientSession（单次授权最多 5 次 TCP+TLS 握手）。
+    跨事件循环场景（如 IsolatedAsyncioTestCase 每用例新 loop）自动重建。
     """
     import aiohttp
 
     global _shared_session
-    if _shared_session is None or _shared_session.closed:
+    loop = asyncio.get_running_loop()
+    if (
+        _shared_session is None
+        or _shared_session.closed
+        or getattr(_shared_session, "loop", None) is not loop
+    ):
+        if _shared_session is not None and not _shared_session.closed:
+            await _shared_session.close()
         _shared_session = aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=20)
         )

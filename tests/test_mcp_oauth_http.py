@@ -338,6 +338,76 @@ class TestHttpTransportOAuthAutoAuth(unittest.IsolatedAsyncioTestCase):
         self.assertIn("refresh_token", grants)
         self.assertEqual(len(self.mock.registered_clients), 1)  # 未重新注册
 
+    async def test_401_revoked_token_refreshes_not_reauth(self):
+        """H3：服务端吊销 token 后 401 → 静默刷新，不重走浏览器授权。"""
+        transport = self._make_transport()
+        await transport.connect()
+        try:
+            # 第一次成功（authorization_code）
+            await transport.send_line(
+                json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+            )
+            await transport.read_line()
+            self.assertEqual(len(self.mock.token_requests), 1)
+            self.assertEqual(self.mock.token_requests[0]["grant_type"], "authorization_code")
+
+            # 服务端吊销 access token（模拟被撤销/服务端过期）
+            self.mock.valid_tokens.clear()
+
+            # 第二次 → 401 → handle_challenge → 应走 refresh（无新授权码流）
+            await transport.send_line(
+                json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"})
+            )
+            line = await transport.read_line()
+            self.assertIsNotNone(line)
+            self.assertEqual(json.loads(line)["id"], 2)
+        finally:
+            await transport.disconnect()
+
+        grants = [r.get("grant_type") for r in self.mock.token_requests]
+        self.assertIn("refresh_token", grants)
+        # 未重新注册客户端、未出现第二个 authorization_code
+        self.assertEqual(len(self.mock.registered_clients), 1)
+        self.assertEqual(grants.count("authorization_code"), 1)
+        # 最终请求携带刷新后的 Bearer
+        self.assertTrue(any(
+            h.startswith("Bearer at-refreshed") for h in self.mock.mcp_auth_headers
+        ))
+
+    async def test_401_no_refresh_token_falls_back_to_full_auth(self):
+        """H3：无 refresh_token 时 401 → 完整授权流（回退路径）。"""
+        transport = self._make_transport()
+        await transport.connect()
+        try:
+            await transport.send_line(
+                json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"})
+            )
+            await transport.read_line()
+            # 移除 refresh_token 并吊销 token，使刷新不可用
+            data = self.provider.store.load()
+            assert data is not None
+            token = data["token"]
+            token.refresh_token = ""
+            token.expires_at = 0.0
+            self.provider.store.save(
+                token, client=data.get("client"), oauth_metadata=data.get("oauth_metadata")
+            )
+            self.provider._current_token = None
+            self.mock.valid_tokens.clear()
+
+            # 再次请求 → 401 → 刷新不可用 → 完整授权流（出现第二个 authorization_code）
+            await transport.send_line(
+                json.dumps({"jsonrpc": "2.0", "id": 2, "method": "ping"})
+            )
+            line = await transport.read_line()
+            self.assertIsNotNone(line)
+            self.assertEqual(json.loads(line)["id"], 2)
+        finally:
+            await transport.disconnect()
+
+        grants = [r.get("grant_type") for r in self.mock.token_requests]
+        self.assertEqual(grants.count("authorization_code"), 2)
+
 
 class TestHttpTransportStaticBearer(unittest.IsolatedAsyncioTestCase):
     """静态 Bearer 行为不变（向后兼容）。"""
