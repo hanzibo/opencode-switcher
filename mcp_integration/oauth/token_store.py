@@ -116,8 +116,14 @@ class OAuthTokenStore:
         client: Optional[OAuthClientInformationFull] = None,
         oauth_metadata: Optional[OAuthMetadata] = None,
     ) -> None:
-        """保存 token（及可选的客户端信息、AS 元数据缓存）。权限 0o600。"""
-        os.makedirs(self._dir, exist_ok=True)
+        """保存 token（及可选的客户端信息、AS 元数据缓存）。
+
+        安全写入模式（对齐 stores/clipboard_store.py）：同目录临时文件
+        mode=0o600 → flush + fsync → os.replace() 原子替换，保证：
+        - 已存在文件权限位也被强制重置为 0o600（os.open mode 仅新建时生效）
+        - 读取方永远不会观察到半写文件
+        """
+        os.makedirs(self._dir, mode=0o700, exist_ok=True)
         payload: Dict[str, Any] = {"token": token.to_dict()}
         if client is not None:
             payload["client"] = {
@@ -144,14 +150,24 @@ class OAuthTokenStore:
                 "code_challenge_methods_supported": oauth_metadata.code_challenge_methods_supported,
                 "client_id_metadata_document_supported": oauth_metadata.client_id_metadata_document_supported,
             }
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        tmp_path = self.path + ".tmp"
         try:
-            fd = os.open(self.path, flags, 0o600)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            fd = os.open(tmp_path, flags, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, self.path)
             logger.debug("OAuth token 已保存: %s", self.path)
         except Exception as e:
             logger.error("OAuth token 保存失败 %s: %s", self.path, e)
+            # 清理临时文件，避免残留半写状态
+            try:
+                if os.path.isfile(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
 
     def clear(self) -> None:
         """删除存储文件。"""

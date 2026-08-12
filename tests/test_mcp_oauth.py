@@ -352,6 +352,34 @@ class TestOAuthTokenStore(unittest.TestCase):
         mode = os.stat(self.store.path).st_mode & 0o777
         self.assertEqual(mode, 0o600)
 
+    def test_permissions_reset_on_existing_file(self):
+        """H1 回归：已存在 0644 文件在 save 后被强制重置为 0600。"""
+        # 先写入一个宽松权限的文件
+        os.makedirs(os.path.dirname(self.store.path), exist_ok=True)
+        with open(self.store.path, "w", encoding="utf-8") as f:
+            f.write("{}")
+        os.chmod(self.store.path, 0o644)
+        # save 后权限必须重置
+        self.store.save(self._make_token())
+        mode = os.stat(self.store.path).st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+        # 内容仍可正常读取
+        data = self.store.load()
+        self.assertIsNotNone(data)
+        assert data is not None
+        self.assertEqual(data["token"].access_token, "at")
+
+    def test_dir_permissions_0700(self):
+        """L4 回归：存储目录权限为 0700。"""
+        self.store.save(self._make_token())
+        dir_mode = os.stat(self.store._dir).st_mode & 0o777
+        self.assertEqual(dir_mode, 0o700)
+
+    def test_no_tmp_leftover_after_save(self):
+        """save 成功后不留 .tmp 残留文件。"""
+        self.store.save(self._make_token())
+        self.assertFalse(os.path.exists(self.store.path + ".tmp"))
+
     def test_has_token_validity(self):
         import time
         self.store.save(self._make_token(expires_at=time.time() + 3600))
