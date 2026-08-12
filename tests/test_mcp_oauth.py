@@ -682,6 +682,54 @@ class TestLoopbackRedirectServer(unittest.IsolatedAsyncioTestCase):
             await server.wait_for_callback()
         await server.close()
 
+    async def test_port_conflict_falls_back_to_dynamic(self):
+        """H4：固定端口被占用时回退动态端口，授权不失败。"""
+        import socket
+        from mcp_integration.oauth.flow import LoopbackRedirectServer
+
+        blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        blocker.bind(("127.0.0.1", 0))
+        blocker.listen(1)
+        occupied = blocker.getsockname()[1]
+        try:
+            server = LoopbackRedirectServer(timeout=10, port=occupied)
+            redirect_uri = await server.start()
+            # 成功监听且不在被占用的端口上
+            self.assertNotIn(f":{occupied}/callback", redirect_uri)
+            self.assertTrue(redirect_uri.startswith("http://127.0.0.1:"))
+            await server.close()
+        finally:
+            blocker.close()
+
+    async def test_forged_state_callback_ignored(self):
+        """L3：伪造 state 回调不完成 future，合法回调仍可成功。"""
+        from mcp_integration.oauth.flow import LoopbackRedirectServer
+        import aiohttp
+
+        server = LoopbackRedirectServer(timeout=10, expected_state="GOOD")
+        redirect_uri = await server.start()
+
+        async with aiohttp.ClientSession() as s:
+            # 伪造回调：state 不匹配 → 400，不完成 future
+            async with s.get(f"{redirect_uri}?code=EVIL&state=BAD") as resp:
+                self.assertEqual(resp.status, 400)
+            # 合法回调
+            async with s.get(f"{redirect_uri}?code=OK&state=GOOD") as resp:
+                self.assertEqual(resp.status, 200)
+
+        code, state = await server.wait_for_callback()
+        self.assertEqual(code, "OK")
+        self.assertEqual(state, "GOOD")
+        await server.close()
+
+    def test_run_authorization_flow_no_redirect_uri_param(self):
+        """M5：run_authorization_flow 不再接受必失败的 redirect_uri 参数。"""
+        import inspect
+        from mcp_integration.oauth.flow import run_authorization_flow
+
+        sig = inspect.signature(run_authorization_flow)
+        self.assertNotIn("redirect_uri", sig.parameters)
+
 
 class TestTokenExchange(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

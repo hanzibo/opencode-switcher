@@ -124,13 +124,23 @@ class LoopbackRedirectServer:
     ----------
     port : int, optional
         固定监听端口（DCR 预注册 redirect_uri 场景）；默认 0（随机）。
+        端口被占用时自动回退到动态端口（H4）。
     timeout : float
         等待回调超时秒数。
+    expected_state : str, optional
+        期望的回调 state；不匹配的伪造回调不完成 future（L3），
+        仅返回 400 并继续等待合法回调。
     """
 
-    def __init__(self, timeout: float = _DEFAULT_FLOW_TIMEOUT, port: int = 0) -> None:
+    def __init__(
+        self,
+        timeout: float = _DEFAULT_FLOW_TIMEOUT,
+        port: int = 0,
+        expected_state: str = "",
+    ) -> None:
         self._timeout = timeout
         self._port_requested = port
+        self._expected_state = expected_state
         self._server: Optional[asyncio.AbstractServer] = None
         self._port = 0
         self._result_fut: Optional[asyncio.Future] = None
@@ -142,12 +152,25 @@ class LoopbackRedirectServer:
         return f"http://127.0.0.1:{self._port}{_CALLBACK_PATH}"
 
     async def start(self) -> str:
-        """启动服务器并返回 redirect_uri。"""
+        """启动服务器并返回 redirect_uri。
+
+        固定端口被占用时回退到动态端口（0），避免授权直接失败。
+        """
         loop = asyncio.get_running_loop()
         self._result_fut = loop.create_future()
-        self._server = await asyncio.start_server(
-            self._handle, "127.0.0.1", self._port_requested
-        )
+        try:
+            self._server = await asyncio.start_server(
+                self._handle, "127.0.0.1", self._port_requested
+            )
+        except OSError:
+            if self._port_requested == 0:
+                raise  # 动态端口都失败则真正异常
+            logger.warning(
+                "回调端口 %d 被占用，回退动态端口", self._port_requested
+            )
+            self._server = await asyncio.start_server(
+                self._handle, "127.0.0.1", 0
+            )
         sock = self._server.sockets[0]
         self._port = sock.getsockname()[1]
         logger.debug("Loopback 回调服务器已启动: %s", self.redirect_uri)
@@ -205,7 +228,11 @@ class LoopbackRedirectServer:
                 pass
 
     def _handle_callback(self, target: str, writer: asyncio.StreamWriter) -> None:
-        """解析回调 query，完成 future。"""
+        """解析回调 query，校验 state 后完成 future。
+
+        L3：state 不匹配的（伪造）回调不完成 future——仅记录并返回 400，
+        继续等待合法回调；只有 state 匹配才 set_result。
+        """
         query = target.partition("?")[2]
         params = parse_qs(query)
         code = params.get("code", [""])[0]
@@ -223,6 +250,11 @@ class LoopbackRedirectServer:
 
         if not code:
             self._write_simple(writer, 400, "缺少 code 参数")
+            return
+
+        if self._expected_state and state != self._expected_state:
+            logger.warning("回调 state 不匹配，忽略伪造回调")
+            self._write_simple(writer, 400, "state 不匹配")
             return
 
         if self._result_fut is not None and not self._result_fut.done():
@@ -380,7 +412,6 @@ async def run_authorization_flow(
     resource: str,
     scope: str = "",
     *,
-    redirect_uri: Optional[str] = None,
     callback_port: int = 0,
     timeout: float = _DEFAULT_FLOW_TIMEOUT,
     browser_opener: Optional[BrowserOpener] = None,
@@ -397,8 +428,6 @@ async def run_authorization_flow(
         MCP Server 规范 URI（RFC 8707 resource 参数）。
     scope : str, optional
         请求的 scope（空格分隔）；为空则省略 scope 参数。
-    redirect_uri : str, optional
-        固定回调 URI（预注册场景）；默认启动动态 loopback。
     callback_port : int, optional
         回调服务器固定端口（DCR 注册 redirect_uri 场景）；默认 0（随机）。
     timeout : float
@@ -418,12 +447,10 @@ async def run_authorization_flow(
     pkce = PKCEParameters.generate()
     state = generate_state()
 
-    server: Optional[LoopbackRedirectServer] = None
-    if redirect_uri is None:
-        server = LoopbackRedirectServer(timeout=timeout, port=callback_port)
-        actual_redirect_uri = await server.start()
-    else:
-        actual_redirect_uri = redirect_uri
+    server = LoopbackRedirectServer(
+        timeout=timeout, port=callback_port, expected_state=state,
+    )
+    actual_redirect_uri = await server.start()
 
     try:
         auth_url = build_authorization_url(
@@ -433,12 +460,7 @@ async def run_authorization_flow(
         await open_browser(auth_url, opener=browser_opener)
         logger.info("等待用户在浏览器中完成授权: %s", meta.authorization_endpoint)
 
-        if server is not None:
-            code, returned_state = await server.wait_for_callback()
-        else:
-            # 固定 redirect_uri：调用方必须自行注入回调处理（暂不支持自动）
-            raise OAuthFlowError("固定 redirect_uri 模式需要自定义回调处理器")
-
+        code, returned_state = await server.wait_for_callback()
         if returned_state != state:
             raise OAuthFlowError("回调 state 不匹配（可能的 CSRF 攻击）")
 
@@ -447,5 +469,4 @@ async def run_authorization_flow(
             pkce.code_verifier, resource,
         )
     finally:
-        if server is not None:
-            await server.close()
+        await server.close()
