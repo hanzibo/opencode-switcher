@@ -471,7 +471,32 @@ class ClipboardPanel(Gtk.Box):
 
     def _set_theme(self, name: str):
         self._theme = name
-        if name == "dark":
+        if name == "dark-moon":
+            self._bg_color = Gdk.RGBA(0.059, 0.035, 0.078, 1.0)
+            self._title_color = Gdk.RGBA(0.96, 0.94, 0.98, 1.0)
+            self._dir_color = Gdk.RGBA(0.66, 0.52, 0.78, 1.0)
+            self._snippet_color = Gdk.RGBA(0.48, 0.38, 0.58, 1.0)
+            self._sep_rgba = (0.66, 0.33, 0.97, 0.08)
+            vals = dict(
+                text_fg="rgba(250,245,255,0.95)",
+                text_secondary="rgba(245,240,250,0.50)",
+                hover_bg="rgba(168,85,247,0.07)",
+                sel_bg="rgba(168,85,247,0.14)",
+                sel_border="#c084fc",
+                cat_hover="rgba(168,85,247,0.07)",
+                cat_sel="rgba(168,85,247,0.14)",
+                cat_sel_border="#c084fc",
+                btn_bg="rgba(168,85,247,0.08)",
+                btn_border="rgba(168,85,247,0.20)",
+                btn_hover="rgba(168,85,247,0.18)",
+                btn_active="rgba(168,85,247,0.28)",
+                cat_sep_color="rgba(168,85,247,0.25)",
+                dialog_bg="#0f0914",
+                input_bg="#181124",
+                input_fg="#faf5ff",
+                input_border="rgba(168,85,247,0.22)",
+            )
+        elif name == "dark":
             self._bg_color = Gdk.RGBA(0.039, 0.043, 0.063, 1.0)
             self._title_color = Gdk.RGBA(0.95, 0.96, 0.98, 1.0)
             self._dir_color = Gdk.RGBA(0.39, 0.45, 0.55, 1.0)

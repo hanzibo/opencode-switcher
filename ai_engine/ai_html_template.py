@@ -62,7 +62,7 @@ def _get_pygments_css(theme: str, cache: dict) -> str:
         return cached
     try:
         from pygments.formatters import HtmlFormatter
-        style = "monokai" if theme == "dark" else "friendly"
+        style = "friendly" if theme == "light" else "monokai"
         css = HtmlFormatter(style=style).get_style_defs(".codehilite")
     except ImportError:
         css = ""
