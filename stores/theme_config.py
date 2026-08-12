@@ -129,14 +129,67 @@ DARK: Dict[str, Any] = {
 }
 
 
+DARK_MOON: Dict[str, Any] = {
+    # ── Search panel (panel.py) GTK colours ──
+    "panel_bg":          (0.059, 0.035, 0.078, 1.0),    # #0f0914 (暗夜紫晶玄黑)
+    "panel_title":       (0.96,  0.94,  0.98,  1.0),    # #f5f0fa (柔月透白)
+    "panel_dir":         (0.66,  0.52,  0.78,  1.0),    # #a885c7 (柔和紫罗兰)
+    "panel_snippet":     (0.48,  0.38,  0.58,  1.0),    # #7a6194 (暗紫字)
+    "panel_separator":   (0.66,  0.33,  0.97,  0.08),   # 紫荧分割线
+    "dot_live":          (0.659, 0.333, 0.969, 0.95),   # #a855f7 (紫晶亮)
+    "dot_recent":        (0.957, 0.447, 0.714, 0.85),   # #f472b6 (粉月亮)
+    "dot_closed":        (0.48,  0.38,  0.58,  0.5),    # 暗紫灰
+
+    # ── Panel CSS values (interpolated into CSS template) ──
+    "window_border":     "rgba(168,85,247,0.18)",
+    "hover_bg":          "rgba(168,85,247,0.07)",
+    "sel_bg":            "rgba(168,85,247,0.14)",
+    "sel_border":        "#c084fc",
+    "search_bg":         "#181124",
+    "search_fg":         "#faf5ff",
+    "caret":             "#c084fc",
+    "input_border":      "rgba(168,85,247,0.22)",
+    "tab_fg":            "rgba(245,240,250,0.50)",
+    "tab_active_fg":     "#ffffff",
+    "dialog_bg":         "#0f0914",
+    "text_fg":           "#faf5ff",
+    "input_bg":          "#181124",
+    "input_fg":          "#faf5ff",
+    "btn_bg":            "rgba(168,85,247,0.08)",
+    "btn_border":        "rgba(168,85,247,0.20)",
+    "btn_hover":         "rgba(168,85,247,0.18)",
+    "btn_active":        "rgba(168,85,247,0.28)",
+
+    # ── AI panel GTK widget colours (ai_chat_panel.py) ──
+    "ai_bg":             (0.059, 0.035, 0.078, 1.0),    # #0f0914
+    "ai_header_bg":      (0.094, 0.067, 0.141, 1.0),    # #181124
+    "ai_input_bg":       (0.094, 0.067, 0.141, 1.0),    # #181124
+
+    # ── AI panel WebView CSS variables (ai_html_template.py) ──
+    "web_bg":            "#0f0914",
+    "web_text":          "rgba(250,245,255,0.95)",
+    "web_pre_bg":        "#181124",
+    "web_code_bg":       "rgba(168,85,247,0.12)",
+    "web_code_fg":       "#f472b6",
+    "web_pre_border":    "rgba(168,85,247,0.20)",
+    "web_thinking":      "#c084fc",
+    "web_answer":        "#f472b6",
+    "web_user":          "#a855f7",
+    "web_assistant":     "#e879f9",
+    "web_table_header":  "rgba(168,85,247,0.12)",
+    "web_table_alt":     "rgba(168,85,247,0.05)",
+    "web_toggle":        "#c084fc",
+}
+
+
 # ── Lookup ────────────────────────────────────────────────────────────────────
 
-_THEMES = {"light": LIGHT, "dark": DARK}
+_THEMES = {"light": LIGHT, "dark": DARK, "dark-moon": DARK_MOON}
 
 
 def get_theme(name: str) -> dict:
     """Return the full colour dict for the given theme name."""
-    return _THEMES.get(name, LIGHT)
+    return _THEMES.get(name, DARK)
 
 
 def get_panel_css_vals(name: str) -> dict:

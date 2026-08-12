@@ -1155,21 +1155,28 @@ class SettingsDialog:
         theme_lbl.set_xalign(0)
         vbox.pack_start(theme_lbl, False, False, 0)
 
-        self._theme_dark_radio = Gtk.RadioButton.new_with_label(None, "深色 (Dark)")
+        self._theme_dark_radio = Gtk.RadioButton.new_with_label(None, "经典深色 (Dark)")
         self._theme_light_radio = Gtk.RadioButton.new_with_label_from_widget(
             self._theme_dark_radio, "浅色 (Light)"
         )
+        self._theme_dark_moon_radio = Gtk.RadioButton.new_with_label_from_widget(
+            self._theme_dark_radio, "紫月星云 (Dark Moon)"
+        )
         if self._current_theme == "light":
             self._theme_light_radio.set_active(True)
+        elif self._current_theme == "dark-moon":
+            self._theme_dark_moon_radio.set_active(True)
         else:
             self._theme_dark_radio.set_active(True)
 
         vbox.pack_start(self._theme_dark_radio, False, False, 0)
+        vbox.pack_start(self._theme_dark_moon_radio, False, False, 0)
         vbox.pack_start(self._theme_light_radio, False, False, 0)
 
         # ── Preview hint ──
         hint = Gtk.Label.new()
-        theme_name = "Light" if self._current_theme == "light" else "Dark"
+        theme_names = {"light": "Light (浅色)", "dark": "Dark (经典深色)", "dark-moon": "Dark Moon (紫月星云)"}
+        theme_name = theme_names.get(self._current_theme, "Dark")
         hint.set_markup(
             f"<span size='small' foreground='#888888'>"
             f"当前主题：{theme_name}。\n"
@@ -1859,7 +1866,13 @@ class SettingsDialog:
         self._ai_settings_store.save()
 
         # 主题设置
-        new_theme = "light" if self._theme_light_radio.get_active() else "dark"
+        if self._theme_light_radio.get_active():
+            new_theme = "light"
+        elif self._theme_dark_moon_radio.get_active():
+            new_theme = "dark-moon"
+        else:
+            new_theme = "dark"
+
         if new_theme != self._current_theme:
             from stores.theme_config import save_theme_config
             save_theme_config(new_theme)

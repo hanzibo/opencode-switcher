@@ -551,11 +551,11 @@ class AIChatPanel(Gtk.Box):
 
         try:
             _subagent_css = b"""
-                .subagent-status-bar { margin: 4px 8px 2px 8px; min-height: 28px; background-color: #1a1d2e; border-radius: 6px; padding: 4px 6px; border: 1px solid #2a2d3e; }
-                .subagent-block-running { background-color: #3b82f6; color: #ffffff; border-radius: 4px; font-size: 12px; border: 2px solid transparent; }
-                .subagent-block-done { background-color: #22c55e; color: #ffffff; border-radius: 4px; font-size: 12px; border: 2px solid transparent; }
+                .subagent-status-bar { margin: 4px 8px 2px 8px; min-height: 28px; background-color: #181124; border-radius: 12px; padding: 4px 8px; border: 1px solid rgba(168,85,247,0.22); }
+                .subagent-block-running { background-color: #a855f7; color: #ffffff; border-radius: 8px; font-size: 12px; border: 2px solid transparent; }
+                .subagent-block-done { background-color: #22c55e; color: #ffffff; border-radius: 8px; font-size: 12px; border: 2px solid transparent; }
                 .subagent-block-done:hover { background-color: #16a34a; }
-                .subagent-block-failed { background-color: #ef4444; color: #ffffff; border-radius: 4px; font-size: 12px; border: 2px solid transparent; }
+                .subagent-block-failed { background-color: #ef4444; color: #ffffff; border-radius: 8px; font-size: 12px; border: 2px solid transparent; }
                 .subagent-block-selected { border-color: #ffffff; }
                 .subagent-spinner { min-width: 14px; min-height: 14px; margin-left: 4px; }
                 flowboxchild:focus { outline: none; box-shadow: none; }

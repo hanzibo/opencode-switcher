@@ -87,13 +87,20 @@ class App:
         menu.append(show_item)
 
         theme_menu = Gtk.Menu.new()
-        dark_item = Gtk.RadioMenuItem.new_with_label(None, "Dark")
-        light_item = Gtk.RadioMenuItem.new_with_label_from_widget(dark_item, "Light")
+        dark_item = Gtk.RadioMenuItem.new_with_label(None, "Dark (经典深色)")
+        dark_moon_item = Gtk.RadioMenuItem.new_with_label_from_widget(dark_item, "Dark Moon (紫月星云)")
+        light_item = Gtk.RadioMenuItem.new_with_label_from_widget(dark_item, "Light (浅色)")
         if self._theme == "light":
             light_item.set_active(True)
+        elif self._theme == "dark-moon":
+            dark_moon_item.set_active(True)
+        else:
+            dark_item.set_active(True)
         dark_item.connect("toggled", lambda item: self._on_theme_changed("dark") if item.get_active() else None)
+        dark_moon_item.connect("toggled", lambda item: self._on_theme_changed("dark-moon") if item.get_active() else None)
         light_item.connect("toggled", lambda item: self._on_theme_changed("light") if item.get_active() else None)
         theme_menu.append(dark_item)
+        theme_menu.append(dark_moon_item)
         theme_menu.append(light_item)
         theme_menu_item = Gtk.MenuItem.new_with_label("Theme")
         theme_menu_item.set_submenu(theme_menu)
