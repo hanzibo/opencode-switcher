@@ -35,10 +35,11 @@ class MCPServerConfig:
     api_key: str = ""
     # HTTP 认证类型："none" | "bearer" | "oauth2"
     auth_type: str = "bearer"
-    # OAuth 2.1 参数（预留）
+    # OAuth 2.1 参数
     oauth_client_id: str = ""
     oauth_client_secret: str = ""
     oauth_token_url: str = ""
+    oauth_scopes: str = ""
 
     # ── 协议参数 ──
     protocol_version: str = "2025-11-25"
@@ -63,6 +64,7 @@ class MCPServerConfig:
             "oauth_client_id": self.oauth_client_id,
             "oauth_client_secret": self.oauth_client_secret,
             "oauth_token_url": self.oauth_token_url,
+            "oauth_scopes": self.oauth_scopes,
             "protocol_version": self.protocol_version,
             "enable_2026_headers": self.enable_2026_headers,
             "enabled": self.enabled,
@@ -76,6 +78,7 @@ class MCPServerConfig:
             "name", "transport", "command", "args", "cwd",
             "url", "api_key", "auth_type",
             "oauth_client_id", "oauth_client_secret", "oauth_token_url",
+            "oauth_scopes",
             "protocol_version", "enable_2026_headers",
             "enabled", "auto_connect", "last_status",
         }
@@ -87,6 +90,7 @@ class MCPServerConfig:
         filtered.setdefault("oauth_client_id", "")
         filtered.setdefault("oauth_client_secret", "")
         filtered.setdefault("oauth_token_url", "")
+        filtered.setdefault("oauth_scopes", "")
         filtered.setdefault("last_status", "")
         return cls(**filtered)
 
@@ -104,6 +108,9 @@ class MCPServerConfig:
                 return "http 模式需要指定 URL"
             if not self.url.startswith(("http://", "https://")):
                 return "http 模式 URL 需以 http:// 或 https:// 开头"
+        # 验证认证类型
+        if self.auth_type not in ("none", "bearer", "oauth2"):
+            return f"不支持的认证类型: {self.auth_type}"
         # 验证协议版本
         if self.protocol_version not in ("2024-11-05", "2025-03-26", "2025-11-25", "2026-07-28", "draft"):
             return f"不支持的协议版本: {self.protocol_version}"

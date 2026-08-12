@@ -102,6 +102,9 @@ class MCPClientManager:
         """通过 Streamable HTTP 连接到远程 MCP Server。
 
         使用现有分层架构：HttpTransport → JsonRpcSession → MCPSession。
+        认证按 config.auth_type 选择：
+        - "oauth2"：OAuth 2.1 自动认证（PKCE 授权码流 + token 持久化/刷新）
+        - "bearer" / "none"：静态 API key（现有行为）
         """
         # 清除旧连接及重连定时器
         await self._cleanup_connection(config.name)
@@ -110,12 +113,25 @@ class MCPClientManager:
         from mcp_integration.mcp_session import MCPSession
         from mcp_integration.json_rpc import JsonRpcSession
 
+        # 构建认证策略
+        auth_provider = None
+        if config.auth_type == "oauth2":
+            from mcp_integration.oauth.provider import OAuth2AuthProvider
+            auth_provider = OAuth2AuthProvider(
+                config.url,
+                client_id=config.oauth_client_id,
+                client_secret=config.oauth_client_secret,
+                token_url=config.oauth_token_url,
+                scopes=config.oauth_scopes,
+            )
+
         # 构建 HttpTransport
         transport = HttpTransport(
             url=config.url,
             api_key=config.api_key,
             protocol_version=config.protocol_version,
             enable_2026_headers=config.enable_2026_headers,
+            auth_provider=auth_provider,
         )
         jrpc = JsonRpcSession(transport)
         session = MCPSession(jrpc)

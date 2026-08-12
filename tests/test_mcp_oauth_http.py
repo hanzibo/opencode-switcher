@@ -371,5 +371,98 @@ class TestHttpTransportStaticBearer(unittest.IsolatedAsyncioTestCase):
             await transport.disconnect()
 
 
+class TestClientManagerOAuth(unittest.IsolatedAsyncioTestCase):
+    """client_manager.connect_http 对 auth_type=oauth2 配置端到端自动认证。"""
+
+    async def asyncSetUp(self):
+        from mcp_integration.server_config import MCPServerConfig
+
+        self.mock = _MockOAuthMCPServer()
+        self.base_url = await self.mock.start()
+        self.server_url = self.base_url + MCP_PATH
+        self.config = MCPServerConfig(
+            name="oauth-server",
+            transport="http",
+            url=self.server_url,
+            auth_type="oauth2",
+            auto_connect=False,
+        )
+
+    async def asyncTearDown(self):
+        await self.mock.close()
+
+    async def test_connect_http_auto_auth(self):
+        from mcp_integration import MCPClientManager, MCPServerConfig
+
+        mgr = MCPClientManager()
+        ok, msg = await mgr.connect_http(self.config)
+        self.assertTrue(ok, msg)
+        try:
+            self.assertTrue(mgr.is_connected("oauth-server"))
+            tools = await mgr.list_tools("oauth-server")
+            self.assertIsInstance(tools, list)
+            # 认证链路执行
+            self.assertEqual(len(self.mock.registered_clients), 1)
+            self.assertIn("Bearer at-1", self.mock.mcp_auth_headers)
+        finally:
+            await mgr.disconnect("oauth-server")
+
+    async def test_reconnect_uses_cached_token(self):
+        from mcp_integration import MCPClientManager
+
+        mgr = MCPClientManager()
+        ok, msg = await mgr.connect_http(self.config)
+        self.assertTrue(ok, msg)
+        await mgr.disconnect("oauth-server")
+
+        # 重连：应复用已持久化的 token，不再注册/授权
+        mgr2 = MCPClientManager()
+        ok2, msg2 = await mgr2.connect_http(self.config)
+        self.assertTrue(ok2, msg2)
+        await mgr2.disconnect("oauth-server")
+
+        self.assertEqual(len(self.mock.registered_clients), 1)
+        self.assertEqual(len(self.mock.token_requests), 1)
+
+
+class TestMCPServerConfigOAuthFields(unittest.TestCase):
+    """server_config oauth 字段序列化与校验。"""
+
+    def test_oauth_scopes_roundtrip(self):
+        from mcp_integration.server_config import MCPServerConfig
+
+        cfg = MCPServerConfig(
+            name="s", transport="http", url="https://mcp.example.com/mcp",
+            auth_type="oauth2", oauth_client_id="cid",
+            oauth_client_secret="sec", oauth_token_url="https://as.example.com/token",
+            oauth_scopes="a b",
+        )
+        d = cfg.to_dict()
+        self.assertEqual(d["oauth_scopes"], "a b")
+        cfg2 = MCPServerConfig.from_dict(d)
+        self.assertEqual(cfg2.auth_type, "oauth2")
+        self.assertEqual(cfg2.oauth_client_id, "cid")
+        self.assertEqual(cfg2.oauth_scopes, "a b")
+
+    def test_old_config_backward_compat(self):
+        from mcp_integration.server_config import MCPServerConfig
+
+        # 旧配置无 oauth_scopes 字段
+        cfg = MCPServerConfig.from_dict({
+            "name": "s", "transport": "http", "url": "https://mcp.example.com/mcp",
+        })
+        self.assertEqual(cfg.oauth_scopes, "")
+        self.assertIsNone(cfg.validate())
+
+    def test_invalid_auth_type_rejected(self):
+        from mcp_integration.server_config import MCPServerConfig
+
+        cfg = MCPServerConfig(
+            name="s", transport="http", url="https://mcp.example.com/mcp",
+            auth_type="ntlm",
+        )
+        self.assertIsNotNone(cfg.validate())
+
+
 if __name__ == "__main__":
     unittest.main()
