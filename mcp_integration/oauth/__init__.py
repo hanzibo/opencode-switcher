@@ -21,6 +21,12 @@ from mcp_integration.oauth.discovery import (
     discover_protected_resource_metadata,
     parse_www_authenticate,
 )
+from mcp_integration.oauth.token_store import OAuthTokenStore
+from mcp_integration.oauth.provider import (
+    AuthProvider,
+    OAuth2AuthProvider,
+    StaticBearerAuthProvider,
+)
 
 __all__ = [
     "OAuthMetadata",
@@ -35,4 +41,8 @@ __all__ = [
     "discover_oauth_metadata",
     "discover_protected_resource_metadata",
     "parse_www_authenticate",
+    "OAuthTokenStore",
+    "AuthProvider",
+    "OAuth2AuthProvider",
+    "StaticBearerAuthProvider",
 ]
