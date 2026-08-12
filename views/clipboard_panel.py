@@ -473,11 +473,10 @@ class ClipboardPanel(Gtk.Box):
     def _set_theme(self, name: str):
         self._theme = name
         t = get_theme(name)
-        def bg(r, g, b, a=1.0): return Gdk.RGBA(r / 255.0, g / 255.0, b / 255.0, a)
-        self._bg_color = bg(*t["bg"])
-        self._title_color = bg(*t["panel_title"])
-        self._dir_color = bg(*t["panel_dir"])
-        self._snippet_color = bg(*t["panel_snippet"])
+        self._bg_color = Gdk.RGBA(*t["panel_bg"])
+        self._title_color = Gdk.RGBA(*t["panel_title"])
+        self._dir_color = Gdk.RGBA(*t["panel_dir"])
+        self._snippet_color = Gdk.RGBA(*t["panel_snippet"])
         self._sep_rgba = t["panel_separator"]
         vals = get_panel_css_vals(name)
         css = (
