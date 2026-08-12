@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,6 +24,11 @@ _PRMW_SUFFIX = "oauth-protected-resource"
 _AS_METADATA_SUFFIX = "oauth-authorization-server"
 # OIDC Discovery well-known URI 后缀
 _OIDC_SUFFIX = "openid-configuration"
+
+# 元数据文档大小上限（1MB），防止恶意服务器内存放大
+_MAX_METADATA_BYTES = 1_000_000
+# 元数据文档仅允许 http/https
+_ALLOWED_SCHEMES = ("http", "https")
 
 
 class OAuthDiscoveryError(Exception):
@@ -287,12 +293,51 @@ async def discover_oauth_metadata(
     return None
 
 
-async def _fetch_json_default(url: str) -> Dict[str, Any]:
-    """默认异步 GET JSON 实现（aiohttp）。"""
+# ── 默认抓取实现 ─────────────────────────────────────────────────
+
+_shared_session: Any = None  # 懒创建的 aiohttp.ClientSession（连接池复用）
+
+
+async def _get_shared_session() -> Any:
+    """获取共享 aiohttp session（首次调用创建；连接池/SSL 上下文复用）。
+
+    M4：避免每次发现新建 ClientSession（单次授权最多 5 次 TCP+TLS 握手）。
+    """
     import aiohttp
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
-            if resp.status != 200:
-                raise OAuthDiscoveryError(f"HTTP {resp.status} @ {url}")
-            return await resp.json(content_type=None)
+    global _shared_session
+    if _shared_session is None or _shared_session.closed:
+        _shared_session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=20)
+        )
+    return _shared_session
+
+
+async def close_shared_session() -> None:
+    """关闭共享 session（应用退出/测试清理时调用）。"""
+    global _shared_session
+    if _shared_session is not None and not _shared_session.closed:
+        await _shared_session.close()
+    _shared_session = None
+
+
+async def _fetch_json_default(url: str) -> Dict[str, Any]:
+    """默认异步 GET JSON 实现（aiohttp，共享 session）。
+
+    安全约束（RFC 9728 §7.7 SSRF 防护）：
+    - 仅允许 http/https scheme 且必须有主机
+    - 不跟随重定向（服务器可控 URL 可能 302 到内网/云元数据）
+    - 响应体大小上限 1MB
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in _ALLOWED_SCHEMES or not parsed.netloc:
+        raise OAuthDiscoveryError(f"非法发现 URL: {url}")
+
+    session = await _get_shared_session()
+    async with session.get(url, allow_redirects=False) as resp:
+        if resp.status != 200:
+            raise OAuthDiscoveryError(f"HTTP {resp.status} @ {url}")
+        body = await resp.read()
+        if len(body) > _MAX_METADATA_BYTES:
+            raise OAuthDiscoveryError(f"元数据文档过大 @ {url}")
+        return json.loads(body.decode("utf-8"))

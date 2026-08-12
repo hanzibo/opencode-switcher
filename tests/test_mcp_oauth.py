@@ -417,6 +417,115 @@ class TestOAuthTokenStore(unittest.TestCase):
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  Discovery：默认抓取 SSRF 防护（H2）与共享 session（M4）
+# ═══════════════════════════════════════════════════════════════════
+
+
+class _MockDiscoveryServer:
+    """测试 _fetch_json_default 的 mock HTTP 服务器。"""
+
+    def __init__(self):
+        from aiohttp import web
+
+        self.app = web.Application()
+        self.app.router.add_get("/ok", self._handle_ok)
+        self.app.router.add_get("/redirect", self._handle_redirect)
+        self.app.router.add_get("/big", self._handle_big)
+        self._web = web
+        self._runner = None
+        self.base_url = ""
+
+    async def _handle_ok(self, request):
+        return self._web.json_response({"x": 1})
+
+    async def _handle_redirect(self, request):
+        return self._web.Response(
+            status=302, headers={"Location": self.base_url + "/ok"}
+        )
+
+    async def _handle_big(self, request):
+        # 2MB 响应体，超过 1MB 上限
+        return self._web.Response(body=b"x" * (2_000_000), content_type="application/json")
+
+    async def start(self):
+        from aiohttp import web
+
+        self._runner = web.AppRunner(self.app)
+        await self._runner.setup()
+        site = web.TCPSite(self._runner, "127.0.0.1", 0)
+        await site.start()
+        server = site._server
+        port = server.sockets[0].getsockname()[1]
+        self.base_url = f"http://127.0.0.1:{port}"
+        return self.base_url
+
+    async def close(self):
+        if self._runner:
+            await self._runner.cleanup()
+            self._runner = None
+
+
+class TestDiscoveryFetchDefault(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.server = _MockDiscoveryServer()
+        self.base_url = await self.server.start()
+
+    async def asyncTearDown(self):
+        await self.server.close()
+        from mcp_integration.oauth.discovery import close_shared_session
+        await close_shared_session()
+
+    async def test_rejects_non_http_scheme(self):
+        """H2：拒绝非 http/https URL（防 SSRF）。"""
+        from mcp_integration.oauth.discovery import (
+            OAuthDiscoveryError,
+            _fetch_json_default,
+        )
+
+        for bad in ("file:///etc/passwd", "ftp://host/x", "http://"):
+            with self.assertRaises(OAuthDiscoveryError, msg=bad):
+                await _fetch_json_default(bad)
+
+    async def test_does_not_follow_redirect(self):
+        """H2：不跟随重定向（302 → 报错，防止跳转内网/云元数据）。"""
+        from mcp_integration.oauth.discovery import (
+            OAuthDiscoveryError,
+            _fetch_json_default,
+        )
+
+        with self.assertRaises(OAuthDiscoveryError):
+            await _fetch_json_default(self.base_url + "/redirect")
+
+    async def test_limits_response_size(self):
+        """H2：响应体超过 1MB 上限报错。"""
+        from mcp_integration.oauth.discovery import (
+            OAuthDiscoveryError,
+            _fetch_json_default,
+        )
+
+        with self.assertRaises(OAuthDiscoveryError):
+            await _fetch_json_default(self.base_url + "/big")
+
+    async def test_fetch_success(self):
+        """正常抓取仍可用。"""
+        from mcp_integration.oauth.discovery import _fetch_json_default
+
+        data = await _fetch_json_default(self.base_url + "/ok")
+        self.assertEqual(data, {"x": 1})
+
+    async def test_shared_session_reused(self):
+        """M4：两次抓取复用同一 session（非 None 且未关闭）。"""
+        import mcp_integration.oauth.discovery as discovery_mod
+        from mcp_integration.oauth.discovery import _fetch_json_default
+
+        await _fetch_json_default(self.base_url + "/ok")
+        s1 = discovery_mod._shared_session
+        self.assertIsNotNone(s1)
+        await _fetch_json_default(self.base_url + "/ok")
+        self.assertIs(discovery_mod._shared_session, s1)
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  Flow：授权码流（PKCE + loopback + token 交换/刷新）
 # ═══════════════════════════════════════════════════════════════════
 
