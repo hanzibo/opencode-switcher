@@ -26,6 +26,11 @@ from mcp_integration.oauth.discovery import (
     discover_protected_resource_metadata,
     parse_www_authenticate,
 )
+from mcp_integration.oauth.flow import (
+    build_authorization_url,
+    exchange_code,
+    refresh_token,
+)
 from mcp_integration.oauth.models import (
     OAuthMetadata,
     OAuthToken,
@@ -381,6 +386,277 @@ class TestOAuthTokenStore(unittest.TestCase):
         self.assertNotIn(":", filename)
         self.assertEqual(filename, "My_Server_With_Chars.json")
         self.assertTrue(filename.endswith(".json"))
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Flow：授权码流（PKCE + loopback + token 交换/刷新）
+# ═══════════════════════════════════════════════════════════════════
+
+
+class _MockTokenServer:
+    """本地 mock token 端点（aiohttp AppRunner），记录请求并返回模拟 token。"""
+
+    def __init__(self, resource="https://mcp.example.com/mcp"):
+        from aiohttp import web
+
+        self.resource = resource
+        self.requests = []
+        self.app = web.Application()
+        self.app.router.add_post("/token", self._handle)
+        self._web = web
+        self._runner = None
+        self._site = None
+        self.url = ""
+
+    async def _handle(self, request):
+        web = self._web
+        form = await request.post()
+        self.requests.append(dict(form))
+        grant = form.get("grant_type")
+        if grant == "authorization_code":
+            return web.json_response({
+                "access_token": f"at-{form.get('code')}",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": "rt-1",
+                "scope": form.get("scope", ""),
+            })
+        if grant == "refresh_token":
+            return web.json_response({
+                "access_token": "at-refreshed",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": "rt-2",
+                "scope": form.get("scope", ""),
+            })
+        return web.json_response({"error": "unsupported_grant_type"}, status=400)
+
+    async def start(self):
+        from aiohttp import web
+
+        self._runner = web.AppRunner(self.app)
+        await self._runner.setup()
+        self._site = web.TCPSite(self._runner, "127.0.0.1", 0)
+        await self._site.start()
+        server = self._site._server
+        port = server.sockets[0].getsockname()[1]
+        self.url = f"http://127.0.0.1:{port}"
+
+    async def close(self):
+        if self._runner:
+            await self._runner.cleanup()
+            self._runner = None
+            self._site = None
+
+
+def _make_meta(token_url):
+    return OAuthMetadata(
+        issuer="https://auth.example.com",
+        authorization_endpoint="https://auth.example.com/authorize",
+        token_endpoint=token_url,
+        code_challenge_methods_supported=["S256"],
+        grant_types_supported=["authorization_code", "refresh_token"],
+        token_endpoint_auth_methods_supported=["none"],
+    )
+
+
+def _make_client(client_id="cid"):
+    from mcp_integration.oauth.models import OAuthClientInformationFull
+
+    return OAuthClientInformationFull(
+        client_id=client_id, token_endpoint_auth_method="none",
+        redirect_uris=["http://127.0.0.1:0/callback"],
+    )
+
+
+def _fake_browser_factory(records):
+    """构造 fake browser：解析 auth_url 中的 redirect_uri/state，自动回调。"""
+    async def fake_browser(auth_url):
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(auth_url)
+        params = parse_qs(parsed.query)
+        redirect_uri = params["redirect_uri"][0]
+        state = params["state"][0]
+        records.append(auth_url)
+        import aiohttp
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"{redirect_uri}?code=TESTCODE&state={state}"):
+                pass
+    return fake_browser
+
+
+class TestBuildAuthorizationUrl(unittest.TestCase):
+    def test_url_contains_all_params(self):
+        from urllib.parse import parse_qs, urlparse
+
+        meta = _make_meta("http://127.0.0.1:1/token")
+        pkce = PKCEParameters.generate()
+        url = build_authorization_url(
+            meta, "cid", "http://127.0.0.1:9999/callback",
+            pkce, "STATE123", "https://mcp.example.com/mcp", "a b",
+        )
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        self.assertEqual(parsed.path, "/authorize")
+        self.assertEqual(params["response_type"], ["code"])
+        self.assertEqual(params["client_id"], ["cid"])
+        self.assertEqual(params["redirect_uri"], ["http://127.0.0.1:9999/callback"])
+        self.assertEqual(params["code_challenge"], [pkce.code_challenge])
+        self.assertEqual(params["code_challenge_method"], ["S256"])
+        self.assertEqual(params["state"], ["STATE123"])
+        self.assertEqual(params["resource"], ["https://mcp.example.com/mcp"])
+        self.assertEqual(params["scope"], ["a b"])
+
+    def test_scope_omitted_when_empty(self):
+        meta = _make_meta("http://127.0.0.1:1/token")
+        url = build_authorization_url(
+            meta, "cid", "http://127.0.0.1:1/callback",
+            PKCEParameters.generate(), "s", "https://mcp.example.com/mcp",
+        )
+        self.assertNotIn("scope=", url)
+
+
+class TestLoopbackRedirectServer(unittest.IsolatedAsyncioTestCase):
+    async def test_redirect_uri_and_callback(self):
+        from mcp_integration.oauth.flow import LoopbackRedirectServer
+        import aiohttp
+
+        server = LoopbackRedirectServer(timeout=10)
+        redirect_uri = await server.start()
+        self.assertTrue(redirect_uri.startswith("http://127.0.0.1:"))
+        self.assertTrue(redirect_uri.endswith("/callback"))
+
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"{redirect_uri}?code=ABC&state=STATE1"):
+                pass
+
+        code, state = await server.wait_for_callback()
+        self.assertEqual(code, "ABC")
+        self.assertEqual(state, "STATE1")
+        await server.close()
+
+    async def test_timeout(self):
+        from mcp_integration.oauth.flow import LoopbackRedirectServer, OAuthFlowTimeoutError
+
+        server = LoopbackRedirectServer(timeout=0.2)
+        await server.start()
+        with self.assertRaises(OAuthFlowTimeoutError):
+            await server.wait_for_callback()
+        await server.close()
+
+
+class TestTokenExchange(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.token_srv = _MockTokenServer()
+        await self.token_srv.start()
+        self.meta = _make_meta(self.token_srv.url + "/token")
+
+    async def asyncTearDown(self):
+        await self.token_srv.close()
+
+    async def test_exchange_code(self):
+        token = await exchange_code(
+            self.meta, _make_client(), "http://127.0.0.1:1/callback",
+            "CODE1", "VERIFIER1", "https://mcp.example.com/mcp",
+        )
+        self.assertEqual(token.access_token, "at-CODE1")
+        self.assertEqual(token.refresh_token, "rt-1")
+        self.assertIsNotNone(token.expires_at)
+        form = self.token_srv.requests[-1]
+        self.assertEqual(form["grant_type"], "authorization_code")
+        self.assertEqual(form["code_verifier"], "VERIFIER1")
+        self.assertEqual(form["resource"], "https://mcp.example.com/mcp")
+
+    async def test_refresh_token(self):
+        token = await refresh_token(
+            self.meta, _make_client(), "RT-OLD", "https://mcp.example.com/mcp",
+        )
+        self.assertEqual(token.access_token, "at-refreshed")
+        self.assertEqual(token.refresh_token, "rt-2")
+        form = self.token_srv.requests[-1]
+        self.assertEqual(form["grant_type"], "refresh_token")
+        self.assertEqual(form["refresh_token"], "RT-OLD")
+
+    async def test_token_error(self):
+        from mcp_integration.oauth.flow import OAuthTokenError
+
+        meta = _make_meta("http://127.0.0.1:1/nonexistent")
+        with self.assertRaises(OAuthTokenError):
+            await exchange_code(
+                meta, _make_client(), "http://127.0.0.1:1/callback",
+                "C", "V", "https://mcp.example.com/mcp",
+            )
+
+
+class TestRunAuthorizationFlow(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.token_srv = _MockTokenServer()
+        await self.token_srv.start()
+        self.meta = _make_meta(self.token_srv.url + "/token")
+
+    async def asyncTearDown(self):
+        await self.token_srv.close()
+
+    async def test_full_auto_flow(self):
+        from mcp_integration.oauth.flow import run_authorization_flow
+
+        records = []
+        token = await run_authorization_flow(
+            self.meta, _make_client(),
+            resource="https://mcp.example.com/mcp",
+            scope="a b",
+            timeout=10,
+            browser_opener=_fake_browser_factory(records),
+        )
+        self.assertEqual(token.access_token, "at-TESTCODE")
+        self.assertTrue(records, "浏览器应被调用")
+        # 验证 token 请求携带 resource + PKCE verifier
+        form = self.token_srv.requests[-1]
+        self.assertEqual(form["resource"], "https://mcp.example.com/mcp")
+        self.assertTrue(form["code_verifier"])
+
+    async def test_rejects_non_s256_as(self):
+        from mcp_integration.oauth.flow import OAuthFlowError, run_authorization_flow
+
+        meta = _make_meta(self.token_srv.url + "/token")
+        meta.code_challenge_methods_supported = ["plain"]
+        with self.assertRaises(OAuthFlowError):
+            await run_authorization_flow(
+                meta, _make_client(), resource="https://mcp.example.com/mcp",
+                timeout=5, browser_opener=_fake_browser_factory([]),
+            )
+
+    async def test_timeout_when_no_callback(self):
+        from mcp_integration.oauth.flow import OAuthFlowTimeoutError, run_authorization_flow
+
+        async def noop_browser(url):
+            pass
+
+        with self.assertRaises(OAuthFlowTimeoutError):
+            await run_authorization_flow(
+                self.meta, _make_client(), resource="https://mcp.example.com/mcp",
+                timeout=0.3, browser_opener=noop_browser,
+            )
+
+    async def test_state_mismatch_rejected(self):
+        from mcp_integration.oauth.flow import OAuthFlowError, run_authorization_flow
+
+        async def evil_browser(auth_url):
+            from urllib.parse import parse_qs, urlparse
+
+            parsed = urlparse(auth_url)
+            redirect_uri = parse_qs(parsed.query)["redirect_uri"][0]
+            import aiohttp
+            async with aiohttp.ClientSession() as s:
+                async with s.get(f"{redirect_uri}?code=X&state=EVIL"):
+                    pass
+
+        with self.assertRaises(OAuthFlowError):
+            await run_authorization_flow(
+                self.meta, _make_client(), resource="https://mcp.example.com/mcp",
+                timeout=5, browser_opener=evil_browser,
+            )
 
 
 if __name__ == "__main__":
