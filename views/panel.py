@@ -128,6 +128,8 @@ class SearchPanel:
             self._tab_bar.pack_start(eb, True, True, 0)
         self._tab_bar.get_children()[0].connect("button-press-event", lambda *_: self._switch_tab(0))
         self._tab_bar.get_children()[1].connect("button-press-event", lambda *_: self._switch_tab(1))
+        self._tab_bar.get_children()[0].get_style_context().add_class("tab-left")
+        self._tab_bar.get_children()[1].get_style_context().add_class("tab-right")
         self._tab_bar.get_children()[0].get_style_context().add_class("tab-active")
         self._tab_bar.get_children()[1].get_style_context().add_class("tab-inactive")
         self._main_vbox.pack_start(self._tab_bar, False, False, 0)
@@ -247,6 +249,8 @@ class SearchPanel:
             ".row:selected { background: %(sel_bg)s; border-left: 4px solid %(sel_border)s; }"
             "#emptyLabel { font-size: 20px; padding: 0; }"
             "#sideLabel { font-size: 17px; padding: 12px 18px; }"
+            ".tab-left { border-top-left-radius: 16px; }"
+            ".tab-right { border-top-right-radius: 16px; }"
             "#tabLabel { font-size: 16px; font-weight: bold; padding: 12px 24px; color: %(tab_fg)s; }"
             ".tab-active { background: %(sel_bg)s; border-bottom: 3px solid %(sel_border)s; }"
             ".tab-active #tabLabel { color: %(tab_active_fg)s; }"
@@ -328,12 +332,13 @@ class SearchPanel:
             "menuitem:hover label, menuitem:selected label { color: %(text_fg)s; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
+        transparent = Gdk.RGBA(0, 0, 0, 0)
         for w in (self._main_vbox, self._dir_scrolled, self._dir_listbox,
                   self._session_scrolled, self._listbox):
-            w.override_background_color(Gtk.StateFlags.NORMAL, self._bg_color)
+            w.override_background_color(Gtk.StateFlags.NORMAL, transparent)
         if self._tab_bar:
             for child in self._tab_bar.get_children():
-                child.override_background_color(Gtk.StateFlags.NORMAL, self._bg_color)
+                child.override_background_color(Gtk.StateFlags.NORMAL, transparent)
         self._separator.queue_draw()
         if self._clipboard_panel:
             self._clipboard_panel.set_theme(name)

@@ -706,8 +706,9 @@ class ClipboardPanel(Gtk.Box):
             ".command-autocomplete-list row:selected { background-color: %(sel_bg)s; color: %(text_fg)s; border: 1px solid %(sel_border)s; }"
         ) % vals
         self._css_provider.load_from_data(css.encode("utf-8"))
+        transparent = Gdk.RGBA(0, 0, 0, 0)
         for w in (self, self._cat_list, self._content_scrolled, self._content_list):
-            w.override_background_color(Gtk.StateFlags.NORMAL, self._bg_color)
+            w.override_background_color(Gtk.StateFlags.NORMAL, transparent)
 
         if hasattr(self, '_ai_chat_panel') and self._ai_chat_panel:
             self._ai_chat_panel.set_theme(name)
