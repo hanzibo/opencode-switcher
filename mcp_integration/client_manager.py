@@ -49,6 +49,10 @@ class MCPClientManager:
         self._status_callbacks: List[StatusCallback] = []
         # 自动重连定时器
         self._reconnect_timers: Dict[str, asyncio.Task] = {}
+        # list_all_tools 防重入锁（多个连接回调并发触发时避免重复抓取）
+        self._list_all_lock: Optional[asyncio.Lock] = None
+        # 净化工具名 → MCP 原始工具名 映射（LLM 看到的是净化名，调用需还原）
+        self._tool_name_map: Dict[str, str] = {}
 
     # ── 状态回调 ────────────────────────────────────────────────
 
@@ -263,16 +267,42 @@ class MCPClientManager:
             return []
 
     async def list_all_tools(self) -> List[Dict[str, Any]]:
-        """聚合所有已连接 Server 的工具，返回 OpenAI schema 列表。"""
+        """聚合所有已连接 Server 的工具，返回 OpenAI schema 列表。
+
+        注意：迭代 _sessions 使用快照（list(keys)），避免在 await 期间
+        其它协程（如并发连接回调触发的 _refresh_mcp_tools）修改字典导致
+        RuntimeError: dictionary changed size during iteration。
+        """
         result: List[Dict[str, Any]] = []
-        for name, session in self._sessions.items():
-            if not session.is_connected:
-                continue
-            tools = await self.list_tools(name)
-            for tool in tools:
-                schema = mcp_tool_to_openai_schema(name, self._tool_dict_to_obj(tool))
-                result.append(schema)
+        if self._list_all_lock is None:
+            import asyncio
+            self._list_all_lock = asyncio.Lock()
+        async with self._list_all_lock:
+            for name in list(self._sessions.keys()):
+                session = self._sessions.get(name)
+                if session is None or not session.is_connected:
+                    continue
+                tools = await self.list_tools(name)
+                for tool in tools:
+                    schema = mcp_tool_to_openai_schema(name, self._tool_dict_to_obj(tool))
+                    # 记录净化名 → 原始名 映射（净化发生在 tool_adapter 内）
+                    full = schema["function"]["name"]
+                    raw = self._tool_raw_name(tool)
+                    if full != f"{name}__{raw}":
+                        self._tool_name_map[full] = raw
+                    result.append(schema)
         return result
+
+    @staticmethod
+    def _tool_raw_name(tool: Any) -> str:
+        """获取工具原始名（兼容 dict / SDK Tool 对象）。"""
+        if isinstance(tool, dict):
+            return str(tool.get("name", "") or "")
+        return str(getattr(tool, "name", "") or "")
+
+    def _resolve_original_tool_name(self, server_name: str, tool_name: str) -> str:
+        """将（可能被净化的）工具名还原为 MCP Server 的原始工具名。"""
+        return self._tool_name_map.get(f"{server_name}__{tool_name}", tool_name)
 
     async def refresh_all_tools(self) -> None:
         """刷新所有 Server 的工具缓存。"""
@@ -302,7 +332,8 @@ class MCPClientManager:
             return f"❌ MCP Server '{server_name}' 已断开"
 
         try:
-            return await session.call_tool(tool_name, arguments, timeout=timeout)
+            resolved = self._resolve_original_tool_name(server_name, tool_name)
+            return await session.call_tool(resolved, arguments, timeout=timeout)
         except Exception as e:
             logger.error("调用 %s:%s 失败: %s", server_name, tool_name, e)
             return f"❌ MCP 工具 '{server_name}:{tool_name}' 执行异常: {e}"
@@ -319,8 +350,9 @@ class MCPClientManager:
                 continue
             try:
                 tools = await self.list_tools(server_name)
-                if any(t.get("name") == tool_name for t in tools):
-                    return await session.call_tool(tool_name, arguments, timeout=timeout)
+                resolved = self._resolve_original_tool_name(server_name, tool_name)
+                if any(t.get("name") == resolved for t in tools):
+                    return await session.call_tool(resolved, arguments, timeout=timeout)
             except Exception:
                 continue
         return f"❌ 找不到 MCP 工具 '{tool_name}'"

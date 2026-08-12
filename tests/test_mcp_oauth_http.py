@@ -13,8 +13,14 @@
 
 import asyncio
 import json
+import tempfile
 import unittest
 from urllib.parse import parse_qs, urlparse
+
+# ── 测试隔离：所有 OAuth token 写入临时目录，避免污染真实配置 ──
+import mcp_integration.oauth.token_store as _token_store_mod
+_TEST_CONFIG_DIR = tempfile.mkdtemp(prefix="mcp-oauth-test-")
+_token_store_mod.DEFAULT_CONFIG_DIR = _TEST_CONFIG_DIR
 
 from mcp_integration.transports.http import (
     HttpTransport,
@@ -462,6 +468,109 @@ class TestMCPServerConfigOAuthFields(unittest.TestCase):
             auth_type="ntlm",
         )
         self.assertIsNotNone(cfg.validate())
+
+
+class TestToolNameSanitization(unittest.TestCase):
+    """工具名净化 + 净化名→原始名还原（Smithery 点号工具名回归）。"""
+
+    def test_schema_name_sanitizes_dots(self):
+        from mcp_integration.tool_adapter import mcp_tool_to_openai_schema
+
+        schema = mcp_tool_to_openai_schema("Smithery", {
+            "name": "oevortex-ddg-search.web-search",
+            "description": "web search",
+            "inputSchema": {"type": "object", "properties": {}},
+        })
+        self.assertEqual(
+            schema["function"]["name"],
+            "Smithery__oevortex-ddg-search_web-search",
+        )
+        # OpenAI 允许的字符集
+        import re
+        self.assertRegex(schema["function"]["name"], r"^[a-zA-Z0-9_-]+$")
+
+    def test_plain_names_unchanged(self):
+        from mcp_integration.tool_adapter import mcp_tool_to_openai_schema
+
+        schema = mcp_tool_to_openai_schema("Firecrawl", {
+            "name": "search", "description": "s",
+            "inputSchema": {"type": "object", "properties": {}},
+        })
+        self.assertEqual(schema["function"]["name"], "Firecrawl__search")
+
+
+class TestClientManagerToolNameMapping(unittest.IsolatedAsyncioTestCase):
+    """client_manager 净化名→原始名映射与并发安全。"""
+
+    def _make_fake_session(self, raw_tool_names):
+        """记录实际收到的工具名。"""
+        class FakeSession:
+            def __init__(self, tools):
+                self._tools = tools
+                self.called_with = []
+
+            @property
+            def is_connected(self):
+                return True
+
+            async def list_tools(self):
+                return [{"name": n, "description": "", "inputSchema": {"type": "object"}} for n in self._tools]
+
+            async def call_tool(self, name, arguments, timeout=None):
+                self.called_with.append(name)
+                return "ok"
+        return FakeSession(raw_tool_names)
+
+    async def test_call_tool_restores_original_name(self):
+        from mcp_integration.client_manager import MCPClientManager
+
+        mgr = MCPClientManager()
+        session = self._make_fake_session(["oevortex-ddg-search.web-search"])
+        mgr._sessions["Smithery"] = session
+
+        tools = await mgr.list_all_tools()
+        self.assertEqual(
+            tools[0]["function"]["name"],
+            "Smithery__oevortex-ddg-search_web-search",
+        )
+        # 用 LLM 返回的净化名调用 → 应还原为原始名发往 MCP Server
+        result = await mgr.call_tool("Smithery", "oevortex-ddg-search_web-search", {})
+        self.assertEqual(result, "ok")
+        self.assertEqual(session.called_with, ["oevortex-ddg-search.web-search"])
+
+    async def test_plain_name_unchanged(self):
+        from mcp_integration.client_manager import MCPClientManager
+
+        mgr = MCPClientManager()
+        session = self._make_fake_session(["search"])
+        mgr._sessions["Firecrawl"] = session
+
+        await mgr.list_all_tools()
+        await mgr.call_tool("Firecrawl", "search", {})
+        self.assertEqual(session.called_with, ["search"])
+
+    async def test_concurrent_list_all_tools_no_runtime_error(self):
+        """并发 list_all_tools 期间字典被修改不再抛 RuntimeError。"""
+        from mcp_integration.client_manager import MCPClientManager
+
+        mgr = MCPClientManager()
+        for i in range(3):
+            mgr._sessions[f"srv{i}"] = self._make_fake_session([f"tool.{i}"])
+
+        async def mutate():
+            # 模拟连接回调：list_all_tools 执行期间添加/删除 session
+            await asyncio.sleep(0)
+            mgr._sessions["srv-extra"] = self._make_fake_session(["extra.tool"])
+            await asyncio.sleep(0)
+            mgr._sessions.pop("srv-extra", None)
+
+        t1 = asyncio.create_task(mgr.list_all_tools())
+        t2 = asyncio.create_task(mgr.list_all_tools())
+        await mutate()
+        results = await asyncio.gather(t1, t2)
+        # 不抛 RuntimeError 即通过；结果包含净化后的工具
+        names = {t["function"]["name"] for r in results for t in r}
+        self.assertIn("srv0__tool_0", names)
 
 
 if __name__ == "__main__":
