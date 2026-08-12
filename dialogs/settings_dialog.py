@@ -1432,6 +1432,50 @@ class SettingsDialog:
 
         card_vbox.pack_start(row4_http_advanced, False, False, 0)
 
+        # ── Row 4.5: http: OAuth 2.1 配置（选 oauth2 时显示） ──
+        row5_oauth = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+
+        oauth_client_id_entry = Gtk.Entry.new()
+        oauth_client_id_entry.set_placeholder_text("OAuth Client ID（可选）")
+        oauth_client_id_entry.set_text(cfg.oauth_client_id)
+        oauth_client_id_entry.set_width_chars(16)
+        oauth_client_id_entry.set_tooltip_text("预注册的 client_id；留空则尝试动态注册")
+        row5_oauth.pack_start(oauth_client_id_entry, False, False, 0)
+
+        oauth_client_secret_entry = Gtk.Entry.new()
+        oauth_client_secret_entry.set_placeholder_text("Client Secret（可选）")
+        oauth_client_secret_entry.set_text(cfg.oauth_client_secret)
+        oauth_client_secret_entry.set_width_chars(16)
+        oauth_client_secret_entry.set_visibility(False)
+        oauth_client_secret_entry.set_tooltip_text("public client 留空")
+        row5_oauth.pack_start(oauth_client_secret_entry, False, False, 0)
+
+        oauth_token_url_entry = Gtk.Entry.new()
+        oauth_token_url_entry.set_placeholder_text("Token URL（可选，默认自动发现）")
+        oauth_token_url_entry.set_text(cfg.oauth_token_url)
+        oauth_token_url_entry.set_width_chars(20)
+        row5_oauth.pack_start(oauth_token_url_entry, False, False, 0)
+
+        oauth_scopes_entry = Gtk.Entry.new()
+        oauth_scopes_entry.set_placeholder_text("Scopes（空格分隔，可选）")
+        oauth_scopes_entry.set_text(cfg.oauth_scopes)
+        oauth_scopes_entry.set_width_chars(18)
+        row5_oauth.pack_start(oauth_scopes_entry, False, False, 0)
+
+        oauth_auth_btn = Gtk.Button.new_with_label("开始授权")
+        oauth_auth_btn.set_tooltip_text("在浏览器中完成 OAuth 授权（PKCE）")
+        row5_oauth.pack_start(oauth_auth_btn, False, False, 0)
+
+        oauth_clear_btn = Gtk.Button.new_with_label("清除授权")
+        oauth_clear_btn.set_tooltip_text("删除本地保存的 OAuth token 与客户端信息（换账号/吊销后清理）")
+        row5_oauth.pack_start(oauth_clear_btn, False, False, 0)
+
+        oauth_status_label = Gtk.Label.new()
+        oauth_status_label.set_markup("<span foreground='#888'>未授权</span>")
+        row5_oauth.pack_start(oauth_status_label, False, False, 0)
+
+        card_vbox.pack_start(row5_oauth, False, False, 0)
+
         # ── Row 5: 连接状态 + 测试按钮 ──
         row5_status = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 8)
 
@@ -1462,6 +1506,13 @@ class SettingsDialog:
             "url": url_entry,
             "api_key": api_key_entry,
             "auth_type": auth_combo,
+            "oauth_client_id": oauth_client_id_entry,
+            "oauth_client_secret": oauth_client_secret_entry,
+            "oauth_token_url": oauth_token_url_entry,
+            "oauth_scopes": oauth_scopes_entry,
+            "oauth_auth_btn": oauth_auth_btn,
+            "oauth_clear_btn": oauth_clear_btn,
+            "oauth_status_label": oauth_status_label,
             "protocol_version": proto_combo,
             "enable_2026_headers": header_check,
             "enabled": enabled_check,
@@ -1476,9 +1527,9 @@ class SettingsDialog:
             row2_stdio.set_visible(not is_http_mode)
             row3_http.set_visible(is_http_mode)
             row4_http_advanced.set_visible(is_http_mode)
-            api_key_entry.set_visible(
-                is_http_mode and auth_combo.get_active_id() == "bearer"
-            )
+            mode = auth_combo.get_active_id()
+            api_key_entry.set_visible(is_http_mode and mode == "bearer")
+            row5_oauth.set_visible(is_http_mode and mode == "oauth2")
 
         is_http = cfg.transport == "http"
         _apply_visibility(is_http)
@@ -1497,14 +1548,94 @@ class SettingsDialog:
         ))
 
         # ── 认证方式切换 ──
+        def _update_oauth_status():
+            """从 token store 读取授权状态显示（canonical key，M6）。"""
+            try:
+                from mcp_integration.oauth.discovery import canonical_server_uri
+                from mcp_integration.oauth.token_store import OAuthTokenStore
+                url = url_entry.get_text().strip()
+                if not url:
+                    oauth_status_label.set_markup("<span foreground='#888'>未授权</span>")
+                    return
+                status = OAuthTokenStore(canonical_server_uri(url)).get_status()
+                if status == "已授权":
+                    oauth_status_label.set_markup("<span foreground='green'>● 已授权</span>")
+                elif status == "已过期":
+                    oauth_status_label.set_markup("<span foreground='orange'>● 已过期（点开始授权刷新）</span>")
+                else:
+                    oauth_status_label.set_markup("<span foreground='#888'>未授权</span>")
+            except Exception:
+                oauth_status_label.set_markup("<span foreground='#888'>未授权</span>")
+
         def _on_auth_changed(combo):
             mode = combo.get_active_id()
             is_bearer = (mode == "bearer")
             api_key_entry.set_no_show_all(not is_bearer)
             api_key_entry.set_visible(is_bearer)
+            row5_oauth.set_visible(mode == "oauth2")
+            if mode == "oauth2":
+                _update_oauth_status()
 
         auth_combo.connect("changed", _on_auth_changed)
         _on_auth_changed(auth_combo)
+
+        # ── 开始授权回调 ──
+        def _on_start_oauth_clicked(_btn):
+            name = name_entry.get_text().strip()
+            url = url_entry.get_text().strip()
+            if not name or not url:
+                oauth_status_label.set_markup("<span foreground='red'>● 需先填写名称和 URL</span>")
+                return
+            oauth_status_label.set_markup("<span foreground='orange'>● 授权中…请在浏览器完成</span>")
+
+            def _do_auth():
+                import asyncio
+                import threading
+                try:
+                    from mcp_integration.oauth.provider import OAuth2AuthProvider
+
+                    provider = OAuth2AuthProvider(
+                        url,
+                        client_id=oauth_client_id_entry.get_text().strip(),
+                        client_secret=oauth_client_secret_entry.get_text().strip(),
+                        token_url=oauth_token_url_entry.get_text().strip(),
+                        scopes=oauth_scopes_entry.get_text().strip(),
+                    )
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        loop.run_until_complete(provider.get_auth_headers())
+                    finally:
+                        loop.close()
+                    GLib.idle_add(lambda: oauth_status_label.set_markup(
+                        "<span foreground='green'>● 已授权 ✓</span>"
+                    ))
+                except Exception as e:
+                    GLib.idle_add(lambda: oauth_status_label.set_markup(
+                        f"<span foreground='red'>● 授权失败: {e}</span>"
+                    ))
+
+            threading.Thread(target=_do_auth, daemon=True).start()
+
+        oauth_auth_btn.connect("clicked", _on_start_oauth_clicked)
+
+        # ── 清除授权回调（M7） ──
+        def _on_clear_oauth_clicked(_btn):
+            url = url_entry.get_text().strip()
+            if not url:
+                oauth_status_label.set_markup("<span foreground='#888'>未授权</span>")
+                return
+            try:
+                from mcp_integration.oauth.discovery import canonical_server_uri
+                from mcp_integration.oauth.token_store import OAuthTokenStore
+                OAuthTokenStore(canonical_server_uri(url)).clear()
+                oauth_status_label.set_markup("<span foreground='#888'>已清除授权</span>")
+            except Exception as e:
+                oauth_status_label.set_markup(
+                    f"<span foreground='red'>● 清除失败: {e}</span>"
+                )
+
+        oauth_clear_btn.connect("clicked", _on_clear_oauth_clicked)
 
         # ── 测试连接回调 ──
         test_btn.connect("clicked", lambda _: self._on_test_mcp_connection(
@@ -1545,6 +1676,21 @@ class SettingsDialog:
         api_key = api_key_entry.get_text().strip()
         auth_type = auth_combo.get_active_id()
 
+        # 读取 OAuth 配置（通过卡片 widgets 中保存的 entry）
+        oauth_cfg = next(
+            (w for w in self._mcp_server_widgets if w["name"] is name_entry),
+            None,
+        )
+        oauth_client_id = ""
+        oauth_client_secret = ""
+        oauth_token_url = ""
+        oauth_scopes = ""
+        if oauth_cfg is not None:
+            oauth_client_id = oauth_cfg["oauth_client_id"].get_text().strip()
+            oauth_client_secret = oauth_cfg["oauth_client_secret"].get_text().strip()
+            oauth_token_url = oauth_cfg["oauth_token_url"].get_text().strip()
+            oauth_scopes = oauth_cfg["oauth_scopes"].get_text().strip()
+
         if not name:
             status_label.set_markup("<span foreground='red'>● 名称不能为空</span>")
             return
@@ -1573,6 +1719,10 @@ class SettingsDialog:
                     url=url,
                     api_key=api_key,
                     auth_type=auth_type,
+                    oauth_client_id=oauth_client_id,
+                    oauth_client_secret=oauth_client_secret,
+                    oauth_token_url=oauth_token_url,
+                    oauth_scopes=oauth_scopes,
                     auto_connect=False,
                 )
 
@@ -1683,6 +1833,10 @@ class SettingsDialog:
             auth_type = w["auth_type"].get_active_id() if w["auth_type"].get_active_id() else "bearer"
             proto_ver = w["protocol_version"].get_active_id() if w["protocol_version"].get_active_id() else "2025-11-25"
             enable_2026 = w["enable_2026_headers"].get_active()
+            oauth_client_id = w.get("oauth_client_id").get_text().strip() if w.get("oauth_client_id") else ""
+            oauth_client_secret = w.get("oauth_client_secret").get_text().strip() if w.get("oauth_client_secret") else ""
+            oauth_token_url = w.get("oauth_token_url").get_text().strip() if w.get("oauth_token_url") else ""
+            oauth_scopes = w.get("oauth_scopes").get_text().strip() if w.get("oauth_scopes") else ""
             mcp_servers.append({
                 "name": name,
                 "transport": transport,
@@ -1692,6 +1846,10 @@ class SettingsDialog:
                 "url": url,
                 "api_key": api_key,
                 "auth_type": auth_type,
+                "oauth_client_id": oauth_client_id,
+                "oauth_client_secret": oauth_client_secret,
+                "oauth_token_url": oauth_token_url,
+                "oauth_scopes": oauth_scopes,
                 "protocol_version": proto_ver,
                 "enable_2026_headers": enable_2026,
                 "enabled": w["enabled"].get_active(),

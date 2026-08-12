@@ -6,9 +6,24 @@ MCP Server 返回的 Tool 对象需要转换为 LLM API
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from mcp.types import CallToolResult, Tool
+
+# OpenAI function name 允许的字符（^[a-zA-Z0-9_-]+$）——其余替换为 _
+_SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_-]")
+
+
+def _sanitize_tool_name(name: str) -> str:
+    """将工具名净化到 OpenAI 兼容字符集。
+
+    历史教训（见 AGENTS.md 经验记录）：MCP 工具名常含 ``:``（如
+    ``filesystem:list_directory``）导致 LLM API 400；本次发现部分 Server
+    （如 Smithery）工具名含 ``.``（``oevortex-ddg-search.web-search``）。
+    统一将非 [a-zA-Z0-9_-] 字符替换为 ``_``。
+    """
+    return _SAFE_NAME_RE.sub("_", name)
 
 
 def _get_val(obj: Any, camel_key: str, snake_key: str, default: Any = None) -> Any:
@@ -58,7 +73,7 @@ def mcp_tool_to_openai_schema(server_name: str, tool: Any) -> Dict[str, Any]:
     return {
         "type": "function",
         "function": {
-            "name": f"{server_name}__{tool_name}",
+            "name": f"{server_name}__{_sanitize_tool_name(tool_name)}",
             "description": tool_desc or "",
             "parameters": params,
         },
