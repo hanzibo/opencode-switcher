@@ -307,5 +307,81 @@ class TestOAuthToken(unittest.TestCase):
         self.assertFalse(tok.is_valid())
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  TokenStore 持久化
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestOAuthTokenStore(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        from mcp_integration.oauth.token_store import OAuthTokenStore
+
+        self.store = OAuthTokenStore("test-server", config_dir=self._tmp.name)
+
+    def _make_token(self, access="at", refresh="rt", expires_at=None):
+        return OAuthToken(
+            access_token=access, refresh_token=refresh, expires_at=expires_at,
+        )
+
+    def test_save_load_roundtrip(self):
+        from mcp_integration.oauth.models import OAuthClientInformationFull
+
+        client = OAuthClientInformationFull(
+            client_id="cid", token_endpoint_auth_method="none",
+            redirect_uris=["http://127.0.0.1:1234/callback"],
+        )
+        self.store.save(self._make_token(), client=client)
+        data = self.store.load()
+        self.assertIsNotNone(data)
+        assert data is not None
+        self.assertEqual(data["token"].access_token, "at")
+        self.assertEqual(data["client"].client_id, "cid")
+
+    def test_load_missing_returns_none(self):
+        self.assertIsNone(self.store.load())
+
+    def test_permissions_0600(self):
+        self.store.save(self._make_token())
+        mode = os.stat(self.store.path).st_mode & 0o777
+        self.assertEqual(mode, 0o600)
+
+    def test_has_token_validity(self):
+        import time
+        self.store.save(self._make_token(expires_at=time.time() + 3600))
+        self.assertTrue(self.store.has_token())
+        self.store.save(self._make_token(expires_at=time.time() - 10))
+        self.assertFalse(self.store.has_token())
+
+    def test_clear(self):
+        self.store.save(self._make_token())
+        self.assertTrue(os.path.isfile(self.store.path))
+        self.store.clear()
+        self.assertFalse(os.path.isfile(self.store.path))
+        self.assertIsNone(self.store.load())
+
+    def test_status(self):
+        import time
+        self.assertEqual(self.store.get_status(), "未授权")
+        self.store.save(self._make_token(expires_at=time.time() + 3600))
+        self.assertEqual(self.store.get_status(), "已授权")
+        self.store.save(self._make_token(expires_at=time.time() - 10))
+        self.assertEqual(self.store.get_status(), "已过期")
+        # 已过期且无 refresh token → 无法刷新，视为未授权
+        self.store.save(self._make_token(expires_at=time.time() - 10, refresh=""))
+        self.assertEqual(self.store.get_status(), "未授权")
+
+    def test_server_name_sanitization(self):
+        from mcp_integration.oauth.token_store import OAuthTokenStore
+
+        store = OAuthTokenStore("My Server/With:Chars", config_dir=self._tmp.name)
+        filename = os.path.basename(store.path)
+        self.assertNotIn("/", filename)
+        self.assertNotIn(":", filename)
+        self.assertEqual(filename, "My_Server_With_Chars.json")
+        self.assertTrue(filename.endswith(".json"))
+
+
 if __name__ == "__main__":
     unittest.main()
