@@ -48,12 +48,17 @@ LIGHT: Dict[str, Any] = {
     "tab_active_fg":     "#0f172a",
     "dialog_bg":         "#ffffff",
     "text_fg":           "#0f172a",
+    "text_secondary":    "rgba(15,23,42,0.55)",
     "input_bg":          "#ffffff",
     "input_fg":          "#0f172a",
     "btn_bg":            "rgba(0,0,0,0.05)",
     "btn_border":        "rgba(0,0,0,0.10)",
     "btn_hover":         "rgba(0,0,0,0.09)",
     "btn_active":        "rgba(0,0,0,0.14)",
+    "cat_hover":         "rgba(0,0,0,0.02)",
+    "cat_sel":           "rgba(79,70,229,0.06)",
+    "cat_sel_border":    "#4f46e5",
+    "cat_sep_color":     "rgba(0,0,0,0.08)",
 
     # ── AI panel GTK widget colours (ai_chat_panel.py) ──
     "ai_bg":             (1.0,   1.0,   1.0,   1.0),    # #ffffff
@@ -100,12 +105,17 @@ DARK: Dict[str, Any] = {
     "tab_active_fg":     "#ffffff",
     "dialog_bg":         "#0a0b10",
     "text_fg":           "#f1f5f9",
+    "text_secondary":    "rgba(255,255,255,0.45)",
     "input_bg":          "#12131a",
     "input_fg":          "#f1f5f9",
     "btn_bg":            "rgba(255,255,255,0.04)",
     "btn_border":        "rgba(255,255,255,0.06)",
     "btn_hover":         "rgba(129,140,248,0.12)",
     "btn_active":        "rgba(129,140,248,0.18)",
+    "cat_hover":         "rgba(255,255,255,0.03)",
+    "cat_sel":           "rgba(129,140,248,0.10)",
+    "cat_sel_border":    "#818cf8",
+    "cat_sep_color":     "rgba(129,140,248,0.25)",
 
     # ── AI panel GTK widget colours (ai_chat_panel.py) ──
     "ai_bg":             (0.039, 0.043, 0.063, 1.0),    # #0a0b10
@@ -153,12 +163,17 @@ DARK_MOON: Dict[str, Any] = {
     "tab_active_fg":     "#ffffff",
     "dialog_bg":         "#0f0914",
     "text_fg":           "#faf5ff",
+    "text_secondary":    "rgba(245,240,250,0.50)",
     "input_bg":          "#181124",
     "input_fg":          "#faf5ff",
     "btn_bg":            "rgba(168,85,247,0.08)",
     "btn_border":        "rgba(168,85,247,0.20)",
     "btn_hover":         "rgba(168,85,247,0.18)",
     "btn_active":        "rgba(168,85,247,0.28)",
+    "cat_hover":         "rgba(168,85,247,0.07)",
+    "cat_sel":           "rgba(168,85,247,0.14)",
+    "cat_sel_border":    "#c084fc",
+    "cat_sep_color":     "rgba(168,85,247,0.25)",
 
     # ── AI panel GTK widget colours (ai_chat_panel.py) ──
     "ai_bg":             (0.059, 0.035, 0.078, 1.0),    # #0f0914
@@ -193,30 +208,35 @@ def get_theme(name: str) -> dict:
 
 
 def get_panel_css_vals(name: str) -> dict:
-    """Return the CSS-interpolation dict used by panel.py ``_set_theme``.
+    """Return the CSS-interpolation dict used by panel.py and clipboard_panel.py ``_set_theme``.
 
-    Keys match the ``%(key)s`` placeholders in the panel CSS template.
+    Keys match the ``%(key)s`` placeholders in the CSS templates.
     """
     t = get_theme(name)
     return {
-        "window_border": t["window_border"],
-        "hover_bg":      t["hover_bg"],
-        "sel_bg":        t["sel_bg"],
-        "sel_border":    t["sel_border"],
-        "search_bg":     t["search_bg"],
-        "search_fg":     t["search_fg"],
-        "caret":         t["caret"],
-        "input_border":  t["input_border"],
-        "tab_fg":        t["tab_fg"],
-        "tab_active_fg": t["tab_active_fg"],
-        "dialog_bg":     t["dialog_bg"],
-        "text_fg":       t["text_fg"],
-        "input_bg":      t["input_bg"],
-        "input_fg":      t["input_fg"],
-        "btn_bg":        t["btn_bg"],
-        "btn_border":    t["btn_border"],
-        "btn_hover":     t["btn_hover"],
-        "btn_active":    t["btn_active"],
+        "window_border":  t["window_border"],
+        "hover_bg":       t["hover_bg"],
+        "sel_bg":         t["sel_bg"],
+        "sel_border":     t["sel_border"],
+        "search_bg":      t["search_bg"],
+        "search_fg":      t["search_fg"],
+        "caret":          t["caret"],
+        "input_border":   t["input_border"],
+        "tab_fg":         t["tab_fg"],
+        "tab_active_fg":  t["tab_active_fg"],
+        "dialog_bg":      t["dialog_bg"],
+        "text_fg":        t["text_fg"],
+        "text_secondary": t["text_secondary"],
+        "input_bg":       t["input_bg"],
+        "input_fg":       t["input_fg"],
+        "btn_bg":         t["btn_bg"],
+        "btn_border":     t["btn_border"],
+        "btn_hover":      t["btn_hover"],
+        "btn_active":     t["btn_active"],
+        "cat_hover":      t["cat_hover"],
+        "cat_sel":        t["cat_sel"],
+        "cat_sel_border": t["cat_sel_border"],
+        "cat_sep_color":  t["cat_sep_color"],
     }
 
 
