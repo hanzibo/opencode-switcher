@@ -122,7 +122,7 @@ class SettingsDialog:
         )
         dialog.set_title("Settings")
         dialog.set_modal(True)
-        dialog.set_default_size(600, 400)
+        dialog.set_default_size(700, 600)
         dialog.set_position(Gtk.WindowPosition.CENTER_ON_PARENT)
         dialog.set_type_hint(Gdk.WindowTypeHint.DIALOG)
         dialog.set_resizable(True)
