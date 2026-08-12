@@ -368,16 +368,16 @@
                     box-sizing: border-box;
                 }
                 .msg-avatar.user {
-                    background: linear-gradient(135deg, #6366f1, #4f46e5);
+                    background: linear-gradient(135deg, {user_color}, {thinking_color});
                     color: #ffffff;
-                    border: 1px solid rgba(99, 102, 241, 0.35);
-                    box-shadow: 0 4px 10px rgba(99, 102, 241, 0.22);
+                    border: 1px solid {user_color};
+                    box-shadow: 0 4px 10px {pre_border};
                 }
                 .msg-avatar.assistant {
-                    background: linear-gradient(135deg, #06b6d4, #0891b2);
+                    background: linear-gradient(135deg, {assistant_color}, {answer_color});
                     color: #ffffff;
-                    border: 1px solid rgba(6, 182, 212, 0.35);
-                    box-shadow: 0 4px 10px rgba(6, 182, 212, 0.22);
+                    border: 1px solid {assistant_color};
+                    box-shadow: 0 4px 10px {pre_border};
                 }
                 .light .msg-avatar.user {
                     box-shadow: 0 2px 8px rgba(99, 102, 241, 0.15);
@@ -398,15 +398,15 @@
                     box-sizing: border-box;
                 }
                 .msg-bubble.user {
-                    background: rgba(99, 102, 241, 0.1);
-                    border: 1px solid rgba(99, 102, 241, 0.18);
+                    background: {code_bg};
+                    border: 1px solid {pre_border};
                     border-bottom-right-radius: 4px;
                     color: inherit;
                     width: fit-content;
                 }
                 .msg-bubble.assistant {
                     background: rgba(255, 255, 255, 0.04);
-                    border: 1px solid rgba(255, 255, 255, 0.06);
+                    border: 1px solid {pre_border};
                     border-bottom-left-radius: 4px;
                     width: calc(100% - 44px);
                     padding-bottom: 32px; /* room for absolute copy/retry row */
