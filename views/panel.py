@@ -227,9 +227,9 @@ class SearchPanel:
         self._window_border_rgba = parse_css_rgba(vals.get("window_border", ""))
 
         css = (
-            "window, window decoration, decoration, .window-frame, .csd decoration, .solid-csd decoration { border: none; box-shadow: none; margin: 0; padding: 0; border-radius: 20px; background-color: transparent; }"
+            "window, window decoration, decoration, .window-frame, .csd decoration, .solid-csd decoration { border: none; box-shadow: none; margin: 0; padding: 0; border-radius: 22px; background-color: transparent; }"
             "scrolledwindow, viewport, list, listbox, overshoot, undershoot, .frame { border: none; outline: none; box-shadow: none; background-color: transparent; background-image: none; }"
-            ".custom-dialog { border: none; border-radius: 20px; }"
+            ".custom-dialog { border: none; border-radius: 22px; }"
             "#searchEntry { font-size: 24px; padding: 12px 16px; background: %(search_bg)s;"
             " color: %(search_fg)s; border: 1px solid %(input_border)s; border-radius: 14px;"
             " caret-color: %(caret)s; margin: 16px 20px 10px 20px; }"
@@ -242,8 +242,8 @@ class SearchPanel:
             ".row:selected { background: %(sel_bg)s; border-left: 4px solid %(sel_border)s; }"
             "#emptyLabel { font-size: 20px; padding: 0; }"
             "#sideLabel { font-size: 17px; padding: 12px 18px; }"
-            ".tab-left { border-top-left-radius: 20px; }"
-            ".tab-right { border-top-right-radius: 20px; }"
+            ".tab-left { border-top-left-radius: 22px; }"
+            ".tab-right { border-top-right-radius: 22px; }"
             "#tabLabel { font-size: 16px; font-weight: bold; padding: 12px 24px; color: %(tab_fg)s; }"
             ".tab-active { background: %(sel_bg)s; border-bottom: 3px solid %(sel_border)s; }"
             ".tab-active #tabLabel { color: %(tab_active_fg)s; }"
@@ -520,7 +520,7 @@ class SearchPanel:
             y = offset
             w = widget.get_allocated_width() - offset * 2
             h = widget.get_allocated_height() - offset * 2
-            r = 19.0
+            r = 21.0
 
             cr.set_operator(cairo.OPERATOR_CLEAR)
             cr.paint()
