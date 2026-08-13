@@ -592,8 +592,10 @@ class ClipboardPanel(Gtk.Box):
             ".custom-dialog frame > border { border: none; }"
 
             # ── AI Chat Panel / Popover / WebView Styles ──
+            ".ai-header-title { color: %(text_fg)s; }"
+            ".ai-hint-label { color: %(text_secondary)s; }"
             ".history-dropdown-btn { font-size: 13px; padding: 2px 8px; min-height: 28px; border-radius: 6px; color: %(text_fg)s; background: %(btn_bg)s; background-image: none; }"
-            ".history-dropdown-btn label { font-size: 13px; }"
+            ".history-dropdown-btn label { font-size: 13px; color: %(text_fg)s; }"
             ".history-dropdown-btn:hover { background: %(btn_hover)s; border-color: %(sel_border)s; }"
             ".clear-all-btn { color: %(text_secondary)s; padding: 6px 12px; margin-top: 2px; font-size: 13px; font-weight: bold; border: none; background: transparent; }"
             ".clear-all-btn:hover { background-color: rgba(239, 68, 68, 0.1); color: #ef4444; border-radius: 4px; }"

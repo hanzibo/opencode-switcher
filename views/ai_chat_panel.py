@@ -289,6 +289,7 @@ class AIChatPanel(Gtk.Box):
         ai_hdr = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
         self._ai_hdr = ai_hdr
         self._ai_lbl = Gtk.Label.new()
+        self._ai_lbl.get_style_context().add_class("ai-header-title")
         self._ai_lbl.set_markup("<b>AI 助手看盘</b>")
         self._ai_lbl.set_xalign(0)
         ai_hdr.pack_start(self._ai_lbl, True, True, 0)
@@ -539,7 +540,7 @@ class AIChatPanel(Gtk.Box):
         # ── 输入框下方状态栏：token 计数 + 快捷键提示（替换原斜杠命令说明） ──
         self._ai_hint_label = Gtk.Label.new("")
         self._ai_hint_label.set_xalign(1)
-        self._ai_hint_label.get_style_context().add_class("dim-label")
+        self._ai_hint_label.get_style_context().add_class("ai-hint-label")
         self._ai_hint_label.set_margin_end(4)
         self._ai_hint_label.set_opacity(0.6)
         self._ai_input_area.pack_start(self._ai_hint_label, False, False, 0)
