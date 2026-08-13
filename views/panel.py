@@ -227,8 +227,8 @@ class SearchPanel:
         self._window_border_rgba = parse_css_rgba(vals.get("window_border", ""))
 
         css = (
-            "window { border: 1px solid %(window_border)s; border-radius: 16px; background-color: transparent; }"
-            ".custom-dialog { border: none; border-radius: 16px; }"
+            "window { border: 1px solid %(window_border)s; border-radius: 20px; background-color: transparent; }"
+            ".custom-dialog { border: none; border-radius: 20px; }"
             "#searchEntry { font-size: 24px; padding: 12px 16px; background: %(search_bg)s;"
             " color: %(search_fg)s; border: 1px solid %(input_border)s; border-radius: 14px;"
             " caret-color: %(caret)s; margin: 16px 20px 10px 20px; }"
@@ -241,8 +241,8 @@ class SearchPanel:
             ".row:selected { background: %(sel_bg)s; border-left: 4px solid %(sel_border)s; }"
             "#emptyLabel { font-size: 20px; padding: 0; }"
             "#sideLabel { font-size: 17px; padding: 12px 18px; }"
-            ".tab-left { border-top-left-radius: 16px; }"
-            ".tab-right { border-top-right-radius: 16px; }"
+            ".tab-left { border-top-left-radius: 20px; }"
+            ".tab-right { border-top-right-radius: 20px; }"
             "#tabLabel { font-size: 16px; font-weight: bold; padding: 12px 24px; color: %(tab_fg)s; }"
             ".tab-active { background: %(sel_bg)s; border-bottom: 3px solid %(sel_border)s; }"
             ".tab-active #tabLabel { color: %(tab_active_fg)s; }"
@@ -516,7 +516,7 @@ class SearchPanel:
             import cairo
             w = widget.get_allocated_width()
             h = widget.get_allocated_height()
-            r = 16.0
+            r = 20.0
 
             cr.set_operator(cairo.OPERATOR_CLEAR)
             cr.paint()
