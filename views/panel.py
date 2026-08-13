@@ -5,6 +5,7 @@ from typing import Optional, Callable, List, Dict
 from stores.session_store import Session
 from views.clipboard_panel import ClipboardPanel
 import difflib
+import logging
 import math
 import os
 import time
@@ -14,6 +15,25 @@ from stores.theme_config import get_theme, get_panel_css_vals, parse_css_rgba
 
 WINDOW_BORDER_RADIUS = 22.0
 WINDOW_STROKE_OFFSET = 1.0
+
+
+def _rounded_window_path(cr, width: float, height: float) -> None:
+    """Trace the rounded window path shared by draw and opaque-region code.
+
+    Kept in sync with WINDOW_BORDER_RADIUS / WINDOW_STROKE_OFFSET so the
+    Cairo background and the compositor opaque region always match.
+    """
+    x = WINDOW_STROKE_OFFSET
+    y = WINDOW_STROKE_OFFSET
+    w = width - WINDOW_STROKE_OFFSET * 2
+    h = height - WINDOW_STROKE_OFFSET * 2
+    r = max(0.0, min(WINDOW_BORDER_RADIUS - WINDOW_STROKE_OFFSET, w / 2.0, h / 2.0))
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
 
 
 def _get_active_monitor_geometry():
@@ -55,6 +75,9 @@ class SearchPanel:
     SIDEBAR_WIDTH = 330
     MAX_VISIBLE = 10
     ROW_HEIGHT = 96
+    # Some Wayland compositors / GDK builds reject opaque-region calls;
+    # disable the mechanism gracefully on first failure.
+    _opaque_region_supported = True
 
     def __init__(self):
         self.on_select: Optional[Callable[[Session], None]] = None
@@ -519,23 +542,11 @@ class SearchPanel:
 
     def _on_window_draw(self, widget, cr):
         try:
-            offset = WINDOW_STROKE_OFFSET
-            x = offset
-            y = offset
-            w = widget.get_allocated_width() - offset * 2
-            h = widget.get_allocated_height() - offset * 2
-            r = max(0.0, min(WINDOW_BORDER_RADIUS - offset, w / 2.0, h / 2.0))
-
             cr.set_operator(cairo.OPERATOR_CLEAR)
             cr.paint()
             cr.set_operator(cairo.OPERATOR_OVER)
 
-            cr.new_sub_path()
-            cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
-            cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
-            cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
-            cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
-            cr.close_path()
+            _rounded_window_path(cr, widget.get_allocated_width(), widget.get_allocated_height())
 
             cr.set_source_rgba(
                 self._bg_color.red,
@@ -564,13 +575,43 @@ class SearchPanel:
         self._update_opaque_region(widget, alloc)
 
     def _update_opaque_region(self, widget, alloc=None):
-        """Unset opaque region so rounded window corners remain transparent."""
+        """Declare the rounded window shape opaque to the compositor.
+
+        The rounded rectangle is marked opaque so the Wayland compositor
+        performs no alpha blending inside it. During fast resizes (e.g.
+        dragging the paned splitter) the compositor can otherwise sample
+        newly allocated but uninitialized ARGB pixels and show the
+        desktop through the window. The four corners stay outside the
+        region, preserving the rounded-corner look.
+
+        This restores the fix from 2e2f4b9 (whole-window opaque region)
+        that was later disabled for rounded corners (e94828e), adapted to
+        the rounded shape.
+        """
+        if not SearchPanel._opaque_region_supported:
+            return
         gdk_win = widget.get_window()
-        if gdk_win is not None:
-            try:
-                gdk_win.set_opaque_region(None)
-            except Exception:
-                pass
+        if gdk_win is None:
+            return
+        try:
+            a = alloc if alloc is not None else widget.get_allocation()
+            w = max(a.width, 1)
+            h = max(a.height, 1)
+
+            surface = cairo.ImageSurface(cairo.FORMAT_A1, w, h)
+            cr = cairo.Context(surface)
+            _rounded_window_path(cr, w, h)
+            cr.set_source_rgba(1, 1, 1, 1)
+            cr.fill()
+            del cr
+            region = Gdk.cairo_region_create_from_surface(surface)
+            surface.finish()
+            gdk_win.set_opaque_region(region)
+        except Exception as e:
+            SearchPanel._opaque_region_supported = False
+            logging.getLogger(__name__).warning(
+                "Opaque region update not supported on this environment: %s", e
+            )
 
     def _on_separator_draw(self, widget, cr):
         try:

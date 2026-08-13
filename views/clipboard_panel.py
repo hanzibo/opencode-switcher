@@ -624,7 +624,11 @@ class ClipboardPanel(Gtk.Box):
              "background-color: %(sel_border)s; border-color: %(sel_border)s; "
              "-gtk-icon-source: -gtk-icontheme('object-select-symbolic'); "
              "background-image: none; }"
-            "#aiScrolled, #aiWebView { background-color: transparent; border: none; box-shadow: none; padding: 0; }"
+            # NOTE: dialog_bg is deliberately used here instead of a dedicated
+            # ai_bg CSS var: for every theme dialog_bg == ai_bg (see theme_config).
+            # If a future theme ever diverges them, update this rule to keep the
+            # AI panel opaque background in sync with AIChatPanel.override_background_color.
+            "#aiScrolled, #aiWebView { background-color: %(dialog_bg)s; border: none; box-shadow: none; padding: 0; }"
             ".model-selector-popover { border-radius: 6px; background-color: %(dialog_bg)s; background-image: none; box-shadow: none; }"
             ".model-selector-popover > decoration { border-radius: 6px; }"
             ".model-selector-list { background-color: transparent; }"
