@@ -227,7 +227,7 @@ class SearchPanel:
         self._window_border_rgba = parse_css_rgba(vals.get("window_border", ""))
 
         css = (
-            "window { border: none; border-radius: 20px; background-color: transparent; }"
+            "window, window decoration, decoration, .window-frame, .csd decoration, .solid-csd decoration { border: none; box-shadow: none; margin: 0; padding: 0; border-radius: 20px; background-color: transparent; }"
             ".custom-dialog { border: none; border-radius: 20px; }"
             "#searchEntry { font-size: 24px; padding: 12px 16px; background: %(search_bg)s;"
             " color: %(search_fg)s; border: 1px solid %(input_border)s; border-radius: 14px;"
@@ -514,19 +514,22 @@ class SearchPanel:
         try:
             import math
             import cairo
-            w = widget.get_allocated_width()
-            h = widget.get_allocated_height()
-            r = 20.0
+            offset = 1.0
+            x = offset
+            y = offset
+            w = widget.get_allocated_width() - offset * 2
+            h = widget.get_allocated_height() - offset * 2
+            r = 19.0
 
             cr.set_operator(cairo.OPERATOR_CLEAR)
             cr.paint()
             cr.set_operator(cairo.OPERATOR_OVER)
 
             cr.new_sub_path()
-            cr.arc(w - r, r, r, -math.pi / 2, 0)
-            cr.arc(w - r, h - r, r, 0, math.pi / 2)
-            cr.arc(r, h - r, r, math.pi / 2, math.pi)
-            cr.arc(r, r, r, math.pi, 3 * math.pi / 2)
+            cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+            cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+            cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+            cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
             cr.close_path()
 
             cr.set_source_rgba(
