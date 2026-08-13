@@ -227,7 +227,7 @@ class SearchPanel:
         self._window_border_rgba = parse_css_rgba(vals.get("window_border", ""))
 
         css = (
-            "window { border: 1px solid %(window_border)s; border-radius: 20px; background-color: transparent; }"
+            "window { border: none; border-radius: 20px; background-color: transparent; }"
             ".custom-dialog { border: none; border-radius: 20px; }"
             "#searchEntry { font-size: 24px; padding: 12px 16px; background: %(search_bg)s;"
             " color: %(search_fg)s; border: 1px solid %(input_border)s; border-radius: 14px;"
