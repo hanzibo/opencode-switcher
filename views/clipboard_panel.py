@@ -382,6 +382,11 @@ class ClipboardPanel(Gtk.Box):
         self._content_paned.pack2(self._ai_chat_panel, resize=False, shrink=False)
         self._content_paned.set_position(int(PANEL_WIDTH * 0.5))
         self._ai_chat_panel.set_size_request(420, -1)
+        # Force the opaque Cairo window background to repaint while the
+        # splitter is dragged: WebKit2GTK resizes asynchronously, so the
+        # WebView compositing surface can briefly expose alpha=0 regions
+        # that would otherwise show the desktop through the ARGB window.
+        self._content_paned.connect("notify::position", self._on_content_paned_position_changed)
 
         # Rebuild category list after all UI components (especially _content_list) are initialized
         self._rebuild_category_list()
@@ -469,6 +474,19 @@ class ClipboardPanel(Gtk.Box):
         except Exception:
             pass
         return True
+
+    def _on_content_paned_position_changed(self, paned, pspec):
+        """Repaint the window background while the splitter is dragged.
+
+        WebKit2GTK resizes asynchronously; during fast paned drags the
+        WebView compositing surface can briefly leave newly exposed
+        regions at alpha=0, which would otherwise show the desktop
+        through the ARGB window. Forcing the opaque Cairo window
+        background to redraw closes that gap.
+        """
+        win = self.get_toplevel()
+        if isinstance(win, Gtk.Window) and win.get_visible():
+            win.queue_draw()
 
     def _set_theme(self, name: str):
         self._theme = name

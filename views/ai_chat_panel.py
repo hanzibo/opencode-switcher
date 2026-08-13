@@ -163,6 +163,29 @@ class AIChatPanel(Gtk.Box):
         raw = get_ai_gtk_colors(theme_name)
         return {k: Gdk.RGBA(*v) for k, v in raw.items()}
 
+    def _apply_webview_gtk_background(self):
+        """Paint the WebView's GdkWindow with the opaque theme background.
+
+        WebKit2GTK renders asynchronously (software path here): while the
+        paned splitter drags, the WebView's GdkWindow can briefly expose
+        newly allocated regions that are not yet covered by the Web
+        process frame. Without an opaque GdkWindow background those
+        regions are alpha=0 and the ARGB window leaks the desktop
+        underneath. ``set_background_color()`` only affects WebKit-side
+        rendering, so the GTK-side GdkWindow must be painted too.
+        """
+        try:
+            webview = getattr(self, "_ai_webview", None)
+            if webview is None:
+                return
+            gdk_win = webview.get_window()
+            if gdk_win is None:
+                return
+            c = self._get_gtk_colors(self._theme)
+            gdk_win.set_background_color(c["bg"])
+        except Exception:
+            pass
+
     def __init__(self, conversation_store, llm_settings_store, ai_settings_store=None, theme="dark", ai_commands=None, pygments_css_cache=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self._conversation_store = conversation_store
@@ -415,6 +438,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_webview.connect("context-menu", lambda *_: True)
         self._ai_webview.connect("web-process-terminated", self._on_webview_crashed)
         self._ai_webview.connect("load-changed", self._on_webview_load_changed)
+        self._ai_webview.connect("realize", lambda *_: self._apply_webview_gtk_background())
         ai_scrolled.add(self._ai_webview)
 
         # Synchronize background colors to prevent Wayland resize flickering/leaks
@@ -423,6 +447,7 @@ class AIChatPanel(Gtk.Box):
         self.override_background_color(Gtk.StateFlags.NORMAL, c["bg"])
         ai_scrolled.override_background_color(Gtk.StateFlags.NORMAL, c["bg"])
         self._ai_webview.set_background_color(c["bg"])
+        self._apply_webview_gtk_background()
         ai_hdr.override_background_color(Gtk.StateFlags.NORMAL, c["header_bg"])
 
         self.pack_start(ai_scrolled, True, True, 0)
@@ -2298,6 +2323,8 @@ class AIChatPanel(Gtk.Box):
         settings.enable_webgl = False
         settings.enable_html5_database = False
         settings.enable_html5_local_storage = False
+
+        self._ai_webview.connect("realize", lambda *_: self._apply_webview_gtk_background())
 
         # 进程已死，DOM 必须整页重建；_load_webview_html(force=True) 同时重置
         # 流式容器状态（DOM 已重建，流式容器需重新创建）
@@ -5001,6 +5028,7 @@ class AIChatPanel(Gtk.Box):
                 pass
         if self._ai_webview:
             self._ai_webview.set_background_color(c["bg"])
+            self._apply_webview_gtk_background()
 
         # WebView 外壳重建守卫：DOM 已存活且外壳指纹（theme + pygments）未变时，
         # 无任何内容需要重载——直接跳过整页重建。
