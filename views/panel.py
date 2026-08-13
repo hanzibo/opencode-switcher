@@ -5,10 +5,15 @@ from typing import Optional, Callable, List, Dict
 from stores.session_store import Session
 from views.clipboard_panel import ClipboardPanel
 import difflib
+import math
 import os
 import time
+import cairo
 from system.utils import relative_time, request_window_focus, PANEL_WIDTH
 from stores.theme_config import get_theme, get_panel_css_vals, parse_css_rgba
+
+WINDOW_BORDER_RADIUS = 22.0
+WINDOW_STROKE_OFFSET = 1.0
 
 
 def _get_active_monitor_geometry():
@@ -225,11 +230,12 @@ class SearchPanel:
         self._dot_closed = t["dot_closed"]
         vals = get_panel_css_vals(name)
         self._window_border_rgba = parse_css_rgba(vals.get("window_border", ""))
+        radius_px = f"{int(WINDOW_BORDER_RADIUS)}px"
 
         css = (
-            "window, window decoration, decoration, .window-frame, .csd decoration, .solid-csd decoration { border: none; box-shadow: none; margin: 0; padding: 0; border-radius: 22px; background-color: transparent; }"
+            f"window, window decoration, decoration, .window-frame, .csd decoration, .solid-csd decoration {{ border: none; box-shadow: none; margin: 0; padding: 0; border-radius: {radius_px}; background-color: transparent; }}"
             "scrolledwindow, viewport, list, listbox, overshoot, undershoot, .frame { border: none; outline: none; box-shadow: none; background-color: transparent; background-image: none; }"
-            ".custom-dialog { border: none; border-radius: 22px; }"
+            f".custom-dialog {{ border: none; border-radius: {radius_px}; }}"
             "#searchEntry { font-size: 24px; padding: 12px 16px; background: %(search_bg)s;"
             " color: %(search_fg)s; border: 1px solid %(input_border)s; border-radius: 14px;"
             " caret-color: %(caret)s; margin: 16px 20px 10px 20px; }"
@@ -242,8 +248,8 @@ class SearchPanel:
             ".row:selected { background: %(sel_bg)s; border-left: 4px solid %(sel_border)s; }"
             "#emptyLabel { font-size: 20px; padding: 0; }"
             "#sideLabel { font-size: 17px; padding: 12px 18px; }"
-            ".tab-left { border-top-left-radius: 22px; }"
-            ".tab-right { border-top-right-radius: 22px; }"
+            f".tab-left {{ border-top-left-radius: {radius_px}; }}"
+            f".tab-right {{ border-top-right-radius: {radius_px}; }}"
             "#tabLabel { font-size: 16px; font-weight: bold; padding: 12px 24px; color: %(tab_fg)s; }"
             ".tab-active { background: %(sel_bg)s; border-bottom: 3px solid %(sel_border)s; }"
             ".tab-active #tabLabel { color: %(tab_active_fg)s; }"
@@ -513,14 +519,12 @@ class SearchPanel:
 
     def _on_window_draw(self, widget, cr):
         try:
-            import math
-            import cairo
-            offset = 1.0
+            offset = WINDOW_STROKE_OFFSET
             x = offset
             y = offset
             w = widget.get_allocated_width() - offset * 2
             h = widget.get_allocated_height() - offset * 2
-            r = 21.0
+            r = max(0.0, min(WINDOW_BORDER_RADIUS - offset, w / 2.0, h / 2.0))
 
             cr.set_operator(cairo.OPERATOR_CLEAR)
             cr.paint()
