@@ -624,7 +624,7 @@ class ClipboardPanel(Gtk.Box):
              "background-color: %(sel_border)s; border-color: %(sel_border)s; "
              "-gtk-icon-source: -gtk-icontheme('object-select-symbolic'); "
              "background-image: none; }"
-            "#aiScrolled, #aiWebView { background-color: transparent; border: none; box-shadow: none; padding: 0; }"
+            "#aiScrolled, #aiWebView { background-color: %(dialog_bg)s; border: none; box-shadow: none; padding: 0; }"
             ".model-selector-popover { border-radius: 6px; background-color: %(dialog_bg)s; background-image: none; box-shadow: none; }"
             ".model-selector-popover > decoration { border-radius: 6px; }"
             ".model-selector-list { background-color: transparent; }"
