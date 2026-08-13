@@ -65,6 +65,13 @@ LIGHT: Dict[str, Any] = {
     "ai_header_bg":      (0.965, 0.973, 0.980, 1.0),   # #f6f8fa
     "ai_input_bg":       (0.976, 0.980, 0.984, 1.0),   # #f9fafb
 
+    # ── AI panel nebula spinner (ai_html_template.py #ai-header) ──
+    "ai_spinner_crescent_a": "#7c3aed",                # 月牙亮端（浅底用深紫保证对比度）
+    "ai_spinner_crescent_b": "#4c1d95",                # 月牙暗端
+    "ai_spinner_orbit":      "rgba(109,40,217,0.35)",  # 星轨虚线环
+    "ai_spinner_dust":       "#6d28d9",                # 星尘粒子
+    "ai_spinner_glow":       "#7c3aed",                # 月牙发光色
+
     # ── AI panel WebView CSS variables (ai_html_template.py) ──
     "web_bg":            "#ffffff",
     "web_text":          "rgba(15,23,42,0.92)",
@@ -121,6 +128,13 @@ DARK: Dict[str, Any] = {
     "ai_bg":             (0.039, 0.043, 0.063, 1.0),    # #0a0b10
     "ai_header_bg":      (0.039, 0.043, 0.063, 1.0),    # same as bg for dark
     "ai_input_bg":       (0.039, 0.043, 0.063, 1.0),    # same as bg for dark
+
+    # ── AI panel nebula spinner (ai_html_template.py #ai-header) ──
+    "ai_spinner_crescent_a": "#a78bfa",                # 月牙亮端
+    "ai_spinner_crescent_b": "#6d28d9",                # 月牙暗端
+    "ai_spinner_orbit":      "rgba(139,92,246,0.45)",  # 星轨虚线环
+    "ai_spinner_dust":       "#c4b5fd",                # 星尘粒子
+    "ai_spinner_glow":       "#8b5cf6",                # 月牙发光色
 
     # ── AI panel WebView CSS variables (ai_html_template.py) ──
     "web_bg":            "#0a0b10",
@@ -179,6 +193,13 @@ DARK_MOON: Dict[str, Any] = {
     "ai_bg":             (0.059, 0.035, 0.078, 1.0),    # #0f0914
     "ai_header_bg":      (0.094, 0.067, 0.141, 1.0),    # #181124
     "ai_input_bg":       (0.094, 0.067, 0.141, 1.0),    # #181124
+
+    # ── AI panel nebula spinner (ai_html_template.py #ai-header) ──
+    "ai_spinner_crescent_a": "#e9d5ff",                # 月牙亮端（紫月星云）
+    "ai_spinner_crescent_b": "#7c3aed",                # 月牙暗端
+    "ai_spinner_orbit":      "rgba(192,132,252,0.55)", # 星轨虚线环
+    "ai_spinner_dust":       "#f0abfc",                # 星尘粒子
+    "ai_spinner_glow":       "#a855f7",                # 月牙发光色
 
     # ── AI panel WebView CSS variables (ai_html_template.py) ──
     "web_bg":            "#0f0914",
@@ -267,6 +288,22 @@ def get_ai_gtk_colors(name: str) -> dict:
         "bg":        t["ai_bg"],
         "header_bg": t["ai_header_bg"],
         "input_bg":  t["ai_input_bg"],
+    }
+
+
+def get_ai_spinner_vars(name: str) -> dict:
+    """Return CSS-variable dict for the nebula spinner mini WebView.
+
+    Keys are substituted into the ``{key}`` placeholders of the spinner
+    HTML template in ``ai_engine/ai_html_template.py`` (#ai-header).
+    """
+    t = get_theme(name)
+    return {
+        "crescent_a": t["ai_spinner_crescent_a"],
+        "crescent_b": t["ai_spinner_crescent_b"],
+        "orbit":      t["ai_spinner_orbit"],
+        "dust":       t["ai_spinner_dust"],
+        "glow":       t["ai_spinner_glow"],
     }
 
 

@@ -58,7 +58,7 @@ from dialogs.recycle_bin_dialog import show_recycle_bin_dialog
 from dialogs.sort_cats_dialog import show_sort_cats_dialog
 from dialogs.prompt_dialog import show_prompt_dialog
 from dialogs.prompts_config_dialog import show_prompts_config_dialog
-from views.ai_popovers import AICommandPopover, HistoryPopover
+from views.ai_popovers import AICommandPopover
 from ai_engine.ai_tool_loop import run_llm_react_loop
 from views.ai_chat_panel import AIChatPanel
 

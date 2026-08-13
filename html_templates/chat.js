@@ -230,8 +230,14 @@ function _renderMath(element) {
 
                 const SCROLL_THRESHOLD = 20;
                 let _autoScroll = true;
-                window.addEventListener('scroll', function() {
-                    _autoScroll = (window.innerHeight + window.scrollY >= document.body.scrollHeight - SCROLL_THRESHOLD);
+                function _content() { return document.getElementById('content'); }
+                window.addEventListener('load', function() {
+                    var el = _content();
+                    if (el) {
+                        el.addEventListener('scroll', function() {
+                            _autoScroll = (el.clientHeight + el.scrollTop >= el.scrollHeight - SCROLL_THRESHOLD);
+                        });
+                    }
                 });
                 let _scrollRafId = null;
                 function _scrollToBottom() {
@@ -240,8 +246,12 @@ function _renderMath(element) {
                             cancelAnimationFrame(_scrollRafId);
                         }
                         _scrollRafId = requestAnimationFrame(() => {
-                            window.scrollTo(0, document.body.scrollHeight);
+                            var el = _content();
+                            if (el) el.scrollTop = el.scrollHeight;
                             _scrollRafId = null;
+                            // WebKit2GTK 程序化滚动可能不触发 scroll 事件，
+                            // 主动刷新轮次/按钮状态
+                            _updateRoundNav();
                         });
                     }
                 }
@@ -341,12 +351,22 @@ function _renderMath(element) {
                     window._isStreaming = false;
                     _showAllMessages = false;
                     resetReasoning();
+                    // 内容替换（切换对话/重新渲染）后默认贴底：
+                    // _autoScroll 是跨对话全局状态，若用户上次在顶部（如点过 ⤴）
+                    // 会被置为 false，导致 _scrollToBottom 被门控跳过，新对话停在顶部
+                    _autoScroll = true;
                     const content = document.getElementById('content');
+                    const bar = document.getElementById('show-older-bar');
                     content.innerHTML = html;
+                    // show-older-bar 位于 #content 内（随消息区滚动），
+                    // innerHTML 重写后需重新挂载到首位
+                    if (bar) content.insertBefore(bar, content.firstChild);
                     _wrapTables(content);
                     addCopyButtons();
                     _renderMath(content);
-                    _throttledWindowing();
+                    // 同步执行折叠（切换对话/内容替换后立即恢复"保留最近 10 轮"），
+                    // 不依赖 RAF 防抖——防抖可能被流式/重建路径吞掉导致折叠失效
+                    applyWindowing();
                     _scrollToBottom();
                     _initRoundNav();
                 }
@@ -556,13 +576,16 @@ function _renderMath(element) {
                 var _rafId = null;
                 function _initRoundNav() {
                     if (!_roundNavInitialized) {
-                        window.addEventListener('scroll', function() {
-                            if (_rafId) return;
-                            _rafId = requestAnimationFrame(function() {
-                                _rafId = null;
-                                _updateRoundNav();
+                        var el = _content();
+                        if (el) {
+                            el.addEventListener('scroll', function() {
+                                if (_rafId) return;
+                                _rafId = requestAnimationFrame(function() {
+                                    _rafId = null;
+                                    _updateRoundNav();
+                                });
                             });
-                        });
+                        }
                         _roundNavInitialized = true;
                     }
                     _updateRoundNav();
@@ -576,12 +599,16 @@ function _renderMath(element) {
                     var total = userRows.length;
                     if (total <= 1) { nav.style.display = 'none'; return; }
                     nav.style.display = 'flex';
-                    var scrollTop = window.scrollY;
+                    var el = _content();
+                    var scrollTop = el ? el.scrollTop : 0;
+                    // content 在视口中的偏移（header 高度等），用于换算文档坐标：
+                    // 元素在 content 文档中的位置 = rect.top - contentRect.top + scrollTop
+                    var contentTop = el ? el.getBoundingClientRect().top : 0;
                     var found = 1;
                     var minDist = Infinity;
                     userRows.forEach(function(row, idx) {
                         var rect = row.getBoundingClientRect();
-                        var rowTop = rect.top + window.scrollY;
+                        var rowTop = rect.top - contentTop + scrollTop;
                         var dist = Math.abs(rowTop - scrollTop);
                         if (dist < minDist) { minDist = dist; found = idx + 1; }
                     });
@@ -598,18 +625,35 @@ function _renderMath(element) {
                     if (n < 1 || n > userRows.length) return;
                     var target = userRows[n - 1];
                     if (target) {
-                        var top = target.getBoundingClientRect().top + window.scrollY - 10;
-                        window.scrollTo({top: top});
+                        var el = _content();
+                        if (el) {
+                            // 用 content 文档坐标（减去 content 视口偏移），
+                            // 否则 header 高度会导致跳转位置整体偏移
+                            var contentTop = el.getBoundingClientRect().top;
+                            var top = target.getBoundingClientRect().top - contentTop + el.scrollTop - 10;
+                            // 用 scrollTop 赋值而非 scrollTo(options)：
+                            // 部分 WebKit2GTK 版本对 options 语法静默失败导致导航失效
+                            el.scrollTop = top;
+                            // 滚动后主动刷新轮次/按钮状态（不依赖 scroll 事件）
+                            _updateRoundNav();
+                        }
                     }
                 }
-                function _prevRound() { _scrollToRound(_currentRound - 1); }
-                function _nextRound() { _scrollToRound(_currentRound + 1); }
+                function _prevRound() { _updateRoundNav(); _scrollToRound(_currentRound - 1); }
+                function _nextRound() { _updateRoundNav(); _scrollToRound(_currentRound + 1); }
                 function _scrollToBottomForce() {
-                    void document.body.offsetHeight;
-                    window.scrollTo({top: document.body.scrollHeight});
+                    var el = _content();
+                    if (el) {
+                        void el.offsetHeight;
+                        el.scrollTop = el.scrollHeight;
+                    }
+                    // 滚动后主动刷新轮次/按钮状态（不依赖 scroll 事件）
+                    _updateRoundNav();
                 }
                 function _scrollToTopForce() {
-                    window.scrollTo({top: 0});
+                    var el = _content();
+                    if (el) el.scrollTop = 0;
+                    _updateRoundNav();
                 }
 
                 /**
@@ -836,3 +880,185 @@ document.addEventListener('DOMContentLoaded', function () {
 
 _scrollToBottom();
                 _initRoundNav();
+
+// ── AI Header（WebView 内固定装饰区）交互 ───────────────────────────────────
+
+function showHeaderSpinner() {
+    var el = document.getElementById('ai-header-spinner');
+    if (el) el.style.display = '';
+}
+function hideHeaderSpinner() {
+    var el = document.getElementById('ai-header-spinner');
+    if (el) el.style.display = 'none';
+}
+function updateHeaderTitle(titleHtml, modelText) {
+    var t = document.getElementById('ai-header-title');
+    if (t && titleHtml) t.innerHTML = titleHtml;
+    var m = document.getElementById('ai-header-model');
+    if (m) m.textContent = modelText || '';
+}
+function updateHistoryLabel(label) {
+    var btn = document.getElementById('ai-history-btn');
+    if (btn) {
+        while (btn.firstChild) btn.removeChild(btn.firstChild);
+        btn.appendChild(document.createTextNode(label + ' ▾'));
+    }
+}
+function closeAIPanel() {
+    window.location = 'opencode://close-panel';
+}
+function toggleHistoryDropdown() {
+    var dd = document.getElementById('ai-history-dropdown');
+    if (!dd) return;
+    if (dd.style.display === 'none') {
+        // 收起态 → 展开：请求数据（renderHistoryList 内部会显示面板）
+        window.location = 'opencode://history-open';
+    } else {
+        // 展开态 → 收起（display 为 '' 等非 none 值均视为展开）
+        dd.style.display = 'none';
+    }
+}
+// 点击下拉外部区域时收起（对齐原 GTK Popover 行为）
+document.addEventListener('click', function (ev) {
+    var dd = document.getElementById('ai-history-dropdown');
+    var btn = document.getElementById('ai-history-btn');
+    if (!dd || dd.style.display === 'none') return;
+    if (!dd.contains(ev.target) && (!btn || !btn.contains(ev.target))) {
+        dd.style.display = 'none';
+    }
+});
+function hideHistoryDropdown() {
+    var dd = document.getElementById('ai-history-dropdown');
+    if (dd) dd.style.display = 'none';
+}
+function renderHistoryList(itemsJson, currentId, show) {
+    var list = document.getElementById('ai-history-list');
+    var dd = document.getElementById('ai-history-dropdown');
+    if (!list || !dd) return;
+    list.innerHTML = '';
+    var items = (typeof itemsJson === 'string') ? JSON.parse(itemsJson) : itemsJson;
+    if (!items || !items.length) {
+        var empty = document.createElement('div');
+        empty.className = 'ai-history-row';
+        empty.textContent = '（暂无历史对话）';
+        list.appendChild(empty);
+    } else {
+        items.forEach(function (it) {
+            var row = document.createElement('div');
+            row.className = 'ai-history-row' + (it.id === currentId ? ' active' : '');
+            row.dataset.id = it.id;
+            var title = document.createElement('span');
+            title.textContent = it.label;
+            row.appendChild(title);
+            var del = document.createElement('button');
+            del.className = 'h-del';
+            del.textContent = '✕';
+            del.title = '删除该对话';
+            del.onclick = function (ev) {
+                ev.stopPropagation();
+                var id = row.dataset.id;
+                askConfirm('删除该对话？', function () {
+                    window.location = 'opencode://history-delete?id=' + encodeURIComponent(id);
+                });
+            };
+            row.appendChild(del);
+            row.onclick = function () {
+                if (_historyEditMode) {
+                    row.classList.toggle('h-sel');
+                    if (row.classList.contains('h-sel')) _historySelected[row.dataset.id] = true;
+                    else delete _historySelected[row.dataset.id];
+                    updateDeleteSelLabel();
+                } else {
+                    window.location = 'opencode://history-select?id=' + encodeURIComponent(row.dataset.id);
+                }
+            };
+            // 编辑模式下隐藏单行删除按钮
+            if (_historyEditMode) del.style.display = 'none';
+            list.appendChild(row);
+        });
+    }
+    // 仅当显式要求显示时才展开（refresh_dropdown 等数据刷新场景保持收起）
+    if (show) dd.style.display = '';
+}
+function showHistoryDropdown() {
+    var dd = document.getElementById('ai-history-dropdown');
+    if (dd) dd.style.display = '';
+}
+// ── 二次确认条 ──
+var _confirmAction = null;
+function askConfirm(msg, fn) {
+    _confirmAction = fn;
+    var m = document.getElementById('history-confirm-msg');
+    if (m) m.textContent = msg;
+    var bar = document.getElementById('history-confirm-bar');
+    if (bar) bar.style.display = '';
+}
+function confirmOk() {
+    if (_confirmAction) {
+        var fn = _confirmAction;
+        _confirmAction = null;
+        fn();
+    }
+    hideConfirm();
+}
+function confirmCancel() {
+    _confirmAction = null;
+    hideConfirm();
+}
+function hideConfirm() {
+    var bar = document.getElementById('history-confirm-bar');
+    if (bar) bar.style.display = 'none';
+}
+// ── 编辑模式（多选删除） ──
+var _historyEditMode = false;
+var _historySelected = {};
+function toggleHistoryEditMode() {
+    _historyEditMode = !_historyEditMode;
+    _historySelected = {};
+    var editBtn = document.getElementById('history-edit-btn');
+    var selAllBtn = document.getElementById('history-select-all-btn');
+    var delSelBtn = document.getElementById('history-delete-sel-btn');
+    if (editBtn) editBtn.textContent = _historyEditMode ? '完成' : '编辑';
+    if (selAllBtn) selAllBtn.style.display = _historyEditMode ? '' : 'none';
+    if (delSelBtn) delSelBtn.style.display = _historyEditMode ? '' : 'none';
+    var rows = document.querySelectorAll('#ai-history-list .ai-history-row');
+    rows.forEach(function (row) {
+        row.classList.remove('h-sel');
+        var del = row.querySelector('.h-del');
+        if (del) del.style.display = _historyEditMode ? 'none' : '';
+    });
+    hideConfirm();
+    updateDeleteSelLabel();
+}
+function historySelectAll() {
+    var rows = document.querySelectorAll('#ai-history-list .ai-history-row');
+    var allSelected = rows.length > 0;
+    rows.forEach(function (r) { if (!r.classList.contains('h-sel')) allSelected = false; });
+    rows.forEach(function (r) {
+        r.classList.toggle('h-sel', !allSelected);
+        if (!allSelected) _historySelected[r.dataset.id] = true;
+    });
+    if (allSelected) _historySelected = {};
+    updateDeleteSelLabel();
+}
+function updateDeleteSelLabel() {
+    var btn = document.getElementById('history-delete-sel-btn');
+    if (btn) btn.textContent = '删除选中(' + Object.keys(_historySelected).length + ')';
+}
+function historyDeleteSelected() {
+    var ids = Object.keys(_historySelected);
+    if (!ids.length) return;
+    askConfirm('删除选中的 ' + ids.length + ' 个对话？', function () {
+        toggleHistoryEditMode();  // 先退出编辑模式，刷新后列表为普通态
+        window.location = 'opencode://history-delete-multi?ids=' + encodeURIComponent(ids.join(','));
+    });
+}
+function historyAction(kind) {
+    if (kind === 'clear') {
+        askConfirm('清空已删除的对话？', function () {
+            window.location = 'opencode://history-clear';
+        });
+    } else if (kind === 'edit') {
+        toggleHistoryEditMode();
+    }
+}

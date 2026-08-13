@@ -122,6 +122,63 @@ for _asset in (_KATEX_INLINE_CSS, _KATEX_INLINE_JS, _KATEX_AUTO_RENDER_JS,
         )
 
 
+# ── Nebula spinner (紫月星云) header assets ───────────────────────────────────
+# Inlined into the WebView shell so no second WebKit process is spawned.
+# {crescent_a} / {crescent_b} / {orbit} / {dust} / {glow} are substituted from
+# stores.theme_config.get_ai_spinner_vars().
+
+_NEBULA_CSS = """
+  /* 紫月星云 spinner（#ai-header 内联） */
+  #ai-header-spinner { width: 36px; height: 36px; flex: none; }
+  #ai-header-spinner svg { width: 100%; height: 100%; display: block; }
+  .crescent {
+    animation: nebula-spin 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+    transform-box: fill-box; transform-origin: center;
+    filter: drop-shadow(0 0 3px {glow});
+  }
+  .orbit {
+    animation: nebula-spin-rev 4.2s linear infinite;
+    transform-box: fill-box; transform-origin: center;
+  }
+  .orbit-ring {
+    stroke: {orbit}; fill: none; stroke-width: 1.2;
+    stroke-dasharray: 2.6 3.4; stroke-linecap: round;
+    animation: nebula-pulse 2.4s ease-in-out infinite;
+    transform-box: fill-box; transform-origin: center;
+  }
+  .dust { fill: {dust}; animation: nebula-flicker 2.4s ease-in-out infinite; }
+  .d2 { animation-delay: 0.6s; }
+  .d3 { animation-delay: 1.2s; }
+  .d4 { animation-delay: 1.8s; }
+  @keyframes nebula-spin     { from { transform: rotate(0deg); }   to { transform: rotate(360deg); } }
+  @keyframes nebula-spin-rev { from { transform: rotate(0deg); }   to { transform: rotate(-360deg); } }
+  @keyframes nebula-pulse    { 0%, 100% { opacity: 0.4; transform: scale(0.95); }
+                               50%      { opacity: 0.8; transform: scale(1.05); } }
+  @keyframes nebula-flicker  { 0%, 100% { opacity: 0.2; } 50% { opacity: 1; } }
+"""
+
+_NEBULA_SVG = """
+  <svg viewBox="0 0 48 48">
+    <defs>
+      <linearGradient id="crescentGrad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="{crescent_a}"/>
+        <stop offset="100%" stop-color="{crescent_b}"/>
+      </linearGradient>
+    </defs>
+    <g class="orbit">
+      <circle class="orbit-ring" cx="24" cy="24" r="21"/>
+    </g>
+    <circle class="crescent" cx="24" cy="24" r="14"
+            stroke="url(#crescentGrad)" stroke-width="8.5" fill="none"
+            stroke-linecap="round" stroke-dasharray="56 32"/>
+    <circle class="dust d1" cx="9"  cy="13" r="1.4"/>
+    <circle class="dust d2" cx="39" cy="17" r="1.1"/>
+    <circle class="dust d3" cx="13" cy="38" r="1.6"/>
+    <circle class="dust d4" cx="36" cy="33" r="1.0"/>
+  </svg>
+"""
+
+
 @functools.lru_cache(maxsize=_HTML_SHELL_CACHE_MAX)
 def _get_html_shell(theme_name: str, pygments_css: str) -> str:
     """Build the static WebView shell (head assets, body frame) for a
@@ -133,11 +190,16 @@ def _get_html_shell(theme_name: str, pygments_css: str) -> str:
     string contains exactly one ``_INITIAL_HTML_MARKER`` occurrence inside
     ``#content``, substituted by ``get_html_template()`` on retrieval.
     """
-    from stores.theme_config import get_web_css_vars
-    css_vars = get_web_css_vars(theme_name)
+    from stores.theme_config import get_web_css_vars, get_ai_spinner_vars
+    css_vars = dict(get_web_css_vars(theme_name))
+    css_vars.update(get_ai_spinner_vars(theme_name))
     css_content = _CHAT_CSS
+    nebula_css = _NEBULA_CSS
+    nebula_svg = _NEBULA_SVG
     for key, value in css_vars.items():
         css_content = css_content.replace("{" + key + "}", value)
+        nebula_css = nebula_css.replace("{" + key + "}", value)
+        nebula_svg = nebula_svg.replace("{" + key + "}", value)
     if pygments_css:
         css_content += f"\n/* Pygments syntax highlighting */\n{pygments_css}"
 
@@ -149,21 +211,48 @@ def _get_html_shell(theme_name: str, pygments_css: str) -> str:
     <script>{_KATEX_INLINE_JS}</script>
     <script>{_KATEX_AUTO_RENDER_JS}</script>
     <style>{css_content}</style>
+    <style>{nebula_css}</style>
     <script>{_CHAT_JS}</script>
 </head>
 <body class="{theme_name}">
-    <div id="show-older-bar" class="show-older-bar" style="display:none">
-        <button onclick="showOlderBatch()">
-            ↑ 显示更早的消息（
-            <span id="hidden-count" class="hidden-count">0</span>
-            轮已隐藏）
-        </button>
-        &nbsp;
-        <button onclick="showAllMessages()" style="font-size:12px; opacity:0.7;">
-            显示全部
-        </button>
+    <!-- 固定装饰区（原 GTK header 迁移至 WebView 内，不随消息滚动） -->
+    <div id="ai-header" class="ai-header">
+        <div id="ai-header-left" class="ai-header-left">
+            <div id="ai-header-title" class="ai-header-title"><b>AI 助手看盘</b></div>
+            <div id="ai-header-model" class="ai-header-model"></div>
+        </div>
+        <div id="ai-header-spinner" class="ai-header-spinner" style="display:none">{nebula_svg}</div>
+        <button id="ai-history-btn" class="ai-header-btn" onclick="toggleHistoryDropdown()">历史对话 ▾</button>
+        <button id="ai-close-btn" class="ai-header-btn" onclick="closeAIPanel()" title="关闭AI面板">❌</button>
     </div>
-    <div id="content">{_INITIAL_HTML_MARKER}</div>
+    <!-- 历史对话下拉面板 -->
+    <div id="ai-history-dropdown" class="ai-history-dropdown" style="display:none">
+        <div id="history-confirm-bar" class="history-confirm-bar" style="display:none">
+            <span id="history-confirm-msg"></span>
+            <button class="ai-history-action" id="history-confirm-ok" onclick="confirmOk()">确认</button>
+            <button class="ai-history-action" id="history-confirm-cancel" onclick="confirmCancel()">取消</button>
+        </div>
+        <div id="ai-history-list"></div>
+        <div class="ai-history-actions">
+            <button class="ai-history-action" id="history-select-all-btn" onclick="historySelectAll()" style="display:none">全选</button>
+            <button class="ai-history-action" id="history-delete-sel-btn" onclick="historyDeleteSelected()" style="display:none">删除选中</button>
+            <button class="ai-history-action" onclick="historyAction('clear')">清空已删除</button>
+            <button class="ai-history-action" id="history-edit-btn" onclick="historyAction('edit')">编辑</button>
+        </div>
+    </div>
+    <div id="content">{_INITIAL_HTML_MARKER}
+        <div id="show-older-bar" class="show-older-bar" style="display:none">
+            <button onclick="showOlderBatch()">
+                ↑ 显示更早的消息（
+                <span id="hidden-count" class="hidden-count">0</span>
+                轮已隐藏）
+            </button>
+            &nbsp;
+            <button onclick="showAllMessages()" style="font-size:12px; opacity:0.7;">
+                显示全部
+            </button>
+        </div>
+    </div>
     <div id="lightbox" class="lightbox-overlay">
         <img id="lightbox-img" class="lightbox-img">
     </div>

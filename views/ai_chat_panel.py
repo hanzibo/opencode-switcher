@@ -70,7 +70,7 @@ from ai_engine.llm_client import _LLMHttpClient, _LLMHttpError, LLMRequestConfig
 from system.event_types import StreamEventType
 from dialogs.prompt_dialog import show_prompt_dialog
 from dialogs.prompts_config_dialog import show_prompts_config_dialog
-from views.ai_popovers import AICommandPopover, HistoryPopover
+from views.ai_popovers import AICommandPopover
 from ai_engine.ai_tool_loop import run_llm_react_loop, ToolLoopContext
 
 AI_BTN_LABEL_SEND = "发送"
@@ -131,6 +131,91 @@ def _should_full_reload_webview(loaded_fingerprint, requested_fingerprint,
     if not webview_ready:
         return True
     return loaded_fingerprint != requested_fingerprint
+
+
+# ── JS 桥对象：WebView 化 header 的接口兼容层 ────────────────────────────────
+# 原 GTK header 组件（Gtk.Spinner / Gtk.Label / HistoryPopover）已迁移到
+# WebView 内 HTML（#ai-header）。以下桥对象保持 _ai_spinner / _ai_lbl /
+# _ai_history_popover 的既有接口（show/start/stop/hide、set_markup、
+# refresh_dropdown/popdown/get_visible），内部转发到 WebView JS，
+# 使既有调用点与测试 mock 零改动。
+
+
+class _HeaderSpinnerBridge:
+    """spinner 控制 → WebView JS（兼容 show/start/stop/hide）。"""
+
+    def __init__(self, panel):
+        self._panel = panel
+
+    def _run(self, js):
+        try:
+            wv = getattr(self._panel, "_ai_webview", None)
+            if wv is not None:
+                wv.run_javascript(js, None, None)
+        except Exception:
+            pass
+
+    def show(self):
+        self._run("showHeaderSpinner();")
+
+    def hide(self):
+        self._run("hideHeaderSpinner();")
+
+    def start(self):
+        pass  # CSS 动画自动循环，无需手动启动
+
+    def stop(self):
+        pass  # 可见性由 GTK show/hide 控制
+
+
+class _HeaderTitleBridge:
+    """标题/模型名更新 → WebView JS（兼容 set_markup）。"""
+
+    def __init__(self, panel):
+        self._panel = panel
+
+    def set_markup(self, markup):
+        try:
+            wv = getattr(self._panel, "_ai_webview", None)
+            if wv is None:
+                return
+            js = "updateHeaderTitle(%s, '');" % json.dumps(markup, ensure_ascii=False)
+            wv.run_javascript(js, None, None)
+        except Exception:
+            pass
+
+
+class _HistoryPopoverBridge:
+    """历史下拉 → WebView JS（兼容 refresh_dropdown/popdown/get_visible）。"""
+
+    def __init__(self, panel):
+        self._panel = panel
+
+    def refresh_dropdown(self, edit_mode: bool = False):
+        try:
+            wv = getattr(self._panel, "_ai_webview", None)
+            if wv is None:
+                return
+            items = self._panel._history_summaries_json()
+            current_id = self._panel._ai_conversation_id or ""
+            js = "renderHistoryList(%s, %s);" % (
+                items,
+                json.dumps(current_id, ensure_ascii=False),
+            )
+            wv.run_javascript(js, None, None)
+        except Exception:
+            pass
+
+    def popdown(self):
+        try:
+            wv = getattr(self._panel, "_ai_webview", None)
+            if wv is not None:
+                wv.run_javascript("hideHistoryDropdown();", None, None)
+        except Exception:
+            pass
+
+    def get_visible(self):
+        return False  # GTK 侧不再持有下拉可见性状态
 
 
 class AIChatPanel(Gtk.Box):
@@ -308,79 +393,17 @@ class AIChatPanel(Gtk.Box):
         from views.clipboard_panel import _textview_draw_placeholder, _copy_to_clipboard
         self._copy_to_clipboard = _copy_to_clipboard  # 保存为实例变量供 _on_decide_policy 使用，避免模块级循环导入
 
-        # Title / Header
-        ai_hdr = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
-        self._ai_hdr = ai_hdr
-        self._ai_lbl = Gtk.Label.new()
-        self._ai_lbl.get_style_context().add_class("ai-header-title")
-        self._ai_lbl.set_markup("<b>AI 助手看盘</b>")
-        self._ai_lbl.set_xalign(0)
-        ai_hdr.pack_start(self._ai_lbl, True, True, 0)
-
-        self._ai_spinner = Gtk.Spinner.new()
-        self._ai_spinner.set_no_show_all(True)
-        ai_hdr.pack_start(self._ai_spinner, False, False, 0)
-
-        # Conversation history dropdown button (inserted before copy button)
-        self._ai_history_btn = Gtk.Button.new()
-        self._ai_history_btn.set_size_request(160, -1)
-        self._ai_history_btn.set_no_show_all(True)
-        self._ai_history_btn.set_tooltip_text("切换对话历史")
-        self._ai_history_btn.set_sensitive(False)
-        self._ai_history_btn.get_style_context().add_class("history-dropdown-btn")
-
-        btn_box = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 4)
-        self._ai_history_btn_label = Gtk.Label.new("历史对话")
-        self._ai_history_btn_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self._ai_history_btn_label.set_max_width_chars(15)
-        self._ai_history_btn_label.set_xalign(0)
-        arrow = Gtk.Label.new("▾")
-
-        btn_box.pack_start(self._ai_history_btn_label, True, True, 0)
-        btn_box.pack_start(arrow, False, False, 0)
-        self._ai_history_btn.add(btn_box)
-
-        ai_hdr.pack_start(self._ai_history_btn, False, False, 0)
-
-        # Create Popover for history selection
-        self._ai_history_popover = HistoryPopover(
-            relative_to_widget=self._ai_history_btn,
-            history_btn=self._ai_history_btn,
-            history_btn_label=self._ai_history_btn_label,
-            conversation_store=self._conversation_store,
-            get_current_conv_id_fn=lambda: self._ai_conversation_id,
-            get_sorted_conversations_fn=self._get_sorted_conversations,
-            on_conversation_selected=self._switch_to_conversation,
-            on_clear_all_deleted_reset_fn=self._reset_ai_panel_silent,
-            on_dialog_shown=lambda: self.on_dialog_shown() if self.on_dialog_shown else None,
-            on_dialog_hidden=lambda: self.on_dialog_hidden() if self.on_dialog_hidden else None,
-            on_popover_shown=lambda: self.on_combo_popup_shown() if self.on_combo_popup_shown else None,
-            on_popover_closed=lambda: self.on_combo_popup_hidden() if self.on_combo_popup_hidden else None,
-            on_delete_conversation_fn=self._delete_conversation_cleanup,
-        )
-
-
-        # Close button
-        ai_close = Gtk.Button.new_with_label("\u274c")
-        ai_close.set_tooltip_text("关闭AI面板")
-        ai_close.get_style_context().add_class("flat")
-
-        def on_ai_close_clicked(_btn):
-            self.set_no_show_all(True)
-            self.hide()
-            self.separator.set_no_show_all(True)
-            self.separator.hide()
-            self._ai_panel_visible_saved = False
-            self.queue_resize()
-
-        ai_close.connect("clicked", on_ai_close_clicked)
-        ai_hdr.pack_start(ai_close, False, False, 0)
-
-        self.pack_start(ai_hdr, False, False, 0)
-
-        # Separator
-        ai_sep_line = Gtk.Separator.new(Gtk.Orientation.HORIZONTAL)
-        self.pack_start(ai_sep_line, False, False, 0)
+        # ── AI header 已迁移至 WebView 内（HTML #ai-header）──
+        # 保留 _ai_lbl / _ai_spinner / _ai_history_popover 三个桥对象，
+        # 接口与原 GTK 组件兼容（set_markup / show/start/stop/hide /
+        # refresh_dropdown/popdown/get_visible），内部转发到 WebView JS，
+        # 使既有调用点与测试保持零改动。
+        self._ai_lbl = _HeaderTitleBridge(self)
+        self._ai_spinner = _HeaderSpinnerBridge(self)
+        self._ai_history_btn = None
+        self._ai_history_btn_label = None
+        self._ai_history_popover = _HistoryPopoverBridge(self)
+        # 无 GTK header：WebView 从面板顶部开始，内部含固定装饰区
 
         # Scrolled Text view
         ai_scrolled = Gtk.ScrolledWindow.new()
@@ -448,7 +471,6 @@ class AIChatPanel(Gtk.Box):
         ai_scrolled.override_background_color(Gtk.StateFlags.NORMAL, c["bg"])
         self._ai_webview.set_background_color(c["bg"])
         self._apply_webview_gtk_background()
-        ai_hdr.override_background_color(Gtk.StateFlags.NORMAL, c["header_bg"])
 
         self.pack_start(ai_scrolled, True, True, 0)
 
@@ -2296,6 +2318,62 @@ class AIChatPanel(Gtk.Box):
                         self._rollback_to_round(int(round_str))
                     except (ValueError, IndexError):
                         pass
+                return True
+            if uri.startswith("opencode://close-panel"):
+                # 原 GTK header ❌ 按钮逻辑（已迁移至 WebView 内）
+                self.set_no_show_all(True)
+                self.hide()
+                if self.separator is not None:
+                    self.separator.set_no_show_all(True)
+                    self.separator.hide()
+                self._ai_panel_visible_saved = False
+                self.queue_resize()
+                return True
+            if uri.startswith("opencode://history-open"):
+                # 下拉打开：先刷新列表（仅渲染不显示），再显式展开
+                if getattr(self, "_ai_history_popover", None) is not None:
+                    self._ai_history_popover.refresh_dropdown()
+                try:
+                    if self._ai_webview is not None:
+                        self._ai_webview.run_javascript("showHistoryDropdown();", None, None)
+                except Exception:
+                    pass
+                return True
+            if uri.startswith("opencode://history-select"):
+                qs = parse_qs(urlparse(uri).query)
+                cid = qs.get("id", [None])[0]
+                if cid is not None:
+                    self._switch_to_conversation(cid)
+                    # 切换完成后自动收起下拉（页面重建时新页面默认收起，双保险）
+                    if getattr(self, "_ai_history_popover", None) is not None:
+                        self._ai_history_popover.popdown()
+                return True
+            # 注意顺序：history-delete-multi 必须先于 history-delete 判断，
+            # 否则 startswith("opencode://history-delete") 会短路 multi 请求
+            if uri.startswith("opencode://history-delete-multi"):
+                qs = parse_qs(urlparse(uri).query)
+                ids_str = qs.get("ids", [None])[0]
+                if ids_str:
+                    for cid in ids_str.split(","):
+                        if cid:
+                            self._delete_conversation_cleanup(cid)
+                    if getattr(self, "_ai_history_popover", None) is not None:
+                        self._ai_history_popover.refresh_dropdown()
+                return True
+            if uri.startswith("opencode://history-delete"):
+                qs = parse_qs(urlparse(uri).query)
+                cid = qs.get("id", [None])[0]
+                if cid is not None:
+                    self._delete_conversation_cleanup(cid)
+                    # 删除后刷新下拉列表（数据已变，UI 同步）
+                    if getattr(self, "_ai_history_popover", None) is not None:
+                        self._ai_history_popover.refresh_dropdown()
+                return True
+            if uri.startswith("opencode://history-clear"):
+                self._reset_ai_panel_silent()
+                return True
+            if uri.startswith("opencode://history-edit"):
+                # 二期：编辑模式（多选删除）
                 return True
             # 外部链接：在默认浏览器中打开
             try:
@@ -4590,6 +4668,26 @@ class AIChatPanel(Gtk.Box):
         summaries.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
         return summaries
 
+    def _history_summaries_json(self) -> str:
+        """生成 WebView header 历史下拉的 JSON 列表（对齐原 HistoryPopover 格式）。
+
+        标题清理：去除首尾空白/换行，超 25 字符截断为 22 + "..."
+        （与原 HistoryPopover.refresh_dropdown 的展示格式一致）。
+        """
+        try:
+            items = []
+            for s in self._get_sorted_conversations():
+                sid = s.get("id", "")
+                raw_title = s.get("title", "") or "(untitled)"
+                title = " ".join(str(raw_title).split())
+                if len(title) > 25:
+                    title = title[:22] + "..."
+                count = s.get("message_count", 0)
+                items.append({"id": sid, "label": f"{title} ({count}条)"})
+            return json.dumps(items, ensure_ascii=False)
+        except Exception:
+            return "[]"
+
     def navigate_conversation(self, direction: int):
         """Navigate conversation history via keyboard shortcut.
 
@@ -5007,6 +5105,9 @@ class AIChatPanel(Gtk.Box):
     def set_theme(self, name):
         self._theme = name
 
+        # 主题切换：header/spinner 均为 WebView 内 HTML，随下方整页重建自动跟随，
+        # 无需单独更新 GTK 组件。
+
         # Update GTK widget background colors to match the new theme
         c = self._get_gtk_colors(name)
 
@@ -5019,11 +5120,6 @@ class AIChatPanel(Gtk.Box):
         if self._ai_input_area is not None:
             try:
                 self._ai_input_area.override_background_color(Gtk.StateFlags.NORMAL, c["input_bg"])
-            except Exception:
-                pass
-        if self._ai_hdr is not None:
-            try:
-                self._ai_hdr.override_background_color(Gtk.StateFlags.NORMAL, c["header_bg"])
             except Exception:
                 pass
         if self._ai_webview:

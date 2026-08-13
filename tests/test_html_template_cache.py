@@ -61,7 +61,8 @@ class TestHtmlShellCache(unittest.TestCase):
     def test_shell_contains_marker_exactly_once(self):
         shell = _get_html_shell("dark", "")
         self.assertEqual(shell.count(_INITIAL_HTML_MARKER), 1)
-        self.assertIn(f'<div id="content">{_INITIAL_HTML_MARKER}</div>', shell)
+        # marker 位于 #content 首部（其后为 show-older-bar 静态区块）
+        self.assertIn(f'<div id="content">{_INITIAL_HTML_MARKER}', shell)
 
     def test_cache_is_bounded(self):
         for i in range(_HTML_SHELL_CACHE_MAX + 10):
@@ -81,11 +82,13 @@ class TestGetHtmlTemplateContent(unittest.TestCase):
 
     def test_initial_html_inserted_at_content_slot(self):
         html = get_html_template("dark", "<p>hello</p>", "")
-        self.assertIn('<div id="content"><p>hello</p></div>', html)
+        self.assertIn(f'<div id="content"><p>hello</p>', html)
 
     def test_empty_initial_html_gives_empty_content(self):
         html = get_html_template("dark", "", "")
-        self.assertIn('<div id="content"></div>', html)
+        self.assertIn('<div id="content">', html)
+        self.assertNotIn(_INITIAL_HTML_MARKER, html)
+        self.assertIn('show-older-bar', html)  # 静态区块仍在 content 内
 
     def test_no_marker_leaks_into_output(self):
         html = get_html_template("dark", "content", "")

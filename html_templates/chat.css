@@ -6,9 +6,154 @@
                     color: {text_color};
                     background-color: {bg_color};
                     line-height: 1.6;
-                    padding: 8px;
+                    padding: 0;
                     margin: 0;
                     font-size: 14px;
+                    display: flex;
+                    flex-direction: column;
+                    height: 100vh;
+                    overflow: hidden;
+                }
+                /* 消息区独立滚动（header 固定不随内容滚动） */
+                #content {
+                    flex: 1;
+                    overflow-y: auto;
+                    padding: 8px;
+                    min-height: 0;
+                }
+                /* ── AI header（WebView 内固定装饰区，原 GTK ai_hdr 迁移） ── */
+                #ai-header {
+                    flex: none;
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    height: 44px;
+                    padding: 0 10px;
+                    border-bottom: 1px solid {pre_border};
+                    background-color: {bg_color};
+                    position: relative;
+                    z-index: 50;
+                }
+                #ai-header-left {
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    min-width: 0;
+                    line-height: 1.3;
+                }
+                #ai-header-title {
+                    font-weight: bold;
+                    font-size: 13px;
+                    color: {text_color};
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }
+                #ai-header-model {
+                    font-size: 11px;
+                    opacity: 0.6;
+                    color: {text_color};
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }
+                #ai-header .ai-header-btn {
+                    flex: none;
+                    background: transparent;
+                    border: 1px solid transparent;
+                    border-radius: 6px;
+                    color: {text_color};
+                    font-size: 12px;
+                    padding: 3px 8px;
+                    cursor: pointer;
+                }
+                #ai-header .ai-header-btn:hover {
+                    background-color: {pre_bg};
+                }
+                #ai-header-spinner {
+                    display: inline-flex;
+                    align-items: center;
+                    flex: none;
+                }
+                /* ── 历史对话下拉面板 ── */
+                #ai-history-dropdown {
+                    position: fixed;
+                    top: 48px;
+                    right: 42px;
+                    z-index: 60;
+                    min-width: 220px;
+                    max-width: 320px;
+                    max-height: 60vh;
+                    overflow-y: auto;
+                    background-color: {bg_color};
+                    border: 1px solid {pre_border};
+                    border-radius: 8px;
+                    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+                    padding: 6px;
+                }
+                .ai-history-row {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding: 6px 8px;
+                    border-radius: 6px;
+                    cursor: pointer;
+                    font-size: 12px;
+                    color: {text_color};
+                }
+                .ai-history-row:hover { background-color: {pre_bg}; }
+                .ai-history-row.active { background-color: {code_bg}; }
+                .ai-history-row .h-del {
+                    margin-left: auto;
+                    opacity: 0.5;
+                    border: none;
+                    background: none;
+                    color: {code_fg};
+                    cursor: pointer;
+                    font-size: 11px;
+                }
+                .ai-history-row .h-del:hover { opacity: 1; }
+                .ai-history-actions {
+                    display: flex;
+                    gap: 6px;
+                    justify-content: flex-end;
+                    padding-top: 6px;
+                    border-top: 1px solid {pre_border};
+                    margin-top: 6px;
+                }
+                .ai-history-action {
+                    background: transparent;
+                    border: 1px solid {pre_border};
+                    border-radius: 6px;
+                    color: {text_color};
+                    font-size: 11px;
+                    padding: 2px 8px;
+                    cursor: pointer;
+                }
+                .ai-history-action:hover { background-color: {pre_bg}; }
+                .ai-history-action:disabled { opacity: 0.4; cursor: not-allowed; }
+                .ai-history-action:disabled:hover { background-color: transparent; }
+                .history-confirm-bar {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    padding: 6px 8px;
+                    margin-bottom: 6px;
+                    border-radius: 6px;
+                    background-color: {code_bg};
+                    font-size: 12px;
+                    color: {text_color};
+                }
+                .history-confirm-bar span { flex: 1; }
+                .ai-history-row.h-sel {
+                    background-color: {code_bg};
+                    outline: 1px solid {pre_border};
+                }
+                .ai-history-row.h-sel::before {
+                    content: '✓';
+                    color: {code_fg};
+                    font-size: 11px;
                 }
                 pre {
                     background-color: {pre_bg};
