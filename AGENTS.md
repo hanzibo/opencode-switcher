@@ -18,7 +18,7 @@ Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipb
 
 **System deps**: `gir1.2-ayatanaappindicator3-0.1 python3-gi python3-gi-cairo python3-pip python3-venv wl-clipboard gir1.2-webkit2-4.1` — webkit2gtk NOT in `install.sh` but required at runtime (AI panel crashes without it).
 
-**Tests ARE version-controlled**: all 41 `tests/test_*.py` files are tracked (only `tests/__pycache__/` is gitignored). No CI, no pre-commit, no pyproject — stdlib `unittest` is the only test runner, and there is no linter/formatter config (manual discipline). Run focused tests as `venv/bin/python3 -m unittest tests.test_session_store`; the venv uses `--system-site-packages` so a fresh clone needs system GTK deps installed first.
+**Tests ARE version-controlled**: all 51 `tests/test_*.py` files are tracked (only `tests/__pycache__/` is gitignored). No CI, no pre-commit, no pyproject — stdlib `unittest` is the only test runner, and there is no linter/formatter config (manual discipline). Run focused tests as `venv/bin/python3 -m unittest tests.test_session_store`; the venv uses `--system-site-packages` so a fresh clone needs system GTK deps installed first.
 
 **Commit convention**: `fix(area):`, `feat(area):`, `improve(area):`, `refactor(area):`, `docs(area):`, `merge:`. Area prefix follows module (e.g., `ai-panel`, `theme`, `tool-registry`, `clipboard`, `mcp`).
 
@@ -26,7 +26,7 @@ Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipb
 
 ### Entrypoint & Startup Flow
 
-`main.py` (312 lines) is the sole entrypoint. Startup:
+`main.py` (416 lines) is the sole entrypoint. Startup:
 ```
 systemd/.desktop → run.sh → main.py (flock lock)
   → load_theme_config() → migrate_history.run_migration()
@@ -43,16 +43,16 @@ systemd/.desktop → run.sh → main.py (flock lock)
 
 | Module | Lines | Role |
 |--------|-------|------|
-| `main.py` | 312 | Entrypoint: flock lock, App(), Gtk.main() |
-| `views/` | ~8840 | Main UI views (`panel.py`, `clipboard_panel.py`, `ai_chat_panel.py`, `ai_popovers.py`). `ai_chat_panel.py` is the largest file in the repo (~4600 lines, streaming + suspend/resume logic) |
-| `dialogs/` | ~4270 | GTK dialogs (`settings_dialog.py`, `prompts_config_dialog.py`, `memory_manager_dialog.py`, etc.) |
-| `stores/` | ~2630 | Data persistence & state (`clipboard_store.py`, `session_store.py`, `skill_store.py`, `theme_config.py`, `delete_queue.py`) |
-| `ai_engine/` | ~1610 | AI LLM engine & rendering (`llm_client.py`, `ai_tool_loop.py`, `ai_html_template.py`, `render_pipeline.py`) |
-| `system/` | ~640 | System IPC & utilities (`hotkey.py`, `launcher.py`, `event_types.py`, `migrate_history.py`, `utils.py`, `inspect_db.py`, `session_refresh.py`) |
-| `mcp_integration/` | ~2290 | MCP protocol layer (JSON-RPC over stdio/http transports in `transports/`, GTK asyncio bridge) |
-| `tool_registry/` | ~6350 | AI tool executors — 28 tools across 13 schema modules (+`display.py`/`_state.py` helpers, no schemas) |
+| `main.py` | 416 | Entrypoint: flock lock, App(), Gtk.main(), MCP shutdown on quit |
+| `views/` | ~9230 | Main UI views (`panel.py`, `clipboard_panel.py`, `ai_chat_panel.py`, `ai_popovers.py`). `ai_chat_panel.py` is the largest file in the repo (~4600 lines, streaming + suspend/resume logic) |
+| `dialogs/` | ~4550 | GTK dialogs (`settings_dialog.py`, `prompts_config_dialog.py`, `memory_manager_dialog.py`, etc.) |
+| `stores/` | ~2810 | Data persistence & state (`clipboard_store.py`, `session_store.py`, `session_refresh.py`, `skill_store.py`, `theme_config.py`, `delete_queue.py`) |
+| `ai_engine/` | ~1630 | AI LLM engine & rendering (`llm_client.py`, `ai_tool_loop.py`, `ai_html_template.py`, `render_pipeline.py`) |
+| `system/` | ~620 | System IPC & utilities (`hotkey.py`, `launcher.py`, `event_types.py`, `migrate_history.py`, `utils.py`, `inspect_db.py`) |
+| `mcp_integration/` | ~4260 | MCP protocol layer (JSON-RPC over stdio/http transports in `transports/`, OAuth 2.1 client auth in `oauth/`, `client_manager.py`, GTK asyncio bridge) |
+| `tool_registry/` | ~6330 | AI tool executors — 28 tools across 13 schema modules (+`display.py`/`_state.py` helpers, no schemas) |
 | `html_templates/` | ~1910 | Web assets (`chat.js`, `chat.css`) for WebKit WebView rendering |
-| `ai_text_utils/` | ~1240 | Pure text/markdown/math helpers (zero GTK dep) |
+| `ai_text_utils/` | ~1310 | Pure text/markdown/math helpers (zero GTK dep) |
 | `deploy/` | — | Templated `opencode-switcher.{service,desktop}` + icon; `install.sh` substitutes `__INSTALL_DIR__` via `sed` |
 
 ### Tool Registry (`tool_registry/`)
@@ -93,7 +93,7 @@ These cause SIGSEGV if violated. Follow strictly.
 ## WebView Memory Optimization Patterns
 
 - **`terminate_web_process()` is the only effective memory release** for WebKit — `load_html` + cache clearing barely moves the ~200MB WebProcess RSS.
-- **MemoryPressureSettings must be set at `WebContext` construction time** — runtime changes are ignored. Configured in `ai_engine/ai_html_template.py:188-209` (`get_shared_web_context()`): 300MB limit, 5s poll, 0.2/0.4 thresholds; constants duplicated at `views/ai_chat_panel.py:50-53`.
+- **MemoryPressureSettings must be set at `WebContext` construction time** — runtime changes are ignored. Configured in `ai_engine/ai_html_template.py:188-209` (`get_shared_web_context()`): 300MB limit, 5s poll, 0.2/0.4 thresholds; constants duplicated at `views/ai_chat_panel.py:58-61`.
 - **Shared WebContext singleton**: all WebViews use `get_shared_web_context()` to avoid duplicate WebKitNet processes. Reuse it (never create a fresh context) when rebuilding a WebView.
 - **Suspend flow** (`views/ai_chat_panel.py`): 60s after panel hidden (`_SUSPEND_DELAY_SECONDS`), deferred while any conversation is still streaming → cache `_last_rendered_html` into `_ai_html_cache[conv_id]`, set `_webview_suspended`, then `terminate_web_process()`.
 - **First-open guard (`_ai_has_shown`)**: the suspend timer never starts until the panel has been shown to the user at least once (set in `open_ai_and_load_recent`/`show_panel`/`start_new_conversation`/`ask_llm_api`, NOT in `on_panel_shown`). Without it, the startup-time internal hide would kill the cold-spawned WebProcess and the first Ctrl+Shift+X after an OS reboot would pay a 1-2s cold spawn. **WebProcess spawn is the bottleneck**: measured ~2100ms first spawn vs ~165ms warm respawn vs ~60ms HTML load (Python side only ~40ms).
@@ -103,6 +103,9 @@ These cause SIGSEGV if violated. Follow strictly.
 - **Crash vs suspend**: `_on_webview_crashed` skips the rebuild when `_webview_suspended` is set (intentional termination, not a crash); on real crashes it builds a new `WebKit2.WebView` reusing the shared context.
 
 ## Key Features & Quirks
+
+### Themes
+All theme colors live in `stores/theme_config.py`: `_THEMES = {"light", "dark", "dark-moon"}`. Views read colors only via `get_theme()` / `get_panel_css_vals()` / `parse_css_rgba()` — do NOT reintroduce per-view color dicts (a recent refactor consolidated the duplicates into `theme_config.py`). Adding a theme means updating `_THEMES` **and** every key `get_panel_css_vals()` returns: views index the dict directly, and a missing key raises `KeyError` (see `cat_hover` and `panel_bg`/`panel_title` fix history).
 
 ### Slash Commands
 - **Search bar** (`views/panel.py`): `/new`, `/open`, `/gm <query>`, `/google <query>`. Tab-completion. `/gm` uses `evdev.UInput` for automated typing simulation. Delay: 1.2s (Firefox running) / 4.0s (not).
@@ -122,7 +125,7 @@ Heuristic regex scoring in `clipboard_store.py` (`classify_text()`, `detect_lang
 ### AI Assistant Streaming Architecture
 - Three-zone DOM structure in WebView (`.bubble-region` for reasoning/tool/answer).
 - Streaming: `_render_current_assistant_message()` calls JS `updateMessageContainer()` to incrementally update only the answer region. Poll interval: 200ms.
-- Token batching: Python buffers streaming tokens and flushes to JS every `_BATCH_FLUSH_MS`=60ms (`ai_chat_panel.py:151`, `_flush_token_buffer`) — a batching perf mechanism, distinct from the JS-side 200ms polling.
+- Token batching: Python buffers streaming tokens and flushes to JS every `_BATCH_FLUSH_MS`=60ms (`ai_chat_panel.py:153`, `_flush_token_buffer`) — a batching perf mechanism, distinct from the JS-side 200ms polling.
 - Non-streaming (conversation switch, full rebuilds): `_render_markdown()`.
 - **DOM Windowing**: Only last 10 rounds visible. `display:none` for older. Batch-load 3 more per click.
 - Background conversations: not interrupted by hiding panel or switching conversations. State cached in `self._ai_running_convs` by `conv_id`.
@@ -162,7 +165,7 @@ Dynamically add/remove `.subagent-status-bar` class on FlowBox before `hide()`/`
 
 | Path | Contents |
 |------|----------|
-| `~/.config/opencode-switcher/config.json` | Theme setting (dark/light) |
+| `~/.config/opencode-switcher/config.json` | Theme setting (light/dark/dark-moon) |
 | `~/.config/opencode-switcher/clipboard_history.json` | 150 FIFO clipboard items (+ `.backup`) |
 | `~/.config/opencode-switcher/categories.json` | Custom categories + recycle bin |
 | `~/.config/opencode-switcher/custom_prompts.json` | Named prompts |
