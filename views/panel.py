@@ -5,6 +5,7 @@ from typing import Optional, Callable, List, Dict
 from stores.session_store import Session
 from views.clipboard_panel import ClipboardPanel
 import difflib
+import logging
 import math
 import os
 import time
@@ -14,6 +15,25 @@ from stores.theme_config import get_theme, get_panel_css_vals, parse_css_rgba
 
 WINDOW_BORDER_RADIUS = 22.0
 WINDOW_STROKE_OFFSET = 1.0
+
+
+def _rounded_window_path(cr, width: float, height: float) -> None:
+    """Trace the rounded window path shared by draw and opaque-region code.
+
+    Kept in sync with WINDOW_BORDER_RADIUS / WINDOW_STROKE_OFFSET so the
+    Cairo background and the compositor opaque region always match.
+    """
+    x = WINDOW_STROKE_OFFSET
+    y = WINDOW_STROKE_OFFSET
+    w = width - WINDOW_STROKE_OFFSET * 2
+    h = height - WINDOW_STROKE_OFFSET * 2
+    r = max(0.0, min(WINDOW_BORDER_RADIUS - WINDOW_STROKE_OFFSET, w / 2.0, h / 2.0))
+    cr.new_sub_path()
+    cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
+    cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
+    cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
+    cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
+    cr.close_path()
 
 
 def _get_active_monitor_geometry():
@@ -522,23 +542,11 @@ class SearchPanel:
 
     def _on_window_draw(self, widget, cr):
         try:
-            offset = WINDOW_STROKE_OFFSET
-            x = offset
-            y = offset
-            w = widget.get_allocated_width() - offset * 2
-            h = widget.get_allocated_height() - offset * 2
-            r = max(0.0, min(WINDOW_BORDER_RADIUS - offset, w / 2.0, h / 2.0))
-
             cr.set_operator(cairo.OPERATOR_CLEAR)
             cr.paint()
             cr.set_operator(cairo.OPERATOR_OVER)
 
-            cr.new_sub_path()
-            cr.arc(x + w - r, y + r, r, -math.pi / 2, 0)
-            cr.arc(x + w - r, y + h - r, r, 0, math.pi / 2)
-            cr.arc(x + r, y + h - r, r, math.pi / 2, math.pi)
-            cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
-            cr.close_path()
+            _rounded_window_path(cr, widget.get_allocated_width(), widget.get_allocated_height())
 
             cr.set_source_rgba(
                 self._bg_color.red,
@@ -589,21 +597,10 @@ class SearchPanel:
             a = alloc if alloc is not None else widget.get_allocation()
             w = max(a.width, 1)
             h = max(a.height, 1)
-            offset = WINDOW_STROKE_OFFSET
-            x = offset
-            y = offset
-            rw = w - offset * 2
-            rh = h - offset * 2
-            r = max(0.0, min(WINDOW_BORDER_RADIUS - offset, rw / 2.0, rh / 2.0))
 
             surface = cairo.ImageSurface(cairo.FORMAT_A1, w, h)
             cr = cairo.Context(surface)
-            cr.new_sub_path()
-            cr.arc(x + rw - r, y + r, r, -math.pi / 2, 0)
-            cr.arc(x + rw - r, y + rh - r, r, 0, math.pi / 2)
-            cr.arc(x + r, y + rh - r, r, math.pi / 2, math.pi)
-            cr.arc(x + r, y + r, r, math.pi, 3 * math.pi / 2)
-            cr.close_path()
+            _rounded_window_path(cr, w, h)
             cr.set_source_rgba(1, 1, 1, 1)
             cr.fill()
             del cr
@@ -612,7 +609,6 @@ class SearchPanel:
             gdk_win.set_opaque_region(region)
         except Exception as e:
             SearchPanel._opaque_region_supported = False
-            import logging
             logging.getLogger(__name__).warning(
                 "Opaque region update not supported on this environment: %s", e
             )

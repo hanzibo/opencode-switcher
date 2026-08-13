@@ -175,7 +175,7 @@ class AIChatPanel(Gtk.Box):
         rendering, so the GTK-side GdkWindow must be painted too.
         """
         try:
-            webview = getattr(self, "_ai_webview", None)
+            webview = self._ai_webview
             if webview is None:
                 return
             gdk_win = webview.get_window()
@@ -183,8 +183,8 @@ class AIChatPanel(Gtk.Box):
                 return
             c = self._get_gtk_colors(self._theme)
             gdk_win.set_background_color(c["bg"])
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[opencode-switcher] Failed to set WebView GdkWindow background: {e}", flush=True)
 
     def __init__(self, conversation_store, llm_settings_store, ai_settings_store=None, theme="dark", ai_commands=None, pygments_css_cache=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
