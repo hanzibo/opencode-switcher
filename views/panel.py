@@ -228,6 +228,7 @@ class SearchPanel:
 
         css = (
             "window, window decoration, decoration, .window-frame, .csd decoration, .solid-csd decoration { border: none; box-shadow: none; margin: 0; padding: 0; border-radius: 20px; background-color: transparent; }"
+            "scrolledwindow, viewport, list, listbox, overshoot, undershoot, .frame { border: none; outline: none; box-shadow: none; background-color: transparent; background-image: none; }"
             ".custom-dialog { border: none; border-radius: 20px; }"
             "#searchEntry { font-size: 24px; padding: 12px 16px; background: %(search_bg)s;"
             " color: %(search_fg)s; border: 1px solid %(input_border)s; border-radius: 14px;"

@@ -480,6 +480,7 @@ class ClipboardPanel(Gtk.Box):
         self._sep_rgba = t["panel_separator"]
         vals = get_panel_css_vals(name)
         css = (
+            "scrolledwindow, viewport, list, listbox, overshoot, undershoot, .frame { border: none; outline: none; box-shadow: none; background-color: transparent; background-image: none; }"
             ".cat-row { padding: 12px 18px; border-radius: 12px; margin: 2px 8px; border-left: 4px solid transparent; }"
             ".cat-row:hover { background: %(cat_hover)s; }"
             ".cat-row:selected { background: %(cat_sel)s; border-left: 4px solid %(cat_sel_border)s; }"
