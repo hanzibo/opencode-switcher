@@ -222,8 +222,8 @@ def _get_html_shell(theme_name: str, pygments_css: str) -> str:
             <div id="ai-header-model" class="ai-header-model"></div>
         </div>
         <div id="ai-header-spinner" class="ai-header-spinner" style="display:none">{nebula_svg}</div>
-        <button id="ai-history-btn" class="ai-header-btn" onclick="toggleHistoryDropdown()">历史对话 ▾</button>
-        <button id="ai-close-btn" class="ai-header-btn" onclick="closeAIPanel()" title="关闭AI面板">❌</button>
+        <button id="ai-history-btn" class="ai-header-btn" onclick="toggleHistoryDropdown()"><span class="ai-hdr-lbl">历史对话</span><svg class="ai-hdr-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
+        <button id="ai-close-btn" class="ai-header-btn" onclick="closeAIPanel()" title="关闭AI面板"><svg class="ai-hdr-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <!-- 历史对话下拉面板 -->
     <div id="ai-history-dropdown" class="ai-history-dropdown" style="display:none">
