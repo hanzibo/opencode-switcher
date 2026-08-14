@@ -1022,6 +1022,10 @@ function _renderHistoryRows(items, currentId) {
         var title = document.createElement('span');
         title.textContent = it.label;
         row.appendChild(title);
+        var time = document.createElement('span');
+        time.className = 'ai-history-time';
+        time.textContent = it.ts ? _formatRelativeTime(it.ts) : '';
+        row.appendChild(time);
         var del = document.createElement('button');
         del.className = 'h-del';
         del.textContent = '✕';

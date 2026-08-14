@@ -202,6 +202,13 @@
                     transition: opacity 0.12s ease;
                 }
                 .ai-history-row .h-del:hover { opacity: 1; }
+                .ai-history-row .ai-history-time {
+                    margin-left: auto;
+                    flex: none;
+                    font-size: 11px;
+                    opacity: 0.6;
+                    color: {code_fg};
+                }
                 /* 行动画：逐行淡入上浮（JS 设置 style.animationDelay 错峰） */
                 .ai-history-row.row-enter {
                     animation: rowFadeInUp 220ms ease-out both;
