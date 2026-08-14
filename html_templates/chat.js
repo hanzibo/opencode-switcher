@@ -928,11 +928,26 @@ function _formatRelativeTime(tsMs) {
 
 // ── AI Header（WebView 内固定装饰区）交互 ───────────────────────────────────
 
+var _glowFadeTimer = null;  // 呼吸灯淡出防抖：连续 toggle 不残留
 // 回复中三边框呼吸灯：耦合契约——spinner 显示 == 可见对话流式中（_ai_streaming），
 // 故发光跟随 showHeaderSpinner/hideHeaderSpinner（覆盖发送/重试/工具循环/取消/错误全路径）
+// 熄灭走专用淡出动画（#content.glow-fading → glow-fadeout 350ms forwards），
+// 动画内渐隐——不直接移除 streaming-glow（WebKit 对运行中动画移除的 transition 不可靠会硬切）
 function setStreamingGlow(val) {
     var c = document.getElementById('content');
-    if (c) c.classList.toggle('streaming-glow', !!val);
+    if (!c) return;
+    if (val) {
+        if (_glowFadeTimer) { clearTimeout(_glowFadeTimer); _glowFadeTimer = null; }
+        c.classList.remove('glow-fading');
+        c.classList.add('streaming-glow');
+    } else {
+        c.classList.remove('streaming-glow');
+        c.classList.add('glow-fading');
+        _glowFadeTimer = setTimeout(function () {
+            _glowFadeTimer = null;
+            c.classList.remove('glow-fading');
+        }, 350);
+    }
 }
 function showHeaderSpinner() {
     var el = document.getElementById('ai-header-spinner');
