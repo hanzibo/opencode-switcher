@@ -85,7 +85,9 @@
                     min-width: 220px;
                     max-width: 320px;
                     max-height: 60vh;
-                    overflow-y: auto;
+                    overflow: hidden;
+                    display: flex;
+                    flex-direction: column;
                     background-color: {bg_color};
                     background-image: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0) 40%);
                     border: 1px solid {pre_border};
@@ -95,6 +97,12 @@
                         0 6px 20px rgba(0,0,0,0.18),
                         0 0 20px {orbit};
                     padding: 6px;
+                }
+                /* 列表区：填充 dropdown 剩余空间，独立滚动 */
+                #ai-history-list {
+                    flex: 1 1 0%;
+                    min-height: 0;
+                    overflow-y: auto;
                 }
                 /* 毛玻璃：支持 backdrop-filter 时叠加半透明背景 + 顶部内高光（无支持则回退纯色 {bg_color}） */
                 @supports ((-webkit-backdrop-filter: blur(8px)) or (backdrop-filter: blur(8px))) {
@@ -141,6 +149,7 @@
                     display: block;
                     width: 100%;
                     box-sizing: border-box;
+                    flex: none;
                     padding: 5px 8px;
                     margin-bottom: 6px;
                     font-size: 12px;
@@ -167,6 +176,7 @@
                     position: relative;
                     display: flex;
                     align-items: center;
+                    min-width: 0;
                     gap: 6px;
                     padding: 6px 8px 6px 10px;
                     border-radius: 6px;
@@ -188,6 +198,12 @@
                 }
                 .ai-history-row:hover { background-color: {pre_bg}; }
                 .ai-history-row:hover::before { background-color: {glow}; }
+                /* 标题 span 单行截断（行内第一个 span 为标题，第二个为时间） */
+                .ai-history-row > span:first-child {
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
                 .ai-history-row.active { background-color: {code_bg}; }
                 .ai-history-row.active::before { background-color: {crescent_a}; }
                 .ai-history-row.hl { background-color: {orbit}; }
@@ -219,6 +235,7 @@
                 }
                 .ai-history-actions {
                     display: flex;
+                    flex: none;
                     gap: 6px;
                     justify-content: flex-end;
                     padding-top: 6px;
@@ -247,6 +264,7 @@
                 .history-confirm-bar {
                     display: flex;
                     align-items: center;
+                    flex: none;
                     gap: 6px;
                     padding: 6px 8px 6px 11px;
                     margin-bottom: 6px;
@@ -274,14 +292,14 @@
                     font-size: 11px;
                     font-weight: bold;
                 }
-                /* 细滚动条 */
-                #ai-history-dropdown::-webkit-scrollbar { width: 6px; }
-                #ai-history-dropdown::-webkit-scrollbar-track { background: transparent; }
-                #ai-history-dropdown::-webkit-scrollbar-thumb {
+                /* 细滚动条（作用于列表区） */
+                #ai-history-list::-webkit-scrollbar { width: 6px; }
+                #ai-history-list::-webkit-scrollbar-track { background: transparent; }
+                #ai-history-list::-webkit-scrollbar-thumb {
                     background-color: {orbit};
                     border-radius: 3px;
                 }
-                #ai-history-dropdown::-webkit-scrollbar-thumb:hover {
+                #ai-history-list::-webkit-scrollbar-thumb:hover {
                     background-color: {glow};
                 }
                 pre {
