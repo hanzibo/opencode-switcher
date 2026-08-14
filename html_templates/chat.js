@@ -928,13 +928,21 @@ function _formatRelativeTime(tsMs) {
 
 // ── AI Header（WebView 内固定装饰区）交互 ───────────────────────────────────
 
+// 回复中三边框呼吸灯：耦合契约——spinner 显示 == 可见对话流式中（_ai_streaming），
+// 故发光跟随 showHeaderSpinner/hideHeaderSpinner（覆盖发送/重试/工具循环/取消/错误全路径）
+function setStreamingGlow(val) {
+    var c = document.getElementById('content');
+    if (c) c.classList.toggle('streaming-glow', !!val);
+}
 function showHeaderSpinner() {
     var el = document.getElementById('ai-header-spinner');
     if (el) el.style.display = '';
+    setStreamingGlow(true);
 }
 function hideHeaderSpinner() {
     var el = document.getElementById('ai-header-spinner');
     if (el) el.style.display = 'none';
+    setStreamingGlow(false);
 }
 function updateHeaderTitle(titleHtml, modelText) {
     var t = document.getElementById('ai-header-title');
