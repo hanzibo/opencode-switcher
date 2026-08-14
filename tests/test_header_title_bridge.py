@@ -1,17 +1,19 @@
+import os
 import unittest
 import json
 import re
 from types import SimpleNamespace
+from unittest import mock
 
-from views.ai_chat_panel import _HeaderTitleBridge
+os.environ.setdefault("GDK_BACKEND", "dummy")  # 无头环境导入 GTK
 
+import gi
+gi.require_version("WebKit2", "4.1")  # 与 ai_chat_panel 保持一致，先于仓库加载
+gi.require_version("PangoCairo", "1.0")  # ai_chat_panel 模块导入会带出 PangoCairo
+from gi.repository import WebKit2
 
-class FakeWebView:
-    def __init__(self):
-        self.calls = []
-
-    def run_javascript(self, js, *args):
-        self.calls.append(js)
+from views.ai_chat_panel import _HeaderTitleBridge, AIChatPanel
+from tests._helpers import FakeWebView
 
 
 class TestHeaderTitleBridge(unittest.TestCase):
@@ -113,6 +115,64 @@ class TestHeaderTitleBridge(unittest.TestCase):
         if last:
             fresh_bridge.set_markup(last)
         self.assertEqual(fresh_wv.calls, [])
+
+    def test_resume_finished_flag(self):
+        """T5 M2 真调用：resume 整页重建 → FINISHED 消费 flag → 恰好一次重放 + 复位。
+
+        __new__ 构造面板桩（不调真实 __init__/WebKit），mock _load_webview_html，
+        驱动真实 on_panel_shown resume 分支 + 真实 _on_webview_load_changed(FINISHED)：
+        load_html 完成前不得 run_javascript（重建 DOM 会丢弃调用），FINISHED 后
+        恰好一次 updateHeaderTitle 重放且 flag 复位。
+        """
+        wv = FakeWebView()
+        bridge = _HeaderTitleBridge(SimpleNamespace(_ai_webview=wv))
+        panel = AIChatPanel.__new__(AIChatPanel)
+        panel._ai_lbl = bridge
+        panel._ai_webview = wv
+        panel._init_mcp = mock.Mock()
+        panel._suspend_timeout_id = 0
+        panel._webview_suspended = True
+        panel._ai_html_cache = {}
+        panel._ai_conversation_id = "conv1"
+        panel._ai_entry = mock.Mock()
+        panel._load_webview_html = mock.Mock()
+
+        markup = (
+            "<b>AI 助手看盘</b>\n"
+            "<span size='small' foreground='#888888'>(DeepSeek V4 Flash(go) (deepseek-v4-flash))</span>"
+        )
+        # 初始 set_markup：1 次 JS 调用 + 记录最近 markup；flag 初始 False
+        bridge.set_markup(markup)
+        self.assertEqual(len(wv.calls), 1)
+        self.assertIs(bridge._pending_header_reapply, False)
+
+        # resume 分支（on_panel_shown）：登记待重放 flag + 触发整页重建
+        panel.on_panel_shown()
+        self.assertIs(bridge._pending_header_reapply, True,
+                      "resume 分支必须登记待重放 flag")
+        panel._load_webview_html.assert_called_once()
+        self.assertEqual(len(wv.calls), 1,
+                         "load_html 完成前不得 run_javascript（重建 DOM 会丢弃）")
+
+        # FINISHED 事件消费 flag：恰好一次 updateHeaderTitle 重放 + flag 复位
+        panel._on_webview_load_changed(wv, WebKit2.LoadEvent.FINISHED)
+        self.assertIs(panel._webview_ready, True, "FINISHED 必须标记 webview 就绪")
+        self.assertIs(bridge._pending_header_reapply, False,
+                      "FINISHED 必须消费并复位待重放 flag")
+        self.assertEqual(len(wv.calls), 2, "FINISHED 后必须恰好一次标题重放")
+        self.assertEqual(wv.calls[1], wv.calls[0], "重放 JS 必须与初始调用一致")
+
+    def test_load_changed_non_finished_resets_ready(self):
+        """非 FINISHED 事件（PROVISIONAL/COMMITTED）必须将 _webview_ready 置 False。"""
+        wv = FakeWebView()
+        bridge = _HeaderTitleBridge(SimpleNamespace(_ai_webview=wv))
+        panel = AIChatPanel.__new__(AIChatPanel)
+        panel._ai_lbl = bridge
+        panel._webview_ready = True
+        panel._on_webview_load_changed(wv, WebKit2.LoadEvent.COMMITTED)
+        self.assertIs(panel._webview_ready, False,
+                      "非 FINISHED 事件不得保持就绪态")
+        self.assertEqual(wv.calls, [], "装载中事件不得触发标题 JS")
 
 
 if __name__ == "__main__":

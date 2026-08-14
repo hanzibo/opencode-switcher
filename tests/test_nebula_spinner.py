@@ -11,6 +11,12 @@ import unittest
 from ai_engine.ai_html_template import _get_html_shell
 
 
+def _block(sel, shell):
+    """scoped rule-block 抽取：#selector{...} → 块内容（不存在返回空串）。"""
+    m = re.search(re.escape(sel) + r"\s*\{([^}]*)\}", shell)
+    return m.group(1) if m else ""
+
+
 class TestHeaderShell(unittest.TestCase):
     """模板静态结构：header 元素、spinner SVG、滚动布局。"""
 
@@ -46,11 +52,7 @@ class TestHeaderShell(unittest.TestCase):
 
     def test_header_button_capsule(self):
         # T4: 胶囊按钮（scoped rule-block 断言）
-        def block(sel):
-            m = re.search(re.escape(sel) + r"\s*\{([^}]*)\}", self.shell)
-            return m.group(1) if m else ""
-
-        btn = block("#ai-header .ai-header-btn")
+        btn = _block("#ai-header .ai-header-btn", self.shell)
         self.assertIn("border-radius: 999px", btn)
         self.assertIn("inline-flex", btn)
         self.assertIn("transition", btn)
@@ -108,17 +110,11 @@ class TestHeaderShell(unittest.TestCase):
         # list 独立滚动，滚动条迁移到 list。
         # 用 scoped rule-block 断言（正则抽取 #selector{...}），
         # 不能裸 substring——否则会因其他 selector 巧合通过。
-        import re
-
-        def block(sel):
-            m = re.search(re.escape(sel) + r"\s*\{([^}]*)\}", self.shell)
-            return m.group(1) if m else ""
-
-        dd = block("#ai-history-dropdown")
+        dd = _block("#ai-history-dropdown", self.shell)
         self.assertIn("overflow: hidden", dd)
         self.assertIn("flex-direction: column", dd)
         self.assertNotIn("overflow-y: auto", dd, "dropdown 不应再整容器滚动")
-        li = block("#ai-history-list")
+        li = _block("#ai-history-list", self.shell)
         self.assertIn("overflow-y: auto", li)
         self.assertIn("flex:", li)
         self.assertIn("min-height: 0", li)
@@ -143,6 +139,39 @@ class TestHeaderShell(unittest.TestCase):
             "function historyAction",
         ):
             self.assertIn(fn, self.shell, f"chat.js 缺少 {fn}")
+
+    def test_theme_accessor_key_sets_consistent(self):
+        # T5 键集硬化：3 主题 × 各 accessor 键集跨主题一致 + 无 KeyError
+        # （未来某主题漏配键，accessor 抛 KeyError 或键集不一致即触发）
+        from stores.theme_config import (
+            _THEMES, get_ai_spinner_vars, get_ai_gtk_colors, get_panel_css_vals,
+        )
+        themes = list(_THEMES)
+        self.assertEqual(len(themes), 3)
+        for accessor in (get_ai_spinner_vars, get_ai_gtk_colors, get_panel_css_vals):
+            base = frozenset(accessor(themes[0]))
+            self.assertTrue(base, f"{accessor.__name__}({themes[0]}) 返回空键集")
+            for name in themes[1:]:
+                self.assertEqual(
+                    frozenset(accessor(name)), base,
+                    f"{accessor.__name__}({name}) 键集与 {themes[0]} 不一致",
+                )
+
+    def test_history_dropdown_high_opacity_background(self):
+        # T5 M2：history 下拉必须带高不透明背景（毛玻璃回退），按主题静态断言
+        # 字符串（非 computed style，避免 headless flaky）。
+        expected = {
+            "dark": "rgba(10,11,16,0.92)",
+            "dark-moon": "rgba(15,9,20,0.92)",
+            "light": "rgba(255,255,255,0.97)",
+        }
+        for theme, color in expected.items():
+            shell = _get_html_shell(theme, "")
+            rule = _block(".%s #ai-history-dropdown" % theme, shell)
+            self.assertIn(
+                "background-color: %s" % color, rule,
+                f".{theme} #ai-history-dropdown 缺少高不透明背景 {color}",
+            )
 
 
 if __name__ == "__main__":

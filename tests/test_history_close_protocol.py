@@ -25,6 +25,7 @@ gi.require_version("WebKit2", "4.1")  # 与 ai_chat_panel 保持一致，先于�
 gi.require_version("PangoCairo", "1.0")  # ai_chat_panel 模块导入会带出 PangoCairo
 from gi.repository import GLib, WebKit2
 from views.ai_chat_panel import AIChatPanel
+from tests._helpers import FakeWebView
 
 NAVIGATION_ACTION = WebKit2.PolicyDecisionType.NAVIGATION_ACTION
 
@@ -39,16 +40,6 @@ class _FakeEntry:
 
     def __init__(self):
         self.grab_focus = mock.Mock()
-
-
-class _FakeWebView:
-    """记录 run_javascript 调用的假 WebView（history-open 分支依赖）。"""
-
-    def __init__(self):
-        self.js_calls = []
-
-    def run_javascript(self, js, *args):
-        self.js_calls.append(js)
 
 
 class _FakeRequest:
@@ -85,7 +76,7 @@ def _make_panel(**overrides):
     """无 GTK 的假 AIChatPanel：__new__ + 仅含协议分支所需的最小桩。"""
     panel = AIChatPanel.__new__(AIChatPanel)
     panel._ai_entry = _FakeEntry()
-    panel._ai_webview = _FakeWebView()
+    panel._ai_webview = FakeWebView()
     panel._ai_history_popover = mock.Mock()
     for key, value in overrides.items():
         setattr(panel, key, value)
@@ -159,7 +150,7 @@ class TestExistingProtocolsUntouched(unittest.TestCase):
         self.assertTrue(decision.ignored)
         panel._ai_history_popover.refresh_dropdown.assert_called_once()
         self.assertEqual(
-            panel._ai_webview.js_calls, ["showHistoryDropdown();"],
+            panel._ai_webview.calls, ["showHistoryDropdown();"],
             "history-open 必须展开下拉",
         )
         mock_idle_add.assert_not_called()  # history-open 不调度 grab_focus

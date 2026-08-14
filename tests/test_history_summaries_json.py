@@ -110,6 +110,43 @@ class TestHistorySummariesJson(unittest.TestCase):
         self.assertEqual(label, "abcdefghijklmnopqrstuv" + "..." + " (7条)")
         self.assertEqual(len(label), 22 + 3 + len(" (7条)"))
 
+    def test_title_missing_falls_back_to_untitled(self):
+        # M1：title 缺失 → 兜底生效（label 含 "untitled"，_clean_history_title
+        # 会剥离 "(untitled)" 的括号 → "untitled"），不空不崩
+        panel = _make_panel([
+            {"id": "c1", "message_count": 1, "updated_at": 1700000000000},
+        ])
+        items = json.loads(panel._history_summaries_json())
+        self.assertEqual(items[0]["id"], "c1")
+        self.assertIn("untitled", items[0]["label"])
+        self.assertNotEqual(items[0]["label"], "(1条)")
+
+    def test_empty_store_returns_parsable_json(self):
+        # M1：store 空 → 返回可解析的 "[]"
+        panel = _make_panel([])
+        self.assertEqual(panel._history_summaries_json(), "[]")
+        self.assertEqual(json.loads(panel._history_summaries_json()), [])
+
+    def test_store_exception_returns_empty_list(self):
+        # M1：store 抛异常 → 整体兜底 "[]"（_history_summaries_json 吞异常）
+        class _ExplodingStore:
+            def list_conversations(self):
+                raise RuntimeError("boom")
+
+        panel = _make_panel([], _conversation_store=_ExplodingStore())
+        self.assertEqual(panel._history_summaries_json(), "[]")
+        self.assertEqual(json.loads(panel._history_summaries_json()), [])
+
+    def test_bold_markdown_cleaned_from_label(self):
+        # M1：title 含 **bold** → label 无 markdown 标记残留
+        panel = _make_panel([
+            {"id": "c1", "title": "**bold**", "message_count": 2,
+             "updated_at": 1700000000000},
+        ])
+        items = json.loads(panel._history_summaries_json())
+        self.assertEqual(items[0]["label"], "bold (2条)")
+        self.assertNotIn("**", items[0]["label"])
+
 
 if __name__ == "__main__":
     unittest.main()
