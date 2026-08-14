@@ -5,6 +5,7 @@
 省掉第二个 WebKitWebProcess。这里验证模板结构与主题变量注入。
 """
 
+import re
 import unittest
 
 from ai_engine.ai_html_template import _get_html_shell
@@ -15,6 +16,8 @@ class TestHeaderShell(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        # chat.css/js 编辑后需清 lru_cache，否则 shell 命中旧内容（test_html_template_cache.py 模式）
+        _get_html_shell.cache_clear()
         cls.shell = _get_html_shell("dark-moon", "")
 
     def test_header_elements_present(self):
@@ -30,6 +33,35 @@ class TestHeaderShell(unittest.TestCase):
             'id="ai-history-search"',
         ):
             self.assertIn(element, self.shell, f"模板缺少 {element}")
+
+    def test_header_buttons_svg(self):
+        # T1: header 按钮注入 inline SVG（显式 14px + aria-hidden，WebKit 固有尺寸陷阱规避）
+        hist = re.search(r"<button id=\"ai-history-btn\".*?</button>", self.shell, re.S)
+        close = re.search(r"<button id=\"ai-close-btn\".*?</button>", self.shell, re.S)
+        self.assertTrue(hist and close, "按钮缺失")
+        for m in (hist, close):
+            self.assertIn("<svg", m.group(0))
+            self.assertIn('width="14"', m.group(0))
+            self.assertIn('aria-hidden="true"', m.group(0))
+
+    def test_header_button_capsule(self):
+        # T4: 胶囊按钮（scoped rule-block 断言）
+        def block(sel):
+            m = re.search(re.escape(sel) + r"\s*\{([^}]*)\}", self.shell)
+            return m.group(1) if m else ""
+
+        btn = block("#ai-header .ai-header-btn")
+        self.assertIn("border-radius: 999px", btn)
+        self.assertIn("inline-flex", btn)
+        self.assertIn("transition", btn)
+        self.assertIn(".ai-hdr-active", self.shell)
+        self.assertIn(":active", self.shell)
+
+    def test_close_btn_danger_color(self):
+        # T4: 关闭按钮 hover 转警示色（{code_fg} 3 主题均红，零新增主题键）
+        self.assertIn("#ai-close-btn:hover", self.shell)
+        # {code_fg} 在 dark-moon 下替换为 #f472b6（theme_config.py:209）
+        self.assertRegex(self.shell, r"#ai-close-btn:hover[^}]*#f472b6|#ai-close-btn:hover[^}]*\{code_fg\}")
 
     def test_nebula_svg_present(self):
         self.assertIn("crescentGrad", self.shell)
