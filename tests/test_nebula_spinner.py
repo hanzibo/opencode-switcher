@@ -27,6 +27,7 @@ class TestHeaderShell(unittest.TestCase):
             'id="ai-close-btn"',
             'id="ai-history-dropdown"',
             'id="ai-history-list"',
+            'id="ai-history-search"',
         ):
             self.assertIn(element, self.shell, f"模板缺少 {element}")
 
@@ -45,6 +46,16 @@ class TestHeaderShell(unittest.TestCase):
         self.assertIn("#a855f7", self.shell)                       # glow
         for key in ("crescent_a", "crescent_b", "orbit", "dust", "glow"):
             self.assertNotIn("{" + key + "}", self.shell)
+
+    def test_no_theme_placeholder_residue(self):
+        # 全部 {key} 主题占位符必须被替换，无残留。
+        # 注意：不能用对整段 shell 的 {[a-z_]+} 正则——KaTeX 自带 CSS/JS
+        # 含 {array}/{c}/{lim} 等字面量，会误报。正确做法是逐 key 断言。
+        from stores.theme_config import get_web_css_vars, get_ai_spinner_vars
+        keys = set(dict(get_web_css_vars("dark-moon"))) | set(dict(get_ai_spinner_vars("dark-moon")))
+        self.assertTrue(keys, "主题变量 key 集合不应为空")
+        for key in sorted(keys):
+            self.assertNotIn("{" + key + "}", self.shell, f"残留主题占位符 {{{key}}}")
 
     def test_themes_differ(self):
         light = _get_html_shell("light", "")

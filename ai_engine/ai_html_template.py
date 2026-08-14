@@ -232,6 +232,7 @@ def _get_html_shell(theme_name: str, pygments_css: str) -> str:
             <button class="ai-history-action" id="history-confirm-ok" onclick="confirmOk()">确认</button>
             <button class="ai-history-action" id="history-confirm-cancel" onclick="confirmCancel()">取消</button>
         </div>
+        <input id="ai-history-search" class="ai-history-search" type="text" placeholder="搜索对话..." autocomplete="off" spellcheck="false">
         <div id="ai-history-list"></div>
         <div class="ai-history-actions">
             <button class="ai-history-action" id="history-select-all-btn" onclick="historySelectAll()" style="display:none">全选</button>
