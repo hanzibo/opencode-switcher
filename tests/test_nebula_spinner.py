@@ -17,6 +17,15 @@ def _block(sel, shell):
     return m.group(1) if m else ""
 
 
+def _keyframes(name, shell):
+    """keyframe 块抽取：@keyframes <name>{...}（含嵌套帧块）→ 块内容。"""
+    m = re.search(
+        r"@keyframes " + re.escape(name) + r"\s*\{((?:[^{}]*\{[^{}]*\})*[^{}]*)\}",
+        shell, re.S,
+    )
+    return m.group(1) if m else ""
+
+
 class TestHeaderShell(unittest.TestCase):
     """模板静态结构：header 元素、spinner SVG、滚动布局。"""
 
@@ -205,15 +214,44 @@ class TestHeaderShell(unittest.TestCase):
 
     def test_breathing_glow_js_and_keyframes(self):
         # T3: keyframe 必须存在；chat.js setStreamingGlow 契约——spinner 显示 == 流式中，
-        # showHeaderSpinner/hideHeaderSpinner 均驱动发光（覆盖发送/重试/工具循环/取消/错误全路径）
+        # showHeaderSpinner/hideHeaderSpinner 均驱动发光（覆盖发送/重试/工具循环/取消/错误全路径）。
+        # 熄灭硬切修复（T2）：setStreamingGlow(false) add glow-fading 走专用淡出动画，
+        # _glowFadeTimer 防抖驱动（true 分支 clearTimeout 防止连续 toggle 残留）
         self.assertIn("@keyframes breathing-glow", self.shell)
         self.assertIn("function setStreamingGlow", self.shell)
-        self.assertIn("classList.toggle('streaming-glow'", self.shell)
+        self.assertIn("classList.add('streaming-glow')", self.shell, "setStreamingGlow(true) 应 add streaming-glow")
+        self.assertIn("classList.add('glow-fading')", self.shell, "setStreamingGlow(false) 应 add glow-fading")
+        self.assertIn("_glowFadeTimer = setTimeout", self.shell, "淡出应由 _glowFadeTimer 驱动")
+        self.assertIn("clearTimeout(_glowFadeTimer)", self.shell, "true 分支应 clearTimeout 防抖")
         show = re.search(r"function showHeaderSpinner\(.*?\n}", self.shell, re.S)
         hide = re.search(r"function hideHeaderSpinner\(.*?\n}", self.shell, re.S)
         self.assertTrue(show and hide, "showHeaderSpinner/hideHeaderSpinner 函数缺失")
         self.assertIn("setStreamingGlow(true)", show.group(0), "showHeaderSpinner 应开启呼吸灯")
         self.assertIn("setStreamingGlow(false)", hide.group(0), "hideHeaderSpinner 应关闭呼吸灯")
+        # 三段呼吸 keyframe 帧断言：0%/50%/100% + 谷底 6px / 峰值 28px
+        # （{orbit} 已被主题变量替换为实际颜色，故只断言光晕半径）
+        frames = _keyframes("breathing-glow", self.shell)
+        self.assertTrue(frames, "breathing-glow 块缺失")
+        for pct in ("0%", "50%", "100%"):
+            self.assertIn(pct, frames, f"breathing-glow 缺少 {pct} 帧")
+        self.assertIn("inset 0 0 6px", frames, "谷底应为 6px")
+        self.assertIn("inset 0 0 28px", frames, "峰值应为 28px")
+
+    def test_glow_fadeout_animation(self):
+        # 熄灭硬切修复：专用淡出动画（glow-fadeout 350ms forwards）——动画内渐隐，
+        # 不依赖 transition（WebKit 对运行中动画移除的过渡不可靠）；JS 侧 350ms 后移除 class
+        self.assertIn("@keyframes glow-fadeout", self.shell, "glow-fadeout keyframe 缺失")
+        fading = _block("#content.glow-fading", self.shell)
+        self.assertIn(
+            "animation: glow-fadeout 350ms ease-out forwards", fading,
+            "#content.glow-fading 应为 350ms ease-out forwards 淡出动画",
+        )
+        fadeout = _keyframes("glow-fadeout", self.shell)
+        self.assertTrue(fadeout, "glow-fadeout 块缺失")
+        frames = fadeout
+        self.assertIn("inset 0 0 28px", frames, "from 帧应为峰值 28px")
+        self.assertIn("inset 0 0 0", frames, "to 帧应回落 0 光晕")
+        self.assertIn("border-color: transparent", frames, "边框色应淡出至透明")
 
 
 if __name__ == "__main__":
