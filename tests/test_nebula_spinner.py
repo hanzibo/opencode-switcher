@@ -62,9 +62,37 @@ class TestHeaderShell(unittest.TestCase):
         self.assertNotEqual(light, self.shell)
 
     def test_scroll_layout_present(self):
-        # header 固定 + #content 独立滚动（flex 布局）
+        # 说明：这是裸 substring 断言，命中当前 shell 中的
+        # body（flex-direction: column）+ #ai-history-list（overflow-y: auto），
+        # 并非真的在断言"header 固定 + #content 独立滚动"。
+        # 三区域布局后 dropdown/list 也含这两个字符串，该测试巧合通过；
+        # 真正验证三区域结构的断言见 test_three_zone_layout。
+        # 保留本测试仍覆盖消息区滚动结构（overflow-y: auto 仍在 shell 中）。
         self.assertIn("overflow-y: auto", self.shell)
         self.assertIn("flex-direction: column", self.shell)
+
+    def test_three_zone_layout(self):
+        # 三区域固定布局（T1 落地）：dropdown flex column + overflow:hidden，
+        # list 独立滚动，滚动条迁移到 list。
+        # 用 scoped rule-block 断言（正则抽取 #selector{...}），
+        # 不能裸 substring——否则会因其他 selector 巧合通过。
+        import re
+
+        def block(sel):
+            m = re.search(re.escape(sel) + r"\s*\{([^}]*)\}", self.shell)
+            return m.group(1) if m else ""
+
+        dd = block("#ai-history-dropdown")
+        self.assertIn("overflow: hidden", dd)
+        self.assertIn("flex-direction: column", dd)
+        self.assertNotIn("overflow-y: auto", dd, "dropdown 不应再整容器滚动")
+        li = block("#ai-history-list")
+        self.assertIn("overflow-y: auto", li)
+        self.assertIn("flex:", li)
+        self.assertIn("min-height: 0", li)
+        self.assertIn("#ai-history-list::-webkit-scrollbar", self.shell)
+        self.assertNotIn("#ai-history-dropdown::-webkit-scrollbar", self.shell,
+                         "滚动条应迁移到列表")
 
     def test_content_marker_present(self):
         # 消息区 marker 必须恰好出现一次且位于 #content 内
