@@ -75,6 +75,8 @@ from ai_engine.ai_tool_loop import run_llm_react_loop, ToolLoopContext
 
 AI_BTN_LABEL_SEND = "发送"
 AI_BTN_LABEL_STOP = "暂停"
+# 面板标题常量：ai_html_template.py 的 #ai-header-title 内联同名文本（ponytail 耦合标记见该处）
+_AI_HEADER_TITLE = "AI 助手看盘"
 
 
 def _to_chat_messages(msgs: List[Dict]) -> List[ChatMessage]:
@@ -175,14 +177,18 @@ class _HeaderTitleBridge:
         self._panel = panel
         # 显式初始化：resume 重新应用前从未 set_markup 时，getattr 能取到 None
         self._ai_last_header_markup = None
+        # resume 整页重建登记标记：FINISHED 后由 _on_webview_load_changed 消费
+        self._pending_header_reapply = False
 
     def set_markup(self, markup):
         try:
+            # 先记录最近一次 markup（webview 暂缺窗口内也保留意图，resume 时重放）
+            self._ai_last_header_markup = markup
             wv = getattr(self._panel, "_ai_webview", None)
             if wv is None:
                 return
             m = re.search(r"(<b>.*?</b>)", markup, re.S)
-            title_html = m.group(1).strip() if m else markup
+            title_html = m.group(1).strip() if m else html.escape(markup)
             m = re.search(r"<span[^>]*>(.*?)</span>", markup, re.S)
             model_text = m.group(1).strip() if m else ""
             js = "updateHeaderTitle(%s, %s);" % (
@@ -190,7 +196,6 @@ class _HeaderTitleBridge:
                 json.dumps(model_text, ensure_ascii=False),
             )
             wv.run_javascript(js, None, None)
-            self._ai_last_header_markup = markup
         except Exception:
             pass
 
@@ -1362,7 +1367,7 @@ class AIChatPanel(Gtk.Box):
             "thinking_enabled": thinking_enabled,
             "reasoning_effort": reasoning_effort,
         }
-        self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
+        self._ai_lbl.set_markup(f"<b>{_AI_HEADER_TITLE}</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
 
         self._ai_spinner.show()
         self._ai_spinner.start()
@@ -2043,6 +2048,11 @@ class AIChatPanel(Gtk.Box):
         """跟踪文档装载状态：FINISHED → 就绪；其余事件（PROVISIONAL/COMMITTED/失败）→ 装载中。"""
         if event == WebKit2.LoadEvent.FINISHED:
             self._webview_ready = True
+            lbl = getattr(self, "_ai_lbl", None)
+            if lbl is not None and getattr(lbl, "_pending_header_reapply", False):
+                # resume 整页重建完成：重新应用最近标题 markup，恢复模型行
+                lbl.set_markup(lbl._ai_last_header_markup)
+                lbl._pending_header_reapply = False
         else:
             self._webview_ready = False
 
@@ -2147,7 +2157,7 @@ class AIChatPanel(Gtk.Box):
             model_info = getattr(self, "_ai_active_model_info", None)
             _, _, _, display_name, _, _, _, _, _ = self._read_model_config(None, model_info)
             if hasattr(self, "_ai_lbl") and self._ai_lbl:
-                self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
+                self._ai_lbl.set_markup(f"<b>{_AI_HEADER_TITLE}</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
 
         # 无条件消费错误标志：即使本轮零输出（错误发生后文本为空），也须消费，
         # 避免残留到同一会话下一轮成功回答被误判"错误未消费"而吞掉通知。
@@ -2765,7 +2775,7 @@ class AIChatPanel(Gtk.Box):
                 self._update_send_button(False, sensitive=False)
                 self._ai_entry.placeholder_text = "正在中止..."
                 self._ai_spinner.stop()
-                self._ai_lbl.set_markup("<b>AI 助手看盘</b>\n<span size='small' foreground='#f43f5e'>(正在中止...)</span>")
+                self._ai_lbl.set_markup(f"<b>{_AI_HEADER_TITLE}</b>\n<span size='small' foreground='#f43f5e'>(正在中止...)</span>")
                 # 看门狗：10 秒后若线程未响应则强制清理（移除可能存在的旧看门狗）
                 if getattr(self, "_ai_cancel_watchdog_id", 0) != 0:
                     GLib.source_remove(self._ai_cancel_watchdog_id)
@@ -2964,7 +2974,7 @@ class AIChatPanel(Gtk.Box):
 
         display_name = f"{model.alias} ({model.model_name})"
         self._ai_lbl.set_markup(
-            f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>"
+            f"<b>{_AI_HEADER_TITLE}</b>\n<span size='small' foreground='#888888'>({display_name})</span>"
         )
         notice_html = (
             f'<div class="chat-status-notice">'
@@ -3044,7 +3054,7 @@ class AIChatPanel(Gtk.Box):
         model_info = getattr(self, "_ai_active_model_info", None)
         _, _, _, display_name, _, _, _, _, _ = self._read_model_config(None, model_info)
         if hasattr(self, "_ai_lbl") and self._ai_lbl:
-            self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
+            self._ai_lbl.set_markup(f"<b>{_AI_HEADER_TITLE}</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
         print("[cancel] 看门狗触发：强制清理取消状态", flush=True)
         return False  # 单次 GLib timeout
 
@@ -4556,7 +4566,7 @@ class AIChatPanel(Gtk.Box):
 
         # Update model info display label
         _, _, _, display_name, _, _, _, _, _ = self._read_model_config(None, self._ai_active_model_info)
-        self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
+        self._ai_lbl.set_markup(f"<b>{_AI_HEADER_TITLE}</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
 
         # Ensure AI panel + input area are visible
         self.separator.set_no_show_all(False)
@@ -4685,15 +4695,16 @@ class AIChatPanel(Gtk.Box):
     def _history_summaries_json(self) -> str:
         """生成 WebView header 历史下拉的 JSON 列表（对齐原 HistoryPopover 格式）。
 
-        标题清理：去除首尾空白/换行，超 25 字符截断为 22 + "..."
+        标题清理：经 _clean_history_title 去除 HTML 标签与 markdown 标记（空标题
+        兜底 "(untitled)"），超 25 字符截断为 22 + "..."
         （与原 HistoryPopover.refresh_dropdown 的展示格式一致）。
         """
         try:
             items = []
             for s in self._get_sorted_conversations():
                 sid = s.get("id", "")
-                raw_title = s.get("title", "") or "(untitled)"
-                title = " ".join(str(raw_title).split())
+                raw_title = s.get("title", "(untitled)")
+                title = _clean_history_title(raw_title)
                 if len(title) > 25:
                     title = title[:22] + "..."
                 count = s.get("message_count", 0)
@@ -4880,14 +4891,14 @@ class AIChatPanel(Gtk.Box):
         if getattr(self, "_webview_suspended", False):
             self._webview_suspended = False
             cached_html = self._ai_html_cache.get(self._ai_conversation_id)
+            # 先登记待重放标记：FINISHED 后由 _on_webview_load_changed 重新应用最近
+            # 标题 markup——load_html 完成前立即 run_javascript 会被重建的 DOM 丢弃
+            self._ai_lbl._pending_header_reapply = True
             # 进程已终止，必须整页重建；force=True 防止指纹守卫抑制恢复重载
             self._load_webview_html(cached_html or "", force=True)
             print("[AI] WebView restored from suspension.", flush=True)
-            # resume 后整页重建：重新应用最近一次标题 markup（镜像 4944-4947 既有模式）
-            last = getattr(self._ai_lbl, "_ai_last_header_markup", None)
-            if last:
-                self._ai_lbl.set_markup(last)
-        self._ai_entry.grab_focus()
+        if getattr(self, "_ai_entry", None):
+            self._ai_entry.grab_focus()
 
     def on_panel_hidden(self):
         # 首开守卫：面板从未显示给用户之前不启动挂起定时器。
@@ -4958,7 +4969,7 @@ class AIChatPanel(Gtk.Box):
         self._load_webview_html("")
         self._ai_entry.get_buffer().set_text("")
         _, _, _, display_name, _, _, _, _, _ = self._read_model_config(None, None)
-        self._ai_lbl.set_markup(f"<b>AI 助手看盘</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
+        self._ai_lbl.set_markup(f"<b>{_AI_HEADER_TITLE}</b>\n<span size='small' foreground='#888888'>({display_name})</span>")
         self._ai_active_model_info = None
         self._ai_last_prompt_obj = None
         self._ai_title_generated = False
