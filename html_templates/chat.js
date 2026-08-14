@@ -927,13 +927,7 @@ function updateHeaderTitle(titleHtml, modelText) {
     var m = document.getElementById('ai-header-model');
     if (m) m.textContent = modelText || '';
 }
-function updateHistoryLabel(label) {
-    var btn = document.getElementById('ai-history-btn');
-    if (btn) {
-        while (btn.firstChild) btn.removeChild(btn.firstChild);
-        btn.appendChild(document.createTextNode(label + ' ▾'));
-    }
-}
+// # ponytail: updateHistoryLabel removed (orphan — header 按钮改 SVG 结构后无调用方)
 function closeAIPanel() {
     window.location = 'opencode://close-panel';
 }
