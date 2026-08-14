@@ -20,6 +20,20 @@
                     overflow-y: auto;
                     padding: 8px;
                     min-height: 0;
+                    box-sizing: border-box;           /* 新增：防加边框后 2px 底部裁切 */
+                    border: 2px solid transparent;    /* 新增：永久透明边框（宽度恒定防淡出 snap） */
+                    border-bottom: none;              /* 新增：底部不亮 */
+                    transition: border-color .3s, box-shadow .3s;  /* 新增：0.3s 渐隐 */
+                }
+                /* 回复中三边框呼吸灯（左/右/上，底不亮）；class 由 chat.js setStreamingGlow 切换 */
+                #content.streaming-glow {
+                    border-color: {glow};
+                    box-shadow: inset 0 0 24px {orbit};
+                    animation: breathing-glow 2.4s ease-in-out infinite;  /* 2.4s 周期 */
+                }
+                @keyframes breathing-glow {
+                    from { box-shadow: inset 0 0 10px {orbit}; }
+                    to   { box-shadow: inset 0 0 28px {orbit}; }
                 }
                 /* ── AI header（WebView 内固定装饰区，原 GTK ai_hdr 迁移） ── */
                 #ai-header {
