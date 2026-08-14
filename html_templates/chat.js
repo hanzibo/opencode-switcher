@@ -1120,6 +1120,7 @@ function _historyRows() {
 
 /**
  * _historySetHl - 设置高亮行（index 越界时 clamp），并按需滚动到可见。
+ * 滚动容器为 #ai-history-list（三区域布局下独立滚动容器，overflow-y: auto）。
  * 滚动沿用 scrollTop 手动对齐（_scrollToRound 注释：部分 WebKit2GTK
  * 版本对 scrollTo(options) 静默失败），实现 block:'nearest' 语义。
  */
@@ -1136,7 +1137,7 @@ function _historySetHl(index, scroll) {
         r.classList.toggle('hl', i === _historyHlIndex);
     });
     if (scroll) {
-        var el = document.getElementById('ai-history-dropdown');
+        var el = document.getElementById('ai-history-list');
         var target = rows[_historyHlIndex];
         if (el && target) {
             var listTop = el.getBoundingClientRect().top;
