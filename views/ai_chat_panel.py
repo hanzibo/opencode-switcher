@@ -2339,6 +2339,10 @@ class AIChatPanel(Gtk.Box):
                 except Exception:
                     pass
                 return True
+            if uri.startswith("opencode://history-close"):
+                # 历史下拉关闭（Escape / 点击外部）：归还焦点到输入框（GTK 主线程）
+                GLib.idle_add(self._ai_entry.grab_focus)
+                return True
             if uri.startswith("opencode://history-select"):
                 qs = parse_qs(urlparse(uri).query)
                 cid = qs.get("id", [None])[0]
