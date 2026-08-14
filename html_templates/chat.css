@@ -24,6 +24,7 @@
                     border: 2px solid transparent;    /* 新增：永久透明边框（宽度恒定防淡出 snap） */
                     border-bottom: none;              /* 新增：底部不亮 */
                     transition: border-color .3s, box-shadow .3s;  /* 新增：0.3s 渐隐 */
+                    box-shadow: inset 0 0 0 {orbit};  /* 新增：0 光晕同属性桥接（消除 none 类型切换跳变） */
                 }
                 /* 回复中三边框呼吸灯（左/右/上，底不亮）；class 由 chat.js setStreamingGlow 切换 */
                 #content.streaming-glow {
@@ -31,9 +32,19 @@
                     box-shadow: inset 0 0 24px {orbit};
                     animation: breathing-glow 2.4s ease-in-out infinite;  /* 2.4s 周期 */
                 }
+                /* 回复完成淡出：动画内渐隐（不依赖 transition——WebKit 对运行中动画移除的过渡不可靠），
+                   由 chat.js setStreamingGlow(false) 添加本 class，350ms 后移除 */
+                #content.glow-fading {
+                    animation: glow-fadeout 350ms ease-out forwards;
+                }
+                @keyframes glow-fadeout {
+                    from { box-shadow: inset 0 0 28px {orbit}; border-color: {glow}; }
+                    to   { box-shadow: inset 0 0 0 {orbit}; border-color: transparent; }
+                }
                 @keyframes breathing-glow {
-                    from { box-shadow: inset 0 0 10px {orbit}; }
-                    to   { box-shadow: inset 0 0 28px {orbit}; }
+                    0%   { box-shadow: inset 0 0 6px {orbit}; }
+                    50%  { box-shadow: inset 0 0 28px {orbit}; }
+                    100% { box-shadow: inset 0 0 6px {orbit}; }
                 }
                 /* ── AI header（WebView 内固定装饰区，原 GTK ai_hdr 迁移） ── */
                 #ai-header {
