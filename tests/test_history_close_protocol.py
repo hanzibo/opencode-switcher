@@ -38,8 +38,12 @@ NAVIGATION_ACTION = WebKit2.PolicyDecisionType.NAVIGATION_ACTION
 class _FakeEntry:
     """带 mock grab_focus 的假输入框（真实面板里 _ai_entry 是 Gtk.TextView）。"""
 
-    def __init__(self):
+    def __init__(self, realized=True):
         self.grab_focus = mock.Mock()
+        self._realized = realized
+
+    def get_realized(self):
+        return self._realized
 
 
 class _FakeRequest:
@@ -112,14 +116,17 @@ class TestHistoryCloseProtocol(unittest.TestCase):
         # 协议已消费：返回 True + decision.ignore()
         self.assertTrue(ret, "history-close 必须返回 True（导航已被消费）")
         self.assertTrue(decision.ignored, "opencode:// 导航必须调用 decision.ignore()")
-        # 焦点归还经 GLib.idle_add 调度（不得在 decide-policy 回调里直接碰 UI）
+        # 焦点归还经 GLib.idle_add 调度（不得在 decide-policy 回调里直接碰 UI）；
+        # 调度目标是带 realize 守卫的 helper（未 realize 时跳过 grab_focus）
         self.assertEqual(
             mock_idle_add.call_count, 1,
             "history-close 必须恰好调度一次 idle_add",
         )
-        self.assertIs(captured[0][0], entry.grab_focus,
-                      "idle_add 必须调度 _ai_entry.grab_focus")
-        # 无主循环不执行回调 → 手动执行调度项，验证 grab_focus 真正被调用
+        self.assertEqual(
+            captured[0][0].__name__, "_safe_grab_ai_entry_focus",
+            "idle_add 必须调度 _safe_grab_ai_entry_focus",
+        )
+        # 无主循环不执行回调 → 手动执行调度项，验证守卫内 grab_focus 真正被调用
         cb, args = captured[0]
         cb(*args)
         entry.grab_focus.assert_called_once()  # grab_focus() 无参数

@@ -285,6 +285,16 @@ class AIChatPanel(Gtk.Box):
         except Exception as e:
             print(f"[opencode-switcher] Failed to set WebView GdkWindow background: {e}", flush=True)
 
+    def _safe_grab_ai_entry_focus(self):
+        """带 realize 守卫的输入框焦点获取。
+
+        GTK 会向未 realize 的 widget 分发事件并触发
+        ``gtk_widget_event: assertion 'WIDGET_REALIZED_FOR_EVENT'`` 断言；
+        启动期/异步回调路径上 _ai_entry 可能尚未 realize，此处守卫跳过。
+        """
+        if self._ai_entry.get_realized():
+            self._ai_entry.grab_focus()
+
     def __init__(self, conversation_store, llm_settings_store, ai_settings_store=None, theme="dark", ai_commands=None, pygments_css_cache=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self._conversation_store = conversation_store
@@ -460,7 +470,6 @@ class AIChatPanel(Gtk.Box):
         # Navigation & features
         settings.set_enable_fullscreen(False)
         settings.set_enable_plugins(False)
-        settings.set_enable_hyperlink_auditing(False)
         settings.set_enable_back_forward_navigation_gestures(False)
         settings.set_enable_dns_prefetching(False)
         settings.set_enable_caret_browsing(False)
@@ -1661,14 +1670,14 @@ class AIChatPanel(Gtk.Box):
         if not event.wait(timeout=300):
             # Timeout — user did not answer within 5 minutes
             self._ai_ask_user_state = None
-            GLib.idle_add(self._ai_entry.grab_focus)
+            GLib.idle_add(self._safe_grab_ai_entry_focus)
             GLib.idle_add(self._update_send_button, True)
             return "[询问用户超时：用户未在 5 分钟内回答]"
 
         state = getattr(self, "_ai_ask_user_state", None)
         answer = state.get("answer", "") if state else ""
         self._ai_ask_user_state = None
-        GLib.idle_add(self._ai_entry.grab_focus)
+        GLib.idle_add(self._safe_grab_ai_entry_focus)
 
         if not answer:
             return "[用户取消了回答]"
@@ -1678,7 +1687,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_entry.placeholder_text = "请输入回答..."
         self._ai_send_btn.set_label("发送")
         self._ai_send_btn.set_sensitive(True)
-        self._ai_entry.grab_focus()
+        self._safe_grab_ai_entry_focus()
 
     def _render_background_conversation(self, conv_id: str, target_messages: list, state):
         """渲染背景对话（非当前可见），只更新 cache 不操作 WebView。"""
@@ -2361,7 +2370,7 @@ class AIChatPanel(Gtk.Box):
                 return True
             if uri.startswith("opencode://history-close"):
                 # 历史下拉关闭（Escape / 点击外部）：归还焦点到输入框（GTK 主线程）
-                GLib.idle_add(self._ai_entry.grab_focus)
+                GLib.idle_add(self._safe_grab_ai_entry_focus)
                 return True
             if uri.startswith("opencode://history-select"):
                 qs = parse_qs(urlparse(uri).query)
@@ -5093,7 +5102,7 @@ class AIChatPanel(Gtk.Box):
         """从外部向 AI 输入框光标处插入文本并聚焦。"""
         buffer = self._ai_entry.get_buffer()
         buffer.insert_at_cursor(text)
-        self._ai_entry.grab_focus()
+        self._safe_grab_ai_entry_focus()
 
     def _select_and_set_bash_cwd(self):
         """Open a directory chooser dialog to let the user select a folder to set as the active bash working directory."""
