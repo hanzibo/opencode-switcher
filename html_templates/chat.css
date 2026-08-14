@@ -150,12 +150,14 @@
                         -webkit-backdrop-filter: blur(8px);
                         backdrop-filter: blur(8px);
                     }
-                    .dark #ai-history-dropdown,
+                    .dark #ai-history-dropdown {
+                        background-color: rgba(10,11,16,0.92);
+                    }
                     .dark-moon #ai-history-dropdown {
-                        background-color: rgba(255,255,255,0.05);
+                        background-color: rgba(15,9,20,0.92);
                     }
                     .light #ai-history-dropdown {
-                        background-color: rgba(255,255,255,0.70);
+                        background-color: rgba(255,255,255,0.97);
                     }
                 }
                 /* 暗色主题主发光更强（星云紫签名），浅色主题收敛为克制暗影 + 轨道微光 */
