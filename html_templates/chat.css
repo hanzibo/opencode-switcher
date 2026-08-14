@@ -174,13 +174,9 @@
                         0 6px 18px rgba(0,0,0,0.10),
                         0 0 16px {orbit};
                 }
-                /* 打开 / 关闭动画（关闭复用 ddFadeIn 反向 120ms） */
+                /* 打开动画（关闭为同步 display:none，动画不可达，无独立关闭态） */
                 #ai-history-dropdown.dd-open {
                     animation: ddFadeIn 180ms ease-out;
-                }
-                #ai-history-dropdown.dd-closing {
-                    animation: ddFadeIn 120ms ease-in reverse forwards;
-                    pointer-events: none;
                 }
                 @keyframes ddFadeIn {
                     from { opacity: 0; transform: translateY(-4px); }

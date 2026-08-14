@@ -356,6 +356,7 @@ function _renderMath(element) {
                     // 会被置为 false，导致 _scrollToBottom 被门控跳过，新对话停在顶部
                     _autoScroll = true;
                     const content = document.getElementById('content');
+                    if (!content) return;  // 与 show-older-bar 守卫一致：内容容器缺失时静默跳过
                     const bar = document.getElementById('show-older-bar');
                     content.innerHTML = html;
                     // show-older-bar 位于 #content 内（随消息区滚动），
@@ -574,6 +575,9 @@ function _renderMath(element) {
                 var _currentRound = 1;
                 var _roundNavInitialized = false;
                 var _rafId = null;
+                var _roundNavEl = null;   // round-nav 元素缓存（位于 #content 外，updateContent 不重建，首查后复用）
+                var _lastRound = 0;       // 上次渲染的轮次（未变化时跳过 DOM 写入）
+                var _lastTotal = 0;       // 上次渲染的用户行总数（未变化时跳过 DOM 写入）
                 function _initRoundNav() {
                     if (!_roundNavInitialized) {
                         var el = _content();
@@ -594,11 +598,16 @@ function _renderMath(element) {
                 }
                 function _updateRoundNav() {
                     var userRows = document.querySelectorAll('.msg-row.user:not(.msg-windowed)');
-                    var nav = document.getElementById('round-nav');
+                    if (!_roundNavEl) _roundNavEl = document.getElementById('round-nav');
+                    var nav = _roundNavEl;
                     if (!nav) return;
                     var total = userRows.length;
-                    if (total <= 1) { nav.style.display = 'none'; return; }
-                    nav.style.display = 'flex';
+                    if (total <= 1) {
+                        nav.style.display = 'none';
+                        _lastRound = 0;
+                        _lastTotal = 0;
+                        return;
+                    }
                     var el = _content();
                     var scrollTop = el ? el.scrollTop : 0;
                     // content 在视口中的偏移（header 高度等），用于换算文档坐标：
@@ -612,7 +621,13 @@ function _renderMath(element) {
                         var dist = Math.abs(rowTop - scrollTop);
                         if (dist < minDist) { minDist = dist; found = idx + 1; }
                     });
-                    _currentRound = Math.max(1, Math.min(found, total));
+                    var computedRound = Math.max(1, Math.min(found, total));
+                    // 缓存命中（round/total 均未变化）跳过 DOM 写入；round 计算本身每次照常执行，语义不变
+                    if (_lastTotal === total && _lastRound === computedRound) return;
+                    _currentRound = computedRound;
+                    _lastRound = computedRound;
+                    _lastTotal = total;
+                    nav.style.display = 'flex';
                     var indicator = document.getElementById('round-indicator');
                     if (indicator) indicator.textContent = _currentRound + '/' + total;
                     var prevBtn = document.getElementById('round-prev');
@@ -923,7 +938,12 @@ function hideHeaderSpinner() {
 }
 function updateHeaderTitle(titleHtml, modelText) {
     var t = document.getElementById('ai-header-title');
-    if (t && titleHtml) t.innerHTML = titleHtml;
+    if (t && titleHtml) {
+        // XSS 防御：title 通道先剥离全部标签（Python 桥传参含 <b>...</b> markup），
+        // textContent 写入保证不执行任意 HTML，再以 <b> 粗体包装还原展示
+        t.textContent = titleHtml.replace(/<[^>]*>/g, '');
+        t.innerHTML = '<b>' + t.textContent + '</b>';
+    }
     var m = document.getElementById('ai-header-model');
     if (m) m.textContent = modelText || '';
 }
@@ -935,7 +955,7 @@ function toggleHistoryDropdown() {
     var dd = document.getElementById('ai-history-dropdown');
     if (!dd) return;
     if (dd.style.display === 'none') {
-        // 收起态 → 展开：请求数据（renderHistoryList 内部会显示面板）
+        // 收起态 → 展开：请求数据（renderHistoryList 仅渲染列表，展开由 Python 侧 showHistoryDropdown 完成）
         window.location = 'opencode://history-open';
     } else {
         // 展开态 → 收起（display 为 '' 等非 none 值均视为展开）
@@ -975,6 +995,7 @@ var _historyItems = null;       // 最近一次解析的 items 数组
 var _historyCurrentId = null;   // 最近一次渲染的 currentId
 var _historyHlIndex = -1;       // 键盘导航高亮行索引（-1 = 无高亮）
 var _suppressRowAnim = false;   // 搜索/重渲期间抑制行入场动画（避免批量闪动）
+var _suppressTimer = null;      // 行入场动画抑制单一定时器 handle（clear+reset 去重）
 
 /**
  * _filterItems - 纯函数：按 label 子串过滤（大小写不敏感）。
@@ -992,6 +1013,19 @@ function _filterItems(items, q) {
 }
 
 /**
+ * _suppressRowAnimTemporarily - 抑制行入场动画指定时长（默认 60ms）。
+ * 搜索重渲 / 后台刷新共用单一 handle：clearTimeout 旧定时器再设新，避免并发定时器提前解除抑制。
+ */
+function _suppressRowAnimTemporarily(ms) {
+    _suppressRowAnim = true;
+    if (_suppressTimer) clearTimeout(_suppressTimer);
+    _suppressTimer = setTimeout(function () {
+        _suppressTimer = null;
+        _suppressRowAnim = false;
+    }, ms || 60);
+}
+
+/**
  * _renderHistoryEmpty - 渲染单行空态（无对话 / 无匹配共用）。
  * 不使用 innerHTML，全部 createElement + textContent（XSS 安全）。
  */
@@ -1003,6 +1037,21 @@ function _renderHistoryEmpty(text) {
     empty.className = 'ai-history-row';
     empty.textContent = text;
     list.appendChild(empty);
+}
+
+/**
+ * _historyActivateRow - 激活一行历史对话（行 onclick / Enter 兜底共用，行为逐字节一致）。
+ * 编辑模式：toggle 多选；普通模式：发 history-select 切换对话。
+ */
+function _historyActivateRow(row) {
+    if (_historyEditMode) {
+        row.classList.toggle('h-sel');
+        if (row.classList.contains('h-sel')) _historySelected[row.dataset.id] = true;
+        else delete _historySelected[row.dataset.id];
+        updateDeleteSelLabel();
+    } else {
+        window.location = 'opencode://history-select?id=' + encodeURIComponent(row.dataset.id);
+    }
 }
 
 /**
@@ -1044,14 +1093,7 @@ function _renderHistoryRows(items, currentId) {
         };
         row.appendChild(del);
         row.onclick = function () {
-            if (_historyEditMode) {
-                row.classList.toggle('h-sel');
-                if (row.classList.contains('h-sel')) _historySelected[row.dataset.id] = true;
-                else delete _historySelected[row.dataset.id];
-                updateDeleteSelLabel();
-            } else {
-                window.location = 'opencode://history-select?id=' + encodeURIComponent(row.dataset.id);
-            }
+            _historyActivateRow(row);
         };
         // 编辑模式下隐藏单行删除按钮
         if (_historyEditMode) del.style.display = 'none';
@@ -1059,11 +1101,16 @@ function _renderHistoryRows(items, currentId) {
     });
 }
 
-function renderHistoryList(itemsJson, currentId, show) {
+function renderHistoryList(itemsJson, currentId) {
     var list = document.getElementById('ai-history-list');
     var dd = document.getElementById('ai-history-dropdown');
     if (!list || !dd) return;
-    var items = (typeof itemsJson === 'string') ? JSON.parse(itemsJson) : itemsJson;
+    var items;
+    try {
+        items = (typeof itemsJson === 'string') ? JSON.parse(itemsJson) : itemsJson;
+    } catch (e) {
+        items = [];  // 解析失败回退空态（防坏 payload 崩掉整个下拉）
+    }
     if (!items || !items.length) items = [];
     _historyItems = items;
     _historyCurrentId = currentId;
@@ -1077,26 +1124,21 @@ function renderHistoryList(itemsJson, currentId, show) {
     } else if (!visible.length) {
         _renderHistoryEmpty(_EMPTY_NO_MATCH);
     } else {
-        // 下拉不可见时的重渲不触发行动画（refresh_dropdown 等后台刷新场景）
+        // 下拉不可见时的重渲不触发行动画（refresh_dropdown 等后台刷新场景）；
+        // 下拉可见时不在此设抑制——该场景由搜索框 input 监听器统一抑制
         if (dd.style.display === 'none') {
-            _suppressRowAnim = true;
-            setTimeout(function () {
-                _suppressRowAnim = false;
-            }, 60);
+            _suppressRowAnimTemporarily(60);
         }
         _renderHistoryRows(visible, currentId);
     }
     // 键盘导航：过滤重渲后 clamp 高亮索引并恢复 .hl（行数变少时越界落到末尾）
     _historyClampHl();
-    // 仅当显式要求显示时才展开（refresh_dropdown 等数据刷新场景保持收起）
-    if (show) dd.style.display = '';
 }
 function showHistoryDropdown() {
     var dd = document.getElementById('ai-history-dropdown');
     if (dd) {
         dd.style.display = '';
-        // 打开动画：先清 closing 态并强制 reflow，保证 ddFadeIn 从初始态播放
-        dd.classList.remove('dd-closing');
+        // 打开动画：强制 reflow，保证 ddFadeIn 从初始态播放
         void dd.offsetWidth;
         dd.classList.add('dd-open');
     }
@@ -1187,11 +1229,8 @@ document.addEventListener('DOMContentLoaded', function () {
     // 输入即过滤：按 label 子串过滤并重渲列表（仅下拉展开时可输入）
     input.addEventListener('input', function () {
         // 过滤重渲期间抑制行入场动画，60ms 后恢复（不影响后续打开动画）
-        _suppressRowAnim = true;
+        _suppressRowAnimTemporarily(60);
         renderHistoryList(_historyItems || [], _historyCurrentId);
-        setTimeout(function () {
-            _suppressRowAnim = false;
-        }, 60);
     });
     // IME 守卫：中文拼音等组合输入期间 keydown 以 keyCode 229 上报，
     // 提前 return 跳过按键逻辑（下方 ↑↓/Enter/Esc/Home/End 均不处理组合输入）
@@ -1215,21 +1254,7 @@ document.addEventListener('DOMContentLoaded', function () {
             e.preventDefault();  // 防与行 click 双重触发
             if (_historyHlIndex < 0 || _historyHlIndex >= rows.length) return;  // 无高亮忽略
             var row = rows[_historyHlIndex];
-            if (row) {
-                if (typeof row.onclick === 'function') {
-                    row.onclick();  // 编辑模式 toggle h-sel / 非编辑发 history-select
-                } else {
-                    // 兜底：行无 onclick 时直接执行选择逻辑（切到编辑模式检查）
-                    if (_historyEditMode) {
-                        row.classList.toggle('h-sel');
-                        if (row.classList.contains('h-sel')) _historySelected[row.dataset.id] = true;
-                        else delete _historySelected[row.dataset.id];
-                        updateDeleteSelLabel();
-                    } else {
-                        window.location = 'opencode://history-select?id=' + encodeURIComponent(row.dataset.id);
-                    }
-                }
-            }
+            if (row) _historyActivateRow(row);
         } else if (key === 'Escape') {
             e.preventDefault();
             _closeHistoryDropdown();
@@ -1285,10 +1310,7 @@ function toggleHistoryEditMode() {
 }
 function historySelectAll() {
     // 仅遍历当前可见（过滤后）的真实行：跳过空态占位行（无 dataset.id）
-    var rows = [];
-    document.querySelectorAll('#ai-history-list .ai-history-row').forEach(function (r) {
-        if (r.dataset.id) rows.push(r);
-    });
+    var rows = _historyRows();
     var allSelected = rows.length > 0;
     rows.forEach(function (r) { if (!r.classList.contains('h-sel')) allSelected = false; });
     rows.forEach(function (r) {
