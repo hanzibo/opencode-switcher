@@ -4683,7 +4683,11 @@ class AIChatPanel(Gtk.Box):
                 if len(title) > 25:
                     title = title[:22] + "..."
                 count = s.get("message_count", 0)
-                items.append({"id": sid, "label": f"{title} ({count}条)"})
+                items.append({
+                    "id": sid,
+                    "label": f"{title} ({count}条)",
+                    "ts": s.get("updated_at", 0),
+                })
             return json.dumps(items, ensure_ascii=False)
         except Exception:
             return "[]"
