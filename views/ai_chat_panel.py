@@ -179,8 +179,16 @@ class _HeaderTitleBridge:
             wv = getattr(self._panel, "_ai_webview", None)
             if wv is None:
                 return
-            js = "updateHeaderTitle(%s, '');" % json.dumps(markup, ensure_ascii=False)
+            m = re.search(r"(<b>.*?</b>)", markup, re.S)
+            title_html = m.group(1).strip() if m else markup
+            m = re.search(r"<span[^>]*>(.*?)</span>", markup, re.S)
+            model_text = m.group(1).strip() if m else ""
+            js = "updateHeaderTitle(%s, %s);" % (
+                json.dumps(title_html, ensure_ascii=False),
+                json.dumps(model_text, ensure_ascii=False),
+            )
             wv.run_javascript(js, None, None)
+            self._ai_last_header_markup = markup
         except Exception:
             pass
 
