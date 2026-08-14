@@ -58,18 +58,58 @@
                     overflow: hidden;
                     text-overflow: ellipsis;
                 }
+                /* 胶囊按钮：半透明叠加 + inline-flex（文字 span + SVG 垂直居中），透明边框防 hover 位移 */
                 #ai-header .ai-header-btn {
                     flex: none;
-                    background: transparent;
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 5px;
                     border: 1px solid transparent;
-                    border-radius: 6px;
+                    border-radius: 999px;
+                    background-color: rgba(255,255,255,0.06);
                     color: {text_color};
                     font-size: 12px;
-                    padding: 3px 8px;
+                    padding: 4px 12px;
                     cursor: pointer;
+                    transition: background-color 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease, color 0.12s ease;
                 }
-                #ai-header .ai-header-btn:hover {
+                .light #ai-header .ai-header-btn {
+                    background-color: rgba(0,0,0,0.04);
+                }
+                .dark-moon #ai-header .ai-header-btn {
+                    background-color: rgba(168,85,247,0.08);
+                }
+                #ai-header .ai-header-btn .ai-hdr-icon {
+                    width: 14px;
+                    height: 14px;
+                    flex: none;
+                }
+                /* Hover 态：历史按钮 pre_bg 底 + orbit 微光；dark-moon 升格为 glow 光晕 */
+                #ai-header #ai-history-btn:hover {
                     background-color: {pre_bg};
+                    box-shadow: 0 0 8px {orbit};
+                }
+                .dark-moon #ai-header #ai-history-btn:hover {
+                    box-shadow: 0 0 10px {glow};
+                }
+                /* 关闭按钮：警示色 {code_fg}（3 主题均玫瑰红），SVG 继承 currentColor 自动变红 */
+                #ai-header #ai-close-btn:hover {
+                    background-color: {pre_bg};
+                    color: {code_fg};
+                    box-shadow: 0 0 8px rgba(255,255,255,0.15);
+                }
+                /* Active 态（历史按钮下拉展开时）：orbit 半透明底 + glow 边框 + 微光增强 */
+                #ai-header #ai-history-btn.ai-hdr-active {
+                    background-color: {orbit};
+                    border-color: {glow};
+                    box-shadow: 0 0 12px {glow};
+                }
+                .dark-moon #ai-header #ai-history-btn.ai-hdr-active {
+                    box-shadow: 0 0 16px {glow};
+                }
+                /* 按下动效 */
+                #ai-header .ai-header-btn:active {
+                    transform: scale(0.97);
                 }
                 #ai-header-spinner {
                     display: inline-flex;
