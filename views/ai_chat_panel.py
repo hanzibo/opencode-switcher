@@ -261,25 +261,27 @@ class AIChatPanel(Gtk.Box):
         return {k: Gdk.RGBA(*v) for k, v in raw.items()}
 
     def _apply_webview_gtk_background(self):
-        """Paint the WebView's GdkWindow with the opaque theme background.
+        """Paint the WebView widget with the opaque theme background.
 
         WebKit2GTK renders asynchronously (software path here): while the
         paned splitter drags, the WebView's GdkWindow can briefly expose
         newly allocated regions that are not yet covered by the Web
-        process frame. Without an opaque GdkWindow background those
-        regions are alpha=0 and the ARGB window leaks the desktop
-        underneath. ``set_background_color()`` only affects WebKit-side
-        rendering, so the GTK-side GdkWindow must be painted too.
+        process frame. Without an opaque background those regions are
+        alpha=0 and the ARGB window leaks the desktop underneath.
+        ``webview.set_background_color()`` only affects WebKit-side
+        rendering, so the GTK-side widget must be painted too.
+
+        GTK 3.22 removed ``GdkWindow.set_background_color()`` (Wayland
+        backend's GdkWaylandWindow has no such attribute), so we use the
+        widget-level ``override_background_color()`` — the same pattern as
+        the panel/scrolled/input widgets below.
         """
         try:
             webview = self._ai_webview
             if webview is None:
                 return
-            gdk_win = webview.get_window()
-            if gdk_win is None:
-                return
             c = self._get_gtk_colors(self._theme)
-            gdk_win.set_background_color(c["bg"])
+            webview.override_background_color(Gtk.StateFlags.NORMAL, c["bg"])
         except Exception as e:
             print(f"[opencode-switcher] Failed to set WebView GdkWindow background: {e}", flush=True)
 
