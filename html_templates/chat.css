@@ -27,7 +27,7 @@
                     display: flex;
                     align-items: center;
                     gap: 10px;
-                    height: 36px;
+                    height: 32px;
                     padding: 0 10px;
                     border-bottom: 1px solid {pre_border};
                     background-color: {bg_color};
@@ -119,7 +119,7 @@
                 /* ── 历史对话下拉面板（星云紫悬浮面板） ── */
                 #ai-history-dropdown {
                     position: fixed;
-                    top: 40px;
+                    top: 36px;
                     right: 42px;
                     z-index: 60;
                     min-width: 220px;
