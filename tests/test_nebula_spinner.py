@@ -173,6 +173,48 @@ class TestHeaderShell(unittest.TestCase):
                 f".{theme} #ai-history-dropdown 缺少高不透明背景 {color}",
             )
 
+    def test_content_base_rule_has_breathing_prep(self):
+        # T3: #content 基规则必须预置呼吸灯配套——box-sizing 防加边框后底部裁切、
+        # 永久透明边框（宽度恒定防淡出 snap）、底部不亮、transition 0.3s 渐隐
+        base = _block("#content", self.shell)
+        self.assertIn("box-sizing: border-box", base, "#content 缺少 box-sizing: border-box")
+        self.assertIn("border: 2px solid transparent", base, "#content 缺少透明边框占位")
+        self.assertIn("border-bottom: none", base, "#content 底部不应亮")
+
+    def test_content_streaming_glow_per_theme(self):
+        # T3: .streaming-glow 块按主题注入 {glow} 边框 + 2.4s 呼吸动画。
+        # border-bottom:none 位于基规则 #content 块内（test_content_base_rule_has_breathing_prep
+        # 已覆盖），此处不重复断言。
+        from stores.theme_config import _THEMES
+        expected = {
+            "light": "#7c3aed",
+            "dark": "#8b5cf6",
+            "dark-moon": "#a855f7",
+        }
+        self.assertEqual(set(expected), set(_THEMES), "期望 hex 映射必须覆盖全部 3 主题")
+        for theme, hex_color in expected.items():
+            rule = _block("#content.streaming-glow", _get_html_shell(theme, ""))
+            self.assertIn(
+                "border-color: %s" % hex_color, rule,
+                f"{theme} #content.streaming-glow 缺少 glow 边框 {hex_color}",
+            )
+            self.assertIn(
+                "animation: breathing-glow 2.4s", rule,
+                f"{theme} #content.streaming-glow 缺少 2.4s 呼吸动画",
+            )
+
+    def test_breathing_glow_js_and_keyframes(self):
+        # T3: keyframe 必须存在；chat.js setStreamingGlow 契约——spinner 显示 == 流式中，
+        # showHeaderSpinner/hideHeaderSpinner 均驱动发光（覆盖发送/重试/工具循环/取消/错误全路径）
+        self.assertIn("@keyframes breathing-glow", self.shell)
+        self.assertIn("function setStreamingGlow", self.shell)
+        self.assertIn("classList.toggle('streaming-glow'", self.shell)
+        show = re.search(r"function showHeaderSpinner\(.*?\n}", self.shell, re.S)
+        hide = re.search(r"function hideHeaderSpinner\(.*?\n}", self.shell, re.S)
+        self.assertTrue(show and hide, "showHeaderSpinner/hideHeaderSpinner 函数缺失")
+        self.assertIn("setStreamingGlow(true)", show.group(0), "showHeaderSpinner 应开启呼吸灯")
+        self.assertIn("setStreamingGlow(false)", hide.group(0), "hideHeaderSpinner 应关闭呼吸灯")
+
 
 if __name__ == "__main__":
     unittest.main()
