@@ -8,6 +8,7 @@ import time. Missing files produce a warning but do not crash the app.
 """
 
 import functools
+import html
 import os
 
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -191,13 +192,17 @@ def _get_html_shell(theme_name: str, pygments_css: str) -> str:
     ``#content``, substituted by ``get_html_template()`` on retrieval.
     """
     from stores.theme_config import get_web_css_vars, get_ai_spinner_vars
+    spinner_vars = get_ai_spinner_vars(theme_name)
     css_vars = dict(get_web_css_vars(theme_name))
-    css_vars.update(get_ai_spinner_vars(theme_name))
+    css_vars.update(spinner_vars)
     css_content = _CHAT_CSS
     nebula_css = _NEBULA_CSS
     nebula_svg = _NEBULA_SVG
     for key, value in css_vars.items():
         css_content = css_content.replace("{" + key + "}", value)
+    # nebula 资产仅含 5 个 ai_spinner_* 占位符——只迭代 spinner 键，
+    # 避免全量 18 键 no-op 替换与跨键静默撞名覆盖。
+    for key, value in spinner_vars.items():
         nebula_css = nebula_css.replace("{" + key + "}", value)
         nebula_svg = nebula_svg.replace("{" + key + "}", value)
     if pygments_css:
@@ -214,13 +219,16 @@ def _get_html_shell(theme_name: str, pygments_css: str) -> str:
     <style>{nebula_css}</style>
     <script>{_CHAT_JS}</script>
 </head>
-<body class="{theme_name}">
+<body class="{html.escape(theme_name)}">
     <!-- 固定装饰区（原 GTK header 迁移至 WebView 内，不随消息滚动） -->
     <div id="ai-header" class="ai-header">
         <div id="ai-header-left" class="ai-header-left">
+            <!-- ponytail: 标题与 views/ai_chat_panel.py 的 _AI_HEADER_TITLE 常量耦合（值须一致） -->
             <div id="ai-header-title" class="ai-header-title"><b>AI 助手看盘</b></div>
             <div id="ai-header-model" class="ai-header-model"></div>
         </div>
+        <!-- 显隐由 JS 显式读写 inline style（showHeaderSpinner/hideHeaderSpinner 设 el.style.display），
+             勿改为 class 切换，否则与 html_templates/chat.js 的既有实现脱节 -->
         <div id="ai-header-spinner" class="ai-header-spinner" style="display:none">{nebula_svg}</div>
         <button id="ai-history-btn" class="ai-header-btn" onclick="toggleHistoryDropdown()"><span class="ai-hdr-lbl">历史对话</span><svg class="ai-hdr-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg></button>
         <button id="ai-close-btn" class="ai-header-btn" onclick="closeAIPanel()" title="关闭AI面板"><svg class="ai-hdr-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>

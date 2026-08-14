@@ -297,6 +297,8 @@ def get_ai_spinner_vars(name: str) -> dict:
     Keys are substituted into the ``{key}`` placeholders of the spinner
     HTML template in ``ai_engine/ai_html_template.py`` (#ai-header).
     """
+    # accessor 硬化：新增主题必须补齐全部 ai_spinner_* 键
+    # （crescent_a/crescent_b/orbit/dust/glow），缺失将 KeyError。
     t = get_theme(name)
     return {
         "crescent_a": t["ai_spinner_crescent_a"],
