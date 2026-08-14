@@ -18,7 +18,11 @@ def _block(sel, shell):
 
 
 def _keyframes(name, shell):
-    """keyframe 块抽取：@keyframes <name>{...}（含嵌套帧块）→ 块内容。"""
+    """keyframe 块抽取：@keyframes <name>{...}（含嵌套帧块）→ 块内容。
+
+    约束：帧内不得含嵌套花括号（当前 {orbit}/{glow} 已被主题变量替换为
+    rgba 值，故正则的 [^{}]* 成立；若未来帧内加入媒体查询等结构需同步升级）。
+    """
     m = re.search(
         r"@keyframes " + re.escape(name) + r"\s*\{((?:[^{}]*\{[^{}]*\})*[^{}]*)\}",
         shell, re.S,
@@ -248,10 +252,9 @@ class TestHeaderShell(unittest.TestCase):
         )
         fadeout = _keyframes("glow-fadeout", self.shell)
         self.assertTrue(fadeout, "glow-fadeout 块缺失")
-        frames = fadeout
-        self.assertIn("inset 0 0 28px", frames, "from 帧应为峰值 28px")
-        self.assertIn("inset 0 0 0", frames, "to 帧应回落 0 光晕")
-        self.assertIn("border-color: transparent", frames, "边框色应淡出至透明")
+        self.assertIn("inset 0 0 28px", fadeout, "from 帧应为峰值 28px")
+        self.assertIn("inset 0 0 0", fadeout, "to 帧应回落 0 光晕")
+        self.assertIn("border-color: transparent", fadeout, "边框色应淡出至透明")
 
 
 if __name__ == "__main__":

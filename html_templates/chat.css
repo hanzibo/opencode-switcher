@@ -29,7 +29,7 @@
                 /* 回复中三边框呼吸灯（左/右/上，底不亮）；class 由 chat.js setStreamingGlow 切换 */
                 #content.streaming-glow {
                     border-color: {glow};
-                    box-shadow: inset 0 0 24px {orbit};
+                    box-shadow: inset 0 0 6px {orbit};
                     animation: breathing-glow 2.4s ease-in-out infinite;  /* 2.4s 周期 */
                 }
                 /* 回复完成淡出：动画内渐隐（不依赖 transition——WebKit 对运行中动画移除的过渡不可靠），
