@@ -173,6 +173,8 @@ class _HeaderTitleBridge:
 
     def __init__(self, panel):
         self._panel = panel
+        # 显式初始化：resume 重新应用前从未 set_markup 时，getattr 能取到 None
+        self._ai_last_header_markup = None
 
     def set_markup(self, markup):
         try:
@@ -4881,6 +4883,10 @@ class AIChatPanel(Gtk.Box):
             # 进程已终止，必须整页重建；force=True 防止指纹守卫抑制恢复重载
             self._load_webview_html(cached_html or "", force=True)
             print("[AI] WebView restored from suspension.", flush=True)
+            # resume 后整页重建：重新应用最近一次标题 markup（镜像 4944-4947 既有模式）
+            last = getattr(self._ai_lbl, "_ai_last_header_markup", None)
+            if last:
+                self._ai_lbl.set_markup(last)
         self._ai_entry.grab_focus()
 
     def on_panel_hidden(self):
