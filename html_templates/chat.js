@@ -585,8 +585,8 @@ function _renderMath(element) {
                                     _updateRoundNav();
                                 });
                             });
+                            _roundNavInitialized = true;
                         }
-                        _roundNavInitialized = true;
                     }
                     _updateRoundNav();
                     var nav = document.getElementById('round-nav');
@@ -876,10 +876,10 @@ function _renderMath(element) {
 document.addEventListener('DOMContentLoaded', function () {
     const content = document.getElementById('content');
     if (content) _wrapTables(content);  // 判空：防止模板结构变化时退化为全文档扫描
+    _initRoundNav();  // DOM 就绪后挂载 round-nav 滚动监听（head 解析阶段 _content() 为 null，早期调用会静默跳过）
 });
 
 _scrollToBottom();
-                _initRoundNav();
 
 // ── 历史对话空态文案 ────────────────────────────────────────────────────────
 const _EMPTY_NO_CONV = "（暂无历史对话）";
