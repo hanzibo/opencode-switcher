@@ -76,7 +76,7 @@
                     align-items: center;
                     flex: none;
                 }
-                /* ── 历史对话下拉面板 ── */
+                /* ── 历史对话下拉面板（星云紫悬浮面板） ── */
                 #ai-history-dropdown {
                     position: fixed;
                     top: 48px;
@@ -87,23 +87,110 @@
                     max-height: 60vh;
                     overflow-y: auto;
                     background-color: {bg_color};
+                    background-image: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0) 40%);
                     border: 1px solid {pre_border};
-                    border-radius: 8px;
-                    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+                    border-radius: 10px;
+                    box-shadow:
+                        inset 0 1px 0 rgba(255,255,255,0.06),
+                        0 6px 20px rgba(0,0,0,0.18),
+                        0 0 20px {orbit};
                     padding: 6px;
                 }
+                /* 毛玻璃：支持 backdrop-filter 时叠加半透明背景 + 顶部内高光（无支持则回退纯色 {bg_color}） */
+                @supports ((-webkit-backdrop-filter: blur(8px)) or (backdrop-filter: blur(8px))) {
+                    #ai-history-dropdown {
+                        -webkit-backdrop-filter: blur(8px);
+                        backdrop-filter: blur(8px);
+                    }
+                    .dark #ai-history-dropdown,
+                    .dark-moon #ai-history-dropdown {
+                        background-color: rgba(255,255,255,0.05);
+                    }
+                    .light #ai-history-dropdown {
+                        background-color: rgba(255,255,255,0.70);
+                    }
+                }
+                /* 暗色主题主发光更强（星云紫签名），浅色主题收敛为克制暗影 + 轨道微光 */
+                .dark #ai-history-dropdown,
+                .dark-moon #ai-history-dropdown {
+                    box-shadow:
+                        inset 0 1px 0 rgba(255,255,255,0.08),
+                        0 8px 24px rgba(0,0,0,0.22),
+                        0 0 22px {glow};
+                }
+                .light #ai-history-dropdown {
+                    box-shadow:
+                        inset 0 1px 0 rgba(255,255,255,0.60),
+                        0 6px 18px rgba(0,0,0,0.10),
+                        0 0 16px {orbit};
+                }
+                /* 打开 / 关闭动画（关闭复用 ddFadeIn 反向 120ms） */
+                #ai-history-dropdown.dd-open {
+                    animation: ddFadeIn 180ms ease-out;
+                }
+                #ai-history-dropdown.dd-closing {
+                    animation: ddFadeIn 120ms ease-in reverse forwards;
+                    pointer-events: none;
+                }
+                @keyframes ddFadeIn {
+                    from { opacity: 0; transform: translateY(-4px); }
+                    to   { opacity: 1; transform: translateY(0); }
+                }
+                /* 搜索框 */
+                .ai-history-search {
+                    display: block;
+                    width: 100%;
+                    box-sizing: border-box;
+                    padding: 5px 8px;
+                    margin-bottom: 6px;
+                    font-size: 12px;
+                    color: {text_color};
+                    background-color: {pre_bg};
+                    border: 1px solid {pre_border};
+                    border-bottom: 1px solid {pre_border};
+                    border-radius: 6px;
+                    outline: none;
+                    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+                }
+                .ai-history-search::placeholder {
+                    color: {code_fg};
+                    opacity: 0.55;
+                }
+                .ai-history-search:focus {
+                    border-color: {glow};
+                    outline: 1px solid {glow};
+                    outline-offset: -1px;
+                    box-shadow: 0 0 8px {orbit};
+                }
+                /* 行：hover → {pre_bg} + 左侧 {glow} 指示条，active → {code_bg} + {crescent_a} 指示条 */
                 .ai-history-row {
+                    position: relative;
                     display: flex;
                     align-items: center;
                     gap: 6px;
-                    padding: 6px 8px;
+                    padding: 6px 8px 6px 10px;
                     border-radius: 6px;
                     cursor: pointer;
                     font-size: 12px;
                     color: {text_color};
+                    transition: background-color 0.12s ease;
+                }
+                .ai-history-row::before {
+                    content: '';
+                    position: absolute;
+                    left: 0;
+                    top: 6px;
+                    bottom: 6px;
+                    width: 2px;
+                    border-radius: 0 2px 2px 0;
+                    background-color: transparent;
+                    transition: background-color 0.12s ease;
                 }
                 .ai-history-row:hover { background-color: {pre_bg}; }
+                .ai-history-row:hover::before { background-color: {glow}; }
                 .ai-history-row.active { background-color: {code_bg}; }
+                .ai-history-row.active::before { background-color: {crescent_a}; }
+                .ai-history-row.hl { background-color: {orbit}; }
                 .ai-history-row .h-del {
                     margin-left: auto;
                     opacity: 0.5;
@@ -112,8 +199,17 @@
                     color: {code_fg};
                     cursor: pointer;
                     font-size: 11px;
+                    transition: opacity 0.12s ease;
                 }
                 .ai-history-row .h-del:hover { opacity: 1; }
+                /* 行动画：逐行淡入上浮（JS 设置 style.animationDelay 错峰） */
+                .ai-history-row.row-enter {
+                    animation: rowFadeInUp 220ms ease-out both;
+                }
+                @keyframes rowFadeInUp {
+                    from { opacity: 0; transform: translateY(6px); }
+                    to   { opacity: 1; transform: translateY(0); }
+                }
                 .ai-history-actions {
                     display: flex;
                     gap: 6px;
@@ -130,30 +226,56 @@
                     font-size: 11px;
                     padding: 2px 8px;
                     cursor: pointer;
+                    transition: background-color 0.12s ease, border-color 0.12s ease;
                 }
-                .ai-history-action:hover { background-color: {pre_bg}; }
+                .ai-history-action:hover {
+                    background-color: {pre_bg};
+                    border-color: {orbit};
+                }
                 .ai-history-action:disabled { opacity: 0.4; cursor: not-allowed; }
-                .ai-history-action:disabled:hover { background-color: transparent; }
+                .ai-history-action:disabled:hover {
+                    background-color: transparent;
+                    border-color: {pre_border};
+                }
                 .history-confirm-bar {
                     display: flex;
                     align-items: center;
                     gap: 6px;
-                    padding: 6px 8px;
+                    padding: 6px 8px 6px 11px;
                     margin-bottom: 6px;
                     border-radius: 6px;
                     background-color: {code_bg};
+                    border-left: 3px solid {crescent_a};
                     font-size: 12px;
                     color: {text_color};
                 }
                 .history-confirm-bar span { flex: 1; }
+                /* 多选态：{orbit} 边框 + {glow} 勾选 */
                 .ai-history-row.h-sel {
                     background-color: {code_bg};
-                    outline: 1px solid {pre_border};
+                    outline: 1px solid {orbit};
+                    outline-offset: -1px;
                 }
                 .ai-history-row.h-sel::before {
                     content: '✓';
-                    color: {code_fg};
+                    position: static;
+                    width: auto;
+                    top: auto;
+                    bottom: auto;
+                    background-color: transparent;
+                    color: {glow};
                     font-size: 11px;
+                    font-weight: bold;
+                }
+                /* 细滚动条 */
+                #ai-history-dropdown::-webkit-scrollbar { width: 6px; }
+                #ai-history-dropdown::-webkit-scrollbar-track { background: transparent; }
+                #ai-history-dropdown::-webkit-scrollbar-thumb {
+                    background-color: {orbit};
+                    border-radius: 3px;
+                }
+                #ai-history-dropdown::-webkit-scrollbar-thumb:hover {
+                    background-color: {glow};
                 }
                 pre {
                     background-color: {pre_bg};
