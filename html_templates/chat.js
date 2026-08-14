@@ -881,6 +881,36 @@ document.addEventListener('DOMContentLoaded', function () {
 _scrollToBottom();
                 _initRoundNav();
 
+// ── 历史对话空态文案 ────────────────────────────────────────────────────────
+const _EMPTY_NO_CONV = "（暂无历史对话）";
+const _EMPTY_NO_MATCH = "没有匹配的对话";
+
+/**
+ * _formatRelativeTime - 将毫秒时间戳格式化为相对时间文本。
+ * 纯函数，不触碰 DOM。ts 字段在 Python 侧为毫秒整数（Date.now() 同单位）。
+ * @param {number} tsMs 毫秒时间戳
+ * @returns {string} 相对时间描述或 YYYY-MM-DD 日期
+ */
+function _formatRelativeTime(tsMs) {
+    var now = Date.now();
+    var diff = now - tsMs;
+    var minute = 60 * 1000;
+    var hour = 60 * minute;
+    var day = 24 * hour;
+
+    if (diff < 60 * 1000) return "刚刚";
+    if (diff < hour) return Math.floor(diff / minute) + "分钟前";
+    if (diff < day) return Math.floor(diff / hour) + "小时前";
+    if (diff < 2 * day) return "昨天";
+    if (diff < 7 * day) return Math.floor(diff / day) + "天前";
+
+    var d = new Date(tsMs);
+    function pad(n) {
+        return n < 10 ? "0" + n : "" + n;
+    }
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
+}
+
 // ── AI Header（WebView 内固定装饰区）交互 ───────────────────────────────────
 
 function showHeaderSpinner() {
@@ -925,65 +955,270 @@ document.addEventListener('click', function (ev) {
     if (!dd || dd.style.display === 'none') return;
     if (!dd.contains(ev.target) && (!btn || !btn.contains(ev.target))) {
         dd.style.display = 'none';
+        // 点击外部关闭：通知 Python 侧同步收起态（T9 接收端）
+        window.location = 'opencode://history-close';
     }
 });
 function hideHistoryDropdown() {
     var dd = document.getElementById('ai-history-dropdown');
     if (dd) dd.style.display = 'none';
 }
+// ── 历史对话搜索过滤 ────────────────────────────────────────────────────────
+// 缓存最近一次解析的 items / currentId，供搜索框输入重渲时复用
+// （refresh_dropdown 每次全量推送，此处仅作前端过滤缓存，不持有额外状态）
+var _historyItems = null;       // 最近一次解析的 items 数组
+var _historyCurrentId = null;   // 最近一次渲染的 currentId
+var _historyHlIndex = -1;       // 键盘导航高亮行索引（-1 = 无高亮）
+var _suppressRowAnim = false;   // 搜索/重渲期间抑制行入场动画（避免批量闪动）
+
+/**
+ * _filterItems - 纯函数：按 label 子串过滤（大小写不敏感）。
+ * 空查询或无匹配时返回原数组。
+ * @param {Array} items items 数组（每项含 id/label/ts）
+ * @param {string} q 搜索词（可能为空串）
+ * @returns {Array} 过滤后的 items
+ */
+function _filterItems(items, q) {
+    if (!q) return items;
+    var lower = q.toLowerCase();
+    return items.filter(function (it) {
+        return it.label && it.label.toLowerCase().indexOf(lower) !== -1;
+    });
+}
+
+/**
+ * _renderHistoryEmpty - 渲染单行空态（无对话 / 无匹配共用）。
+ * 不使用 innerHTML，全部 createElement + textContent（XSS 安全）。
+ */
+function _renderHistoryEmpty(text) {
+    var list = document.getElementById('ai-history-list');
+    if (!list) return;
+    list.innerHTML = '';
+    var empty = document.createElement('div');
+    empty.className = 'ai-history-row';
+    empty.textContent = text;
+    list.appendChild(empty);
+}
+
+/**
+ * _renderHistoryRows - 构建历史对话行列表（全量 / 过滤结果共用）。
+ * 编辑模式下按 _historySelected 恢复 h-sel 状态（过滤重渲后保留选中）。
+ */
+function _renderHistoryRows(items, currentId) {
+    var list = document.getElementById('ai-history-list');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!items || !items.length) return;  // 空态由调用方 renderHistoryList 区分渲染
+    items.forEach(function (it, i) {
+        var row = document.createElement('div');
+        row.className = 'ai-history-row' + (it.id === currentId ? ' active' : '');
+        row.dataset.id = it.id;
+        // 行入场动画：仅非抑制时加 .row-enter + 错峰延迟（最多 10 行，避免大量行动画卡顿）
+        if (!_suppressRowAnim) {
+            row.classList.add('row-enter');
+            row.style.animationDelay = Math.min(i, 9) * 30 + 'ms';
+        }
+        if (_historyEditMode && _historySelected[it.id]) row.classList.add('h-sel');
+        var title = document.createElement('span');
+        title.textContent = it.label;
+        row.appendChild(title);
+        var del = document.createElement('button');
+        del.className = 'h-del';
+        del.textContent = '✕';
+        del.title = '删除该对话';
+        del.onclick = function (ev) {
+            ev.stopPropagation();
+            var id = row.dataset.id;
+            askConfirm('删除该对话？', function () {
+                window.location = 'opencode://history-delete?id=' + encodeURIComponent(id);
+            });
+        };
+        row.appendChild(del);
+        row.onclick = function () {
+            if (_historyEditMode) {
+                row.classList.toggle('h-sel');
+                if (row.classList.contains('h-sel')) _historySelected[row.dataset.id] = true;
+                else delete _historySelected[row.dataset.id];
+                updateDeleteSelLabel();
+            } else {
+                window.location = 'opencode://history-select?id=' + encodeURIComponent(row.dataset.id);
+            }
+        };
+        // 编辑模式下隐藏单行删除按钮
+        if (_historyEditMode) del.style.display = 'none';
+        list.appendChild(row);
+    });
+}
+
 function renderHistoryList(itemsJson, currentId, show) {
     var list = document.getElementById('ai-history-list');
     var dd = document.getElementById('ai-history-dropdown');
     if (!list || !dd) return;
-    list.innerHTML = '';
     var items = (typeof itemsJson === 'string') ? JSON.parse(itemsJson) : itemsJson;
-    if (!items || !items.length) {
-        var empty = document.createElement('div');
-        empty.className = 'ai-history-row';
-        empty.textContent = '（暂无历史对话）';
-        list.appendChild(empty);
+    if (!items || !items.length) items = [];
+    _historyItems = items;
+    _historyCurrentId = currentId;
+    // 搜索激活期间（refresh_dropdown 等重渲）：从搜索框读回搜索词并重放过滤
+    var q = '';
+    var searchInput = document.getElementById('ai-history-search');
+    if (searchInput) q = searchInput.value;
+    var visible = _filterItems(items, q);
+    if (!items.length) {
+        _renderHistoryEmpty(_EMPTY_NO_CONV);
+    } else if (!visible.length) {
+        _renderHistoryEmpty(_EMPTY_NO_MATCH);
     } else {
-        items.forEach(function (it) {
-            var row = document.createElement('div');
-            row.className = 'ai-history-row' + (it.id === currentId ? ' active' : '');
-            row.dataset.id = it.id;
-            var title = document.createElement('span');
-            title.textContent = it.label;
-            row.appendChild(title);
-            var del = document.createElement('button');
-            del.className = 'h-del';
-            del.textContent = '✕';
-            del.title = '删除该对话';
-            del.onclick = function (ev) {
-                ev.stopPropagation();
-                var id = row.dataset.id;
-                askConfirm('删除该对话？', function () {
-                    window.location = 'opencode://history-delete?id=' + encodeURIComponent(id);
-                });
-            };
-            row.appendChild(del);
-            row.onclick = function () {
-                if (_historyEditMode) {
-                    row.classList.toggle('h-sel');
-                    if (row.classList.contains('h-sel')) _historySelected[row.dataset.id] = true;
-                    else delete _historySelected[row.dataset.id];
-                    updateDeleteSelLabel();
-                } else {
-                    window.location = 'opencode://history-select?id=' + encodeURIComponent(row.dataset.id);
-                }
-            };
-            // 编辑模式下隐藏单行删除按钮
-            if (_historyEditMode) del.style.display = 'none';
-            list.appendChild(row);
-        });
+        // 下拉不可见时的重渲不触发行动画（refresh_dropdown 等后台刷新场景）
+        if (dd.style.display === 'none') {
+            _suppressRowAnim = true;
+            setTimeout(function () {
+                _suppressRowAnim = false;
+            }, 60);
+        }
+        _renderHistoryRows(visible, currentId);
     }
+    // 键盘导航：过滤重渲后 clamp 高亮索引并恢复 .hl（行数变少时越界落到末尾）
+    _historyClampHl();
     // 仅当显式要求显示时才展开（refresh_dropdown 等数据刷新场景保持收起）
     if (show) dd.style.display = '';
 }
 function showHistoryDropdown() {
     var dd = document.getElementById('ai-history-dropdown');
-    if (dd) dd.style.display = '';
+    if (dd) {
+        dd.style.display = '';
+        // 打开动画：先清 closing 态并强制 reflow，保证 ddFadeIn 从初始态播放
+        dd.classList.remove('dd-closing');
+        void dd.offsetWidth;
+        dd.classList.add('dd-open');
+    }
+    // 展开时重置键盘高亮并聚焦搜索框（打开后即可用 ↑↓ 导航）
+    _historyHlIndex = -1;
+    document.querySelectorAll('#ai-history-list .ai-history-row.hl').forEach(function (r) {
+        r.classList.remove('hl');
+    });
+    var si = document.getElementById('ai-history-search');
+    if (si) si.focus();
 }
+
+// ── 历史对话键盘导航 ────────────────────────────────────────────────────────
+// 搜索框聚焦时 ↑↓/Enter/Esc/Home/End 操作下拉列表；高亮复用 T8 提供的 .hl 样式
+
+/**
+ * _historyRows - 收集当前可见的真实行（跳过空态占位行）。
+ */
+function _historyRows() {
+    var rows = [];
+    document.querySelectorAll('#ai-history-list .ai-history-row').forEach(function (r) {
+        if (r.dataset.id) rows.push(r);
+    });
+    return rows;
+}
+
+/**
+ * _historySetHl - 设置高亮行（index 越界时 clamp），并按需滚动到可见。
+ * 滚动沿用 scrollTop 手动对齐（_scrollToRound 注释：部分 WebKit2GTK
+ * 版本对 scrollTo(options) 静默失败），实现 block:'nearest' 语义。
+ */
+function _historySetHl(index, scroll) {
+    var rows = _historyRows();
+    if (!rows.length) {
+        _historyHlIndex = -1;
+        return;
+    }
+    if (index < 0) index = 0;
+    if (index >= rows.length) index = rows.length - 1;
+    _historyHlIndex = index;
+    rows.forEach(function (r, i) {
+        r.classList.toggle('hl', i === _historyHlIndex);
+    });
+    if (scroll) {
+        var el = document.getElementById('ai-history-dropdown');
+        var target = rows[_historyHlIndex];
+        if (el && target) {
+            var listTop = el.getBoundingClientRect().top;
+            var top = target.getBoundingClientRect().top - listTop + el.scrollTop;
+            var bottom = top + (target.offsetHeight || 0);
+            if (top < el.scrollTop) {
+                el.scrollTop = top;
+            } else if (bottom > el.scrollTop + el.clientHeight) {
+                el.scrollTop = bottom - el.clientHeight;
+            }
+        }
+    }
+}
+
+/**
+ * _historyClampHl - 列表重渲后调用：高亮索引越界时 clamp 并恢复 .hl。
+ * -1（无高亮）态保持不动，避免首开时误高亮末行。
+ */
+function _historyClampHl() {
+    var rows = _historyRows();
+    if (!rows.length) {
+        _historyHlIndex = -1;
+        return;
+    }
+    if (_historyHlIndex < 0) return;
+    if (_historyHlIndex >= rows.length) _historyHlIndex = rows.length - 1;
+    _historySetHl(_historyHlIndex, false);
+}
+
+// ── 历史对话搜索框绑定（DOM 就绪后；脚本内联于 <head>，元素此时才存在） ──
+document.addEventListener('DOMContentLoaded', function () {
+    var input = document.getElementById('ai-history-search');
+    if (!input) return;
+    // 输入即过滤：按 label 子串过滤并重渲列表（仅下拉展开时可输入）
+    input.addEventListener('input', function () {
+        // 过滤重渲期间抑制行入场动画，60ms 后恢复（不影响后续打开动画）
+        _suppressRowAnim = true;
+        renderHistoryList(_historyItems || [], _historyCurrentId);
+        setTimeout(function () {
+            _suppressRowAnim = false;
+        }, 60);
+    });
+    // IME 守卫：中文拼音等组合输入期间 keydown 以 keyCode 229 上报，
+    // 提前 return 跳过按键逻辑（下方 ↑↓/Enter/Esc/Home/End 均不处理组合输入）
+    input.addEventListener('keydown', function (e) {
+        if (e.isComposing === true || e.keyCode === 229) return;
+        var rows = _historyRows();
+        var key = e.key;
+        if (key === 'ArrowDown' || key === 'ArrowUp') {
+            // 移动高亮：越界环绕（到底回 0，到顶回最后）
+            e.preventDefault();
+            if (!rows.length) return;
+            var next = _historyHlIndex + (key === 'ArrowDown' ? 1 : -1);
+            if (next >= rows.length) next = 0;
+            if (next < 0) next = rows.length - 1;
+            _historySetHl(next, true);
+        } else if (key === 'Home' || key === 'End') {
+            e.preventDefault();
+            if (!rows.length) return;
+            _historySetHl(key === 'Home' ? 0 : rows.length - 1, true);
+        } else if (key === 'Enter') {
+            e.preventDefault();  // 防与行 click 双重触发
+            if (_historyHlIndex < 0 || _historyHlIndex >= rows.length) return;  // 无高亮忽略
+            var row = rows[_historyHlIndex];
+            if (row) {
+                if (typeof row.onclick === 'function') {
+                    row.onclick();  // 编辑模式 toggle h-sel / 非编辑发 history-select
+                } else {
+                    // 兜底：行无 onclick 时直接执行选择逻辑（切到编辑模式检查）
+                    if (_historyEditMode) {
+                        row.classList.toggle('h-sel');
+                        if (row.classList.contains('h-sel')) _historySelected[row.dataset.id] = true;
+                        else delete _historySelected[row.dataset.id];
+                        updateDeleteSelLabel();
+                    } else {
+                        window.location = 'opencode://history-select?id=' + encodeURIComponent(row.dataset.id);
+                    }
+                }
+            }
+        } else if (key === 'Escape') {
+            e.preventDefault();
+            hideHistoryDropdown();
+            window.location = 'opencode://history-close';
+        }
+    });
+});
 // ── 二次确认条 ──
 var _confirmAction = null;
 function askConfirm(msg, fn) {
@@ -1031,7 +1266,11 @@ function toggleHistoryEditMode() {
     updateDeleteSelLabel();
 }
 function historySelectAll() {
-    var rows = document.querySelectorAll('#ai-history-list .ai-history-row');
+    // 仅遍历当前可见（过滤后）的真实行：跳过空态占位行（无 dataset.id）
+    var rows = [];
+    document.querySelectorAll('#ai-history-list .ai-history-row').forEach(function (r) {
+        if (r.dataset.id) rows.push(r);
+    });
     var allSelected = rows.length > 0;
     rows.forEach(function (r) { if (!r.classList.contains('h-sel')) allSelected = false; });
     rows.forEach(function (r) {
