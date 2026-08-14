@@ -939,7 +939,7 @@ function toggleHistoryDropdown() {
         window.location = 'opencode://history-open';
     } else {
         // 展开态 → 收起（display 为 '' 等非 none 值均视为展开）
-        dd.style.display = 'none';
+        _closeHistoryDropdown();
     }
 }
 // 点击下拉外部区域时收起（对齐原 GTK Popover 行为）
@@ -948,14 +948,25 @@ document.addEventListener('click', function (ev) {
     var btn = document.getElementById('ai-history-btn');
     if (!dd || dd.style.display === 'none') return;
     if (!dd.contains(ev.target) && (!btn || !btn.contains(ev.target))) {
-        dd.style.display = 'none';
+        _closeHistoryDropdown();
         // 点击外部关闭：通知 Python 侧同步收起态（T9 接收端）
         window.location = 'opencode://history-close';
     }
 });
-function hideHistoryDropdown() {
+/**
+ * _closeHistoryDropdown - 集中化下拉关闭：隐藏 + 清除历史按钮 active 态。
+ * 所有关闭路径（toggle-else / 点击外部 / Escape / Python popdown）都走这里，
+ * 保证 .ai-hdr-active 状态同步。
+ */
+function _closeHistoryDropdown() {
     var dd = document.getElementById('ai-history-dropdown');
     if (dd) dd.style.display = 'none';
+    var btn = document.getElementById('ai-history-btn');
+    if (btn) btn.classList.remove('ai-hdr-active');
+}
+// hideHistoryDropdown - 保留函数名（Python popdown 桥按名调用），体走集中化 helper
+function hideHistoryDropdown() {
+    _closeHistoryDropdown();
 }
 // ── 历史对话搜索过滤 ────────────────────────────────────────────────────────
 // 缓存最近一次解析的 items / currentId，供搜索框输入重渲时复用
@@ -1089,6 +1100,14 @@ function showHistoryDropdown() {
         void dd.offsetWidth;
         dd.classList.add('dd-open');
     }
+    // 展开时给历史按钮加 active 高亮（关闭路径统一走 _closeHistoryDropdown 清除）
+    var btn = document.getElementById('ai-history-btn');
+    if (btn) btn.classList.add('ai-hdr-active');
+    // 锚点动态对齐：下拉右边缘对齐按钮右边缘 + 4px 余量（WebKit 下 getBoundingClientRect 可用）
+    if (btn && dd) {
+        var rect = btn.getBoundingClientRect();
+        dd.style.right = (window.innerWidth - rect.right + 4) + 'px';
+    }
     // 展开时重置键盘高亮并聚焦搜索框（打开后即可用 ↑↓ 导航）
     _historyHlIndex = -1;
     document.querySelectorAll('#ai-history-list .ai-history-row.hl').forEach(function (r) {
@@ -1213,7 +1232,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         } else if (key === 'Escape') {
             e.preventDefault();
-            hideHistoryDropdown();
+            _closeHistoryDropdown();
             window.location = 'opencode://history-close';
         }
     });
