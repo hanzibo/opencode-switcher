@@ -139,29 +139,40 @@ def _should_full_reload_webview(loaded_fingerprint, requested_fingerprint,
 # 原 GTK header 组件（Gtk.Spinner / Gtk.Label / HistoryPopover）已迁移到
 # WebView 内 HTML（#ai-header）。以下桥对象保持 _ai_spinner / _ai_lbl /
 # _ai_history_popover 的既有接口（show/start/stop/hide、set_markup、
-# refresh_dropdown/popdown/get_visible），内部转发到 WebView JS，
+# refresh_dropdown/popdown），内部转发到 WebView JS，
 # 使既有调用点与测试 mock 零改动。
 
 
-class _HeaderSpinnerBridge:
+# set_markup 的标题/模型名解析正则（T3b：由方法内字符串模式提为模块级预编译）
+_MARKUP_TITLE_RE = re.compile(r"(<b>.*?</b>)", re.S)
+_MARKUP_MODEL_RE = re.compile(r"<span[^>]*>(.*?)</span>", re.S)
+
+
+class _WebViewBridgeBase:
+    """桥共享基类：统一 webview 访问（None 守卫 + 吞异常）。"""
+
+    def _run_webview_js(self, js):
+        """统一 webview 访问：None 守卫 + 吞异常（桥模式惯用法）。"""
+        try:
+            wv = getattr(self._panel, "_ai_webview", None)
+            if wv is None:
+                return
+            wv.run_javascript(js, None, None)
+        except Exception:
+            pass
+
+
+class _HeaderSpinnerBridge(_WebViewBridgeBase):
     """spinner 控制 → WebView JS（兼容 show/start/stop/hide）。"""
 
     def __init__(self, panel):
         self._panel = panel
 
-    def _run(self, js):
-        try:
-            wv = getattr(self._panel, "_ai_webview", None)
-            if wv is not None:
-                wv.run_javascript(js, None, None)
-        except Exception:
-            pass
-
     def show(self):
-        self._run("showHeaderSpinner();")
+        self._run_webview_js("showHeaderSpinner();")
 
     def hide(self):
-        self._run("hideHeaderSpinner();")
+        self._run_webview_js("hideHeaderSpinner();")
 
     def start(self):
         pass  # CSS 动画自动循环，无需手动启动
@@ -170,7 +181,7 @@ class _HeaderSpinnerBridge:
         pass  # 可见性由 GTK show/hide 控制
 
 
-class _HeaderTitleBridge:
+class _HeaderTitleBridge(_WebViewBridgeBase):
     """标题/模型名更新 → WebView JS（兼容 set_markup）。"""
 
     def __init__(self, panel):
@@ -184,53 +195,39 @@ class _HeaderTitleBridge:
         try:
             # 先记录最近一次 markup（webview 暂缺窗口内也保留意图，resume 时重放）
             self._ai_last_header_markup = markup
-            wv = getattr(self._panel, "_ai_webview", None)
-            if wv is None:
-                return
-            m = re.search(r"(<b>.*?</b>)", markup, re.S)
+            m = _MARKUP_TITLE_RE.search(markup)
             title_html = m.group(1).strip() if m else html.escape(markup)
-            m = re.search(r"<span[^>]*>(.*?)</span>", markup, re.S)
+            m = _MARKUP_MODEL_RE.search(markup)
             model_text = m.group(1).strip() if m else ""
             js = "updateHeaderTitle(%s, %s);" % (
                 json.dumps(title_html, ensure_ascii=False),
                 json.dumps(model_text, ensure_ascii=False),
             )
-            wv.run_javascript(js, None, None)
+            self._run_webview_js(js)
         except Exception:
             pass
 
 
-class _HistoryPopoverBridge:
-    """历史下拉 → WebView JS（兼容 refresh_dropdown/popdown/get_visible）。"""
+class _HistoryPopoverBridge(_WebViewBridgeBase):
+    """历史下拉 → WebView JS（兼容 refresh_dropdown/popdown）。"""
 
     def __init__(self, panel):
         self._panel = panel
 
-    def refresh_dropdown(self, edit_mode: bool = False):
+    def refresh_dropdown(self):
         try:
-            wv = getattr(self._panel, "_ai_webview", None)
-            if wv is None:
-                return
             items = self._panel._history_summaries_json()
             current_id = self._panel._ai_conversation_id or ""
             js = "renderHistoryList(%s, %s);" % (
                 items,
                 json.dumps(current_id, ensure_ascii=False),
             )
-            wv.run_javascript(js, None, None)
+            self._run_webview_js(js)
         except Exception:
             pass
 
     def popdown(self):
-        try:
-            wv = getattr(self._panel, "_ai_webview", None)
-            if wv is not None:
-                wv.run_javascript("hideHistoryDropdown();", None, None)
-        except Exception:
-            pass
-
-    def get_visible(self):
-        return False  # GTK 侧不再持有下拉可见性状态
+        self._run_webview_js("hideHistoryDropdown();")
 
 
 class AIChatPanel(Gtk.Box):
@@ -411,8 +408,9 @@ class AIChatPanel(Gtk.Box):
         # ── AI header 已迁移至 WebView 内（HTML #ai-header）──
         # 保留 _ai_lbl / _ai_spinner / _ai_history_popover 三个桥对象，
         # 接口与原 GTK 组件兼容（set_markup / show/start/stop/hide /
-        # refresh_dropdown/popdown/get_visible），内部转发到 WebView JS，
+        # refresh_dropdown/popdown），内部转发到 WebView JS，
         # 使既有调用点与测试保持零改动。
+        # ponytail: GTK header 迁移至 WebView #ai-header（桥对象见 _HeaderTitleBridge/_HistoryPopoverBridge）
         self._ai_lbl = _HeaderTitleBridge(self)
         self._ai_spinner = _HeaderSpinnerBridge(self)
         self._ai_history_btn = None
@@ -4746,8 +4744,8 @@ class AIChatPanel(Gtk.Box):
 
         target_id = summaries[target_idx].get("id")
         if target_id and target_id != self._ai_conversation_id:
-            if getattr(self, "_ai_history_popover", None) and self._ai_history_popover.get_visible():
-                self._ai_history_popover.popdown()
+            # ponytail: 删除 get_visible 死守卫——桥 get_visible 恒 False，
+            # JS 侧 history-select 统一 _closeHistoryDropdown() 覆盖关闭语义
             self._switch_to_conversation(target_id)
 
     def _call_llm_sync(self, messages: list, base_url: str, api_key: str,
@@ -5079,7 +5077,9 @@ class AIChatPanel(Gtk.Box):
         self.queue_resize()
 
     def is_popup_shown(self):
-        return bool(self._ai_history_popover and self._ai_history_popover.get_visible())
+        # ponytail: 下拉可见性已迁至 JS 侧（_closeHistoryDropdown），桥 get_visible
+        # 删除后此方法恒 False（与原实现 get_visible 恒 False 行为一致）
+        return False
 
     def reset_state(self):
         self._reset_ai_panel_silent()
