@@ -45,6 +45,8 @@ from system.event_types import (
     tool_calls_event,
 )
 from views.ai_chat_panel import AIChatPanel
+from views.clipboard_panel import ClipboardPanel
+from views.panel import SearchPanel
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -862,6 +864,57 @@ class TestAiEntryKeyCtrlShiftNavigation(unittest.TestCase):
         self.assertIs(ret, True, "普通 Down 仍应由输入历史消费")
         self.assertEqual(panel._ai_history_index, 1, "Down 应前进到更新一条历史")
         self.assertEqual(entry._buffer.text, "q2")
+
+
+class TestWindowKeyCtrlShiftZFullscreen(unittest.TestCase):
+    """Ctrl+Shift+Z 全屏切换契约（panel.py 分支 + clipboard_panel toggle/hide 顺序）。
+
+    覆盖（feat/ai-fullscreen-toggle 计划 T3）：
+    - 键事件 → toggle_ai_fullscreen 被调用且事件被消费（返回 True）
+    - C1：tab 0 时按 Z 必须先 _switch_tab(1) 再 toggle
+    - C2：全屏态 hide_ai_panel 必须先退出全屏再隐藏 AI 面板
+    """
+
+    def _make_window_panel(self, active_tab=1):
+        """无 GTK 的假 SearchPanel：__new__ + 桩属性（同 AIChatPanel 假件模式）。"""
+        panel = SearchPanel.__new__(SearchPanel)
+        panel._active_tab = active_tab
+        panel._clipboard_panel = SimpleNamespace(toggle_ai_fullscreen=mock.Mock())
+        return panel
+
+    def test_ctrl_shift_z_triggers_fullscreen_toggle(self):
+        """Ctrl+Shift+Z → toggle_ai_fullscreen 被调用且事件被消费（返回 True）。"""
+        panel = self._make_window_panel()
+        ret = panel._on_window_key(None, _key_event(Gdk.KEY_z, ctrl=True, shift=True))
+        self.assertIs(ret, True, "Ctrl+Shift+Z 必须被窗口级 handler 消费")
+        panel._clipboard_panel.toggle_ai_fullscreen.assert_called_once()
+
+    def test_ctrl_shift_z_switches_to_clipboard_tab_first(self):
+        """C1：tab 0 时按 Z 必须先切到 clipboard tab 再 toggle 全屏。"""
+        panel = self._make_window_panel(active_tab=0)
+        order = mock.Mock()
+        panel._switch_tab = order.switch_tab
+        panel._clipboard_panel.toggle_ai_fullscreen = order.toggle
+        ret = panel._on_window_key(None, _key_event(Gdk.KEY_z, ctrl=True, shift=True))
+        self.assertIs(ret, True)
+        order.assert_has_calls(
+            [mock.call.switch_tab(1), mock.call.toggle()]
+        )
+        self.assertEqual(panel._clipboard_panel.toggle_ai_fullscreen.call_count, 1)
+
+    def test_hide_ai_panel_exits_fullscreen_first(self):
+        """C2：全屏态 hide_ai_panel 必须先退出全屏（toggle）再隐藏 AI 面板。"""
+        cp = ClipboardPanel.__new__(ClipboardPanel)
+        cp._ai_fullscreen = True
+        order = mock.Mock()
+        cp.toggle_ai_fullscreen = order.toggle_ai_fullscreen
+        cp._ai_chat_panel = SimpleNamespace(hide_panel=order.hide_panel)
+        cp.hide_ai_panel()
+        order.assert_has_calls(
+            [mock.call.toggle_ai_fullscreen(), mock.call.hide_panel()]
+        )
+        self.assertEqual(order.toggle_ai_fullscreen.call_count, 1)
+        self.assertEqual(order.hide_panel.call_count, 1)
 
 
 if __name__ == "__main__":
