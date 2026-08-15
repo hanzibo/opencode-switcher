@@ -153,6 +153,18 @@ class TestHeaderShell(unittest.TestCase):
         ):
             self.assertIn(fn, self.shell, f"chat.js 缺少 {fn}")
 
+    def test_phantom_clear_deleted_removed(self):
+        # 回归守卫（remove-ai-history-clear-button）："清空已删除"是幻影按钮
+        # （调 _reset_ai_panel_silent 纯 UI 重置，有数据丢失副作用），按钮行、
+        # historyAction('clear') 接线与 history-clear CSS/JS 引用均已永久移除。
+        # 断言必须命中真实模板/渲染产物——chat.js 已内联进 shell，故四断言均查 self.shell。
+        # 若未来重新引入该按钮，此测试立即红灯。
+        self.assertNotIn("清空已删除", self.shell, "幻影按钮'清空已删除'已移除，不应出现在模板中")
+        self.assertNotIn("historyAction('clear')", self.shell, "clear 接线已移除，不应出现在 chat.js 中")
+        self.assertNotIn("history-clear", self.shell, "history-clear CSS/JS 引用已移除")
+        # 编辑按钮保留的回归锚点：historyAction 函数仍被 edit 按钮使用
+        self.assertIn("historyAction('edit')", self.shell, "编辑按钮保留，edit 接线应存在")
+
     def test_theme_accessor_key_sets_consistent(self):
         # T5 键集硬化：3 主题 × 各 accessor 键集跨主题一致 + 无 KeyError
         # （未来某主题漏配键，accessor 抛 KeyError 或键集不一致即触发）
