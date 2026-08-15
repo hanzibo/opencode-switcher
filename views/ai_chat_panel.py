@@ -342,6 +342,7 @@ class AIChatPanel(Gtk.Box):
         self._ai_active_model_info = None
         self._ai_html_cache = {}
         self._ai_running_convs = {}
+        self._deleted_conversation_ids = set()
         self._last_rendered_html = ""
         # 已装载外壳指纹 (theme, pygments_css)，须与 ai_html_template 外壳缓存键一致；None=未装载
         self._loaded_shell_fingerprint = None
@@ -1691,6 +1692,8 @@ class AIChatPanel(Gtk.Box):
 
     def _render_background_conversation(self, conv_id: str, target_messages: list, state):
         """渲染背景对话（非当前可见），只更新 cache 不操作 WebView。"""
+        if conv_id in getattr(self, "_deleted_conversation_ids", set()):
+            return
         output = render_turn(TurnRenderInput(
             turn_messages=target_messages,
             all_messages=target_messages,
@@ -1849,6 +1852,8 @@ class AIChatPanel(Gtk.Box):
         测试）时反查 ``_ai_running_convs``。过期/背景会话的流结束一律不终结当前
         可见会话。
         """
+        if conv_id in getattr(self, "_deleted_conversation_ids", set()):
+            return
         if conv_id is None:
             for cid, st in list(getattr(self, "_ai_running_convs", {}).items()):
                 if st.get("req_id") == req_id:
@@ -2390,6 +2395,10 @@ class AIChatPanel(Gtk.Box):
                     for cid in ids_str.split(","):
                         if cid:
                             self._delete_conversation_cleanup(cid)
+                            # 删除当前激活会话：受控重置面板（换新 id），防幽灵条目/复活。
+                            # 天然恰一次：reset 换新 id 后无后续匹配。
+                            if cid == self._ai_conversation_id:
+                                self._reset_ai_panel_silent()
                     if getattr(self, "_ai_history_popover", None) is not None:
                         self._ai_history_popover.refresh_dropdown()
                 return True
@@ -2398,6 +2407,9 @@ class AIChatPanel(Gtk.Box):
                 cid = qs.get("id", [None])[0]
                 if cid is not None:
                     self._delete_conversation_cleanup(cid)
+                    # 删除当前激活会话：受控重置面板（换新 id），防幽灵条目/复活
+                    if cid == self._ai_conversation_id:
+                        self._reset_ai_panel_silent()
                     # 删除后刷新下拉列表（数据已变，UI 同步）
                     if getattr(self, "_ai_history_popover", None) is not None:
                         self._ai_history_popover.refresh_dropdown()
@@ -2746,12 +2758,17 @@ class AIChatPanel(Gtk.Box):
             return
         if conv_id in self._ai_running_convs:
             self._cancel_streams_for_conversation(conv_id)
+        # pop 必须在 cancel 之后（cancel 内部用 .get() 读 state）：
+        # 清理运行状态，避免删除激活会话后残留幽灵条目、流结束被误收尾。
+        self._ai_running_convs.pop(conv_id, None)
         try:
             from tool_registry.bash import close_bash_session
             close_bash_session(conv_id)
         except Exception:
             pass
         self._conversation_store.delete_conversation(conv_id)
+        # tombstone：标记已删除 id，后续流结束/后台渲染/保存一律短路，防复活
+        getattr(self, "_deleted_conversation_ids", set()).add(conv_id)
         self._ai_html_cache.pop(conv_id, None)
 
     def _on_send_clicked(self, _btn=None):
@@ -4409,6 +4426,8 @@ class AIChatPanel(Gtk.Box):
     def _save_current_conversation(self, model_snapshot: Dict[str, Any],
                                     preserve_updated_at: bool = False):
         """Save or update the current active conversation to the store, preserving its title."""
+        if self._ai_conversation_id in getattr(self, "_deleted_conversation_ids", set()):
+            return
         local_title = "New Conversation"
         if self._ai_messages:
             local_title = _extract_local_title(
