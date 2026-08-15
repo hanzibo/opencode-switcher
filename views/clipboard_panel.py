@@ -168,6 +168,9 @@ def _spawn_image_capture_thread(store, on_done=None):
 
 
 class ClipboardPanel(Gtk.Box):
+    # 全屏切换隐藏/恢复的左区 3 件套（类别栏/折叠按钮/分隔线），通过 getattr(self, name) 访问
+    _AI_FULLSCREEN_LEFT_ZONES = ("_cat_vbox", "_sidebar_toggle", "_cat_sep")
+
     # Slash commands available in the AI chat input box (command, description)
     _AI_COMMANDS = [
         ("/new", "新对话"),
@@ -389,7 +392,7 @@ class ClipboardPanel(Gtk.Box):
         # AI 全屏切换（Ctrl+Shift+Z）：隐藏左侧两区，AI 面板铺满；恢复时还原 paned position
         self._ai_fullscreen = False
         self._ai_fullscreen_saved_pos = None
-        self._ai_fullscreen_cat_visible = True
+        self._ai_fullscreen_saved_cat_visible = True
 
     def _get_active_category(self):
         """Return the CustomCategory object for the active category, or None if Clipboard."""
@@ -465,39 +468,49 @@ class ClipboardPanel(Gtk.Box):
             btn.set_label(show_label)
             btn.set_tooltip_text(show_tip)
 
+    def _set_left_zones(self, visible: bool):
+        """全屏切换时统一隐藏/恢复左区 3 件套（类别栏/折叠按钮/分隔线）。"""
+        for name in self._AI_FULLSCREEN_LEFT_ZONES:
+            w = getattr(self, name)
+            w.set_no_show_all(not visible)
+            if visible:
+                w.show()
+            else:
+                w.hide()
+
     def toggle_ai_fullscreen(self):
         """Ctrl+Shift+Z：AI 对话框全屏/恢复切换。
 
-        进入：隐藏左侧类别栏(_cat_vbox/_sidebar_toggle/_cat_sep)与历史/模板区
-        (_content_vbox)，AI 面板铺满整个面板宽度；AI 未打开时先自动打开。
+        进入：隐藏左侧类别栏/折叠按钮/分隔线与历史/模板区(_content_vbox)，AI 面板
+        铺满整个面板宽度；AI 未打开时先自动打开。
         退出：还原 paned position（宽度记忆）并恢复左侧区域。
-        持久语义：全屏态跨 hide/show 持久、跨 tab 持久（Oracle 验证确认）。
+        持久语义：全屏态跨 hide/show 持久、跨 tab 持久。
         """
         if not self._ai_fullscreen:
             # 进入全屏
             if not self._ai_chat_panel.is_visible():
-                self._ai_chat_panel.open_ai_and_load_recent()  # R2：AI 未开先自动打开
-            self._ai_fullscreen_saved_pos = self._content_paned.get_position()  # R3：宽度记忆
-            self._ai_fullscreen_cat_visible = self._cat_vbox.get_visible()
-            for w in (self._cat_vbox, self._sidebar_toggle, self._cat_sep):
-                w.set_no_show_all(True)
-                w.hide()
+                try:
+                    self._ai_chat_panel.open_ai_and_load_recent()  # AI 未开先自动打开
+                except Exception as e:
+                    print(f"[opencode-switcher] Failed to open AI panel for fullscreen: {e}", flush=True)
+            self._ai_fullscreen_saved_pos = self._content_paned.get_position()  # 宽度记忆
+            self._ai_fullscreen_saved_cat_visible = self._cat_vbox.get_visible()
+            self._set_left_zones(False)
             self._content_paned.remove(self._content_vbox)  # GTK3 paned hide 不可靠，remove 后 pack2 自动填满
             self._ai_fullscreen = True
-            self._content_paned.queue_resize()  # 显式 resize 保险（Oracle 优化①）
+            self._content_paned.queue_resize()  # 显式 resize：OffscreenWindow 弱泵送时保险
         else:
             # 退出全屏：还原 pack1 + position + 左区
             self._content_paned.pack1(self._content_vbox, resize=True, shrink=False)
-            self._content_paned.set_position(self._ai_fullscreen_saved_pos)
-            for w in (self._cat_vbox, self._sidebar_toggle, self._cat_sep):
-                w.set_no_show_all(False)
-                w.show()
-            if not self._ai_fullscreen_cat_visible:
+            pos = self._ai_fullscreen_saved_pos if self._ai_fullscreen_saved_pos is not None else int(PANEL_WIDTH * 0.5)
+            self._content_paned.set_position(pos)
+            self._set_left_zones(True)
+            if not self._ai_fullscreen_saved_cat_visible:
                 # 全屏前类别栏已折叠：保持折叠
                 self._cat_vbox.hide()
                 self._cat_sep.hide()
             self._ai_fullscreen = False
-            self._content_paned.queue_resize()  # 显式 resize 保险（Oracle 优化①）
+            self._content_paned.queue_resize()  # 显式 resize：OffscreenWindow 弱泵送时保险
 
     def _on_sep_draw(self, widget, cr):
         try:
