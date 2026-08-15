@@ -2402,9 +2402,7 @@ class AIChatPanel(Gtk.Box):
                     if getattr(self, "_ai_history_popover", None) is not None:
                         self._ai_history_popover.refresh_dropdown()
                 return True
-            if uri.startswith("opencode://history-clear"):
-                self._reset_ai_panel_silent()
-                return True
+            # ponytail: history-clear removed — phantom button deleted 2026-08（按钮调用的 _reset_ai_panel_silent 是 UI 重置非清空，且存在未保存对话丢失风险）
             if uri.startswith("opencode://history-edit"):
                 # 二期：编辑模式（多选删除）
                 return True
