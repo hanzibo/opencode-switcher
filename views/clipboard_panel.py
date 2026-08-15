@@ -386,6 +386,11 @@ class ClipboardPanel(Gtk.Box):
         # Rebuild category list after all UI components (especially _content_list) are initialized
         self._rebuild_category_list()
 
+        # AI 全屏切换（Ctrl+Shift+Z）：隐藏左侧两区，AI 面板铺满；恢复时还原 paned position
+        self._ai_fullscreen = False
+        self._ai_fullscreen_saved_pos = None
+        self._ai_fullscreen_cat_visible = True
+
     def _get_active_category(self):
         """Return the CustomCategory object for the active category, or None if Clipboard."""
         if self._active_category_id == "__clipboard__":
@@ -459,6 +464,40 @@ class ClipboardPanel(Gtk.Box):
             sep.show()
             btn.set_label(show_label)
             btn.set_tooltip_text(show_tip)
+
+    def toggle_ai_fullscreen(self):
+        """Ctrl+Shift+Z：AI 对话框全屏/恢复切换。
+
+        进入：隐藏左侧类别栏(_cat_vbox/_sidebar_toggle/_cat_sep)与历史/模板区
+        (_content_vbox)，AI 面板铺满整个面板宽度；AI 未打开时先自动打开。
+        退出：还原 paned position（宽度记忆）并恢复左侧区域。
+        持久语义：全屏态跨 hide/show 持久、跨 tab 持久（Oracle 验证确认）。
+        """
+        if not self._ai_fullscreen:
+            # 进入全屏
+            if not self._ai_chat_panel.is_visible():
+                self._ai_chat_panel.open_ai_and_load_recent()  # R2：AI 未开先自动打开
+            self._ai_fullscreen_saved_pos = self._content_paned.get_position()  # R3：宽度记忆
+            self._ai_fullscreen_cat_visible = self._cat_vbox.get_visible()
+            for w in (self._cat_vbox, self._sidebar_toggle, self._cat_sep):
+                w.set_no_show_all(True)
+                w.hide()
+            self._content_paned.remove(self._content_vbox)  # GTK3 paned hide 不可靠，remove 后 pack2 自动填满
+            self._ai_fullscreen = True
+            self._content_paned.queue_resize()  # 显式 resize 保险（Oracle 优化①）
+        else:
+            # 退出全屏：还原 pack1 + position + 左区
+            self._content_paned.pack1(self._content_vbox, resize=True, shrink=False)
+            self._content_paned.set_position(self._ai_fullscreen_saved_pos)
+            for w in (self._cat_vbox, self._sidebar_toggle, self._cat_sep):
+                w.set_no_show_all(False)
+                w.show()
+            if not self._ai_fullscreen_cat_visible:
+                # 全屏前类别栏已折叠：保持折叠
+                self._cat_vbox.hide()
+                self._cat_sep.hide()
+            self._ai_fullscreen = False
+            self._content_paned.queue_resize()  # 显式 resize 保险（Oracle 优化①）
 
     def _on_sep_draw(self, widget, cr):
         try:
@@ -1323,6 +1362,9 @@ class ClipboardPanel(Gtk.Box):
         return self._ai_chat_panel.is_popup_shown()
 
     def hide_ai_panel(self):
+        """隐藏 AI 面板（Ctrl+Shift+X 关闭路径）；全屏态下先退出全屏避免空白 void。"""
+        if getattr(self, "_ai_fullscreen", False):
+            self.toggle_ai_fullscreen()   # 退出路径不调 hide_ai_panel，无递归
         self._ai_chat_panel.hide_panel()
 
     def shutdown_mcp(self):
