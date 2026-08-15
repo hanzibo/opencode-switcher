@@ -1402,6 +1402,13 @@ class SearchPanel:
                     self._switch_tab(1)
                 self._clipboard_panel.start_new_conversation()
                 return True
+        if keyname in ("z", "Z") and (event.state & Gdk.ModifierType.CONTROL_MASK) and (event.state & Gdk.ModifierType.SHIFT_MASK):
+            # Ctrl+Shift+Z：AI 对话框全屏/恢复切换（仅面板打开时监听，非系统快捷键）
+            if self._clipboard_panel:
+                if self._active_tab != 1:
+                    self._switch_tab(1)   # C1：tab 0 时先切到 clipboard tab（对齐 Ctrl+Shift+N 分支 :1400-1401）
+                self._clipboard_panel.toggle_ai_fullscreen()
+                return True
         is_ctrl_shift = (
             (event.state & Gdk.ModifierType.CONTROL_MASK) and
             (event.state & Gdk.ModifierType.SHIFT_MASK)
