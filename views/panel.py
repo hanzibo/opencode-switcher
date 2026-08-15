@@ -1385,6 +1385,14 @@ class SearchPanel:
             return True
         return False
 
+    def _ensure_clipboard_tab(self) -> bool:
+        """确保当前在 clipboard tab 且面板可用；不可用返回 False（调用方跳过）。"""
+        if not self._clipboard_panel:
+            return False
+        if self._active_tab != 1:
+            self._switch_tab(1)
+        return True
+
     def _on_window_key(self, _widget, event):
         keyname = Gdk.keyval_name(event.keyval)
         if keyname == "Escape":
@@ -1397,17 +1405,14 @@ class SearchPanel:
             self._switch_tab(1)
             return True
         if keyname in ("n", "N") and (event.state & Gdk.ModifierType.CONTROL_MASK) and (event.state & Gdk.ModifierType.SHIFT_MASK):
-            if self._clipboard_panel:
-                if self._active_tab != 1:
-                    self._switch_tab(1)
+            if self._ensure_clipboard_tab():
                 self._clipboard_panel.start_new_conversation()
                 return True
         if keyname in ("z", "Z") and (event.state & Gdk.ModifierType.CONTROL_MASK) and (event.state & Gdk.ModifierType.SHIFT_MASK):
-            # Ctrl+Shift+Z：AI 对话框全屏/恢复切换（仅面板打开时监听，非系统快捷键）
-            if self._clipboard_panel:
-                if self._active_tab != 1:
-                    self._switch_tab(1)   # C1：tab 0 时先切到 clipboard tab（对齐 Ctrl+Shift+N 分支 :1400-1401）
-                self._clipboard_panel.toggle_ai_fullscreen()
+            # Ctrl+Shift+Z：AI 对话框全屏/恢复切换（仅面板打开时监听，非系统快捷键）。
+            # idle_add 延迟：remove/pack1 属树结构修改，不在 key-press 回调内同步执行（AGENTS.md 铁律）
+            if self._ensure_clipboard_tab():
+                GLib.idle_add(self._clipboard_panel.toggle_ai_fullscreen)
                 return True
         is_ctrl_shift = (
             (event.state & Gdk.ModifierType.CONTROL_MASK) and
