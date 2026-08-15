@@ -1356,11 +1356,7 @@ function historyDeleteSelected() {
     });
 }
 function historyAction(kind) {
-    if (kind === 'clear') {
-        askConfirm('清空已删除的对话？', function () {
-            window.location = 'opencode://history-clear';
-        });
-    } else if (kind === 'edit') {
+    if (kind === 'edit') {
         toggleHistoryEditMode();
     }
 }

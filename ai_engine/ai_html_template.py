@@ -245,7 +245,6 @@ def _get_html_shell(theme_name: str, pygments_css: str) -> str:
         <div class="ai-history-actions">
             <button class="ai-history-action" id="history-select-all-btn" onclick="historySelectAll()" style="display:none">全选</button>
             <button class="ai-history-action" id="history-delete-sel-btn" onclick="historyDeleteSelected()" style="display:none">删除选中</button>
-            <button class="ai-history-action" onclick="historyAction('clear')">清空已删除</button>
             <button class="ai-history-action" id="history-edit-btn" onclick="historyAction('edit')">编辑</button>
         </div>
     </div>
