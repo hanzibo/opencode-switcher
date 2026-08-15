@@ -24,6 +24,15 @@
 
 复用既有无头假面板模式：``AIChatPanel.__new__`` + 桩属性 + 假 WebView
 （同 tests/test_system_prompt.py 与 tests/test_webview_reload_guard.py）。
+
+该文件现同时是 **Ctrl+Shift 热键契约的集散地**（feat/ai-fullscreen-toggle 计划 T3）：
+- Ctrl+Shift+N / Ctrl+Shift+Z：均经 ``_ensure_clipboard_tab()`` 确保位于 clipboard tab
+  （面板可用 + ``_active_tab != 1`` 时同步 ``_switch_tab(1)``）
+- Ctrl+Shift+Z 全屏切换契约：窗口级 handler 消费事件（返回 True），``toggle_ai_fullscreen``
+  经 ``GLib.idle_add`` 延迟调度（树结构修改不得在 key-press 回调内同步执行——AGENTS.md 铁律）；
+  配套状态机断言覆盖 toggle 三态：进入（隐藏左区 3 件套 + 保存 paned 宽度）、
+  退出（还原 position + 恢复左区）、折叠态快照还原（进入前类别栏已折叠 → 退出后仍隐藏）
+- Ctrl+Shift+Up/Down：AI 面板打开时导航会话（``_on_ai_entry_key_press`` 回归覆盖）
 """
 import os
 import threading
@@ -882,25 +891,111 @@ class TestWindowKeyCtrlShiftZFullscreen(unittest.TestCase):
         panel._clipboard_panel = SimpleNamespace(toggle_ai_fullscreen=mock.Mock())
         return panel
 
+    def _make_fullscreen_panel(self, cat_visible=True):
+        """无 GTK 的 ClipboardPanel：__new__ + 桩 paned/左区/AI 面板。"""
+        cp = ClipboardPanel.__new__(ClipboardPanel)
+        cp._ai_fullscreen = False
+        cp._ai_fullscreen_saved_pos = None
+        cp._ai_fullscreen_saved_cat_visible = True
+        cp._content_paned = SimpleNamespace(
+            get_position=mock.Mock(return_value=660),
+            set_position=mock.Mock(),
+            pack1=mock.Mock(),
+            remove=mock.Mock(),
+            queue_resize=mock.Mock(),
+        )
+        cp._content_vbox = mock.Mock()
+        cp._cat_vbox = SimpleNamespace(
+            get_visible=mock.Mock(return_value=cat_visible),
+            set_no_show_all=mock.Mock(), hide=mock.Mock(), show=mock.Mock(),
+        )
+        cp._sidebar_toggle = SimpleNamespace(set_no_show_all=mock.Mock(), hide=mock.Mock(), show=mock.Mock())
+        cp._cat_sep = SimpleNamespace(set_no_show_all=mock.Mock(), hide=mock.Mock(), show=mock.Mock())
+        cp._ai_chat_panel = SimpleNamespace(
+            is_visible=mock.Mock(return_value=True),
+            open_ai_and_load_recent=mock.Mock(),
+        )
+        return cp
+
     def test_ctrl_shift_z_triggers_fullscreen_toggle(self):
-        """Ctrl+Shift+Z → toggle_ai_fullscreen 被调用且事件被消费（返回 True）。"""
+        """Ctrl+Shift+Z → 事件消费 + toggle_ai_fullscreen 经 idle_add 调度。"""
         panel = self._make_window_panel()
-        ret = panel._on_window_key(None, _key_event(Gdk.KEY_z, ctrl=True, shift=True))
+        captured = []
+        with mock.patch(
+            "views.panel.GLib.idle_add", side_effect=lambda cb, *a: captured.append((cb, a))
+        ):
+            ret = panel._on_window_key(None, _key_event(Gdk.KEY_z, ctrl=True, shift=True))
         self.assertIs(ret, True, "Ctrl+Shift+Z 必须被窗口级 handler 消费")
+        self.assertEqual(len(captured), 1, "toggle 必须经 idle_add 恰好调度一次")
+        cb, args = captured[0]
+        self.assertEqual(
+            cb, panel._clipboard_panel.toggle_ai_fullscreen,
+            "idle_add 必须调度 toggle_ai_fullscreen",
+        )
+        cb(*args)  # 无主循环不执行回调 → 手动执行，验证真实调用
         panel._clipboard_panel.toggle_ai_fullscreen.assert_called_once()
 
     def test_ctrl_shift_z_switches_to_clipboard_tab_first(self):
-        """C1：tab 0 时按 Z 必须先切到 clipboard tab 再 toggle 全屏。"""
+        """C1：tab 0 时按 Z 先同步切 tab，toggle 再经 idle_add 延迟执行。"""
         panel = self._make_window_panel(active_tab=0)
         order = mock.Mock()
         panel._switch_tab = order.switch_tab
         panel._clipboard_panel.toggle_ai_fullscreen = order.toggle
-        ret = panel._on_window_key(None, _key_event(Gdk.KEY_z, ctrl=True, shift=True))
+        captured = []
+        with mock.patch(
+            "views.panel.GLib.idle_add", side_effect=lambda cb, *a: captured.append((cb, a))
+        ):
+            ret = panel._on_window_key(None, _key_event(Gdk.KEY_z, ctrl=True, shift=True))
         self.assertIs(ret, True)
-        order.assert_has_calls(
-            [mock.call.switch_tab(1), mock.call.toggle()]
-        )
-        self.assertEqual(panel._clipboard_panel.toggle_ai_fullscreen.call_count, 1)
+        # _ensure_clipboard_tab 同步切 tab；toggle 被延迟，回调执行前不得调用
+        order.assert_has_calls([mock.call.switch_tab(1)])
+        order.toggle.assert_not_called()
+        self.assertEqual(len(captured), 1, "toggle 必须经 idle_add 恰好调度一次")
+        cb, args = captured[0]
+        self.assertIs(cb, order.toggle, "idle_add 必须调度 toggle_ai_fullscreen")
+        cb(*args)  # 手动执行（无主循环）→ 验证顺序：先切 tab 再 toggle
+        order.assert_has_calls([mock.call.switch_tab(1), mock.call.toggle()])
+
+    def test_fullscreen_enter_hides_left_zones_and_saves_pos(self):
+        """进入全屏：flag 置位 + 保存 paned 宽度 + 3 左区隐藏 + content 区 remove。"""
+        cp = self._make_fullscreen_panel()
+        cp.toggle_ai_fullscreen()
+        self.assertTrue(cp._ai_fullscreen, "进入后必须置 _ai_fullscreen=True")
+        self.assertEqual(cp._ai_fullscreen_saved_pos, 660, "进入时必须保存 paned 宽度")
+        for w in (cp._cat_vbox, cp._sidebar_toggle, cp._cat_sep):
+            w.set_no_show_all.assert_called_once_with(True)
+            w.hide.assert_called_once()
+        cp._content_paned.remove.assert_called_once()
+        cp._content_paned.pack1.assert_not_called()
+        # AI 面板本就可见 → 不得重复自动打开
+        cp._ai_chat_panel.open_ai_and_load_recent.assert_not_called()
+
+    def test_fullscreen_exit_restores_position_and_left_zones(self):
+        """退出全屏：还原 paned position + 3 左区 show + flag 复位。"""
+        cp = self._make_fullscreen_panel()
+        cp.toggle_ai_fullscreen()  # 进入
+        cp.toggle_ai_fullscreen()  # 退出
+        self.assertFalse(cp._ai_fullscreen, "退出后必须复位 _ai_fullscreen=False")
+        cp._content_paned.set_position.assert_called_once_with(660)
+        cp._content_paned.pack1.assert_called_once()
+        for w in (cp._cat_vbox, cp._sidebar_toggle, cp._cat_sep):
+            w.set_no_show_all.assert_called_with(False)
+            w.show.assert_called_once()
+        cp._content_paned.queue_resize.assert_called()
+
+    def test_fullscreen_exit_preserves_collapsed_categories(self):
+        """折叠态快照还原：进入前类别栏已折叠 → 退出后仍保持隐藏。"""
+        cp = self._make_fullscreen_panel(cat_visible=False)
+        cp.toggle_ai_fullscreen()  # 进入：快照 _ai_fullscreen_saved_cat_visible=False
+        self.assertFalse(cp._ai_fullscreen_saved_cat_visible, "折叠态必须被快照保存")
+        cp._cat_vbox.hide.reset_mock()
+        cp._cat_sep.hide.reset_mock()
+        cp._sidebar_toggle.hide.reset_mock()
+        cp.toggle_ai_fullscreen()  # 退出：_set_left_zones(True) show 后按快照特例再 hide
+        self.assertFalse(cp._ai_fullscreen)
+        cp._cat_vbox.hide.assert_called_once()  # 折叠态还原：类别栏仍隐藏
+        cp._cat_sep.hide.assert_called_once()
+        cp._sidebar_toggle.hide.assert_not_called()  # 折叠按钮不受折叠快照影响
 
     def test_hide_ai_panel_exits_fullscreen_first(self):
         """C2：全屏态 hide_ai_panel 必须先退出全屏（toggle）再隐藏 AI 面板。"""
