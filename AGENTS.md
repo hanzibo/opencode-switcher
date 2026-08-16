@@ -193,6 +193,7 @@ Dynamically add/remove `.subagent-status-bar` class on FlowBox before `hide()`/`
 - **`console.error('opencode-switcher: ...')`** prefix in GNOME extension JS error messages.
 - **Settings dialog**: factory pattern `show_settings_dialog(parent, on_dialog_shown, on_dialog_hidden)`. Reuses focus-guard `_dialog_active` flag.
 - **No linter/formatter/CI**: manual discipline; validate changes with `unittest`.
+- **Merge 前更新代码图谱**: 开发分支改动完成后、合并回 master 之前，运行 `codegraph sync` 刷新 `.codegraph/` 索引（符号链接指向 `~/.omo/codegraph/projects/opencode-switcher-*/`）。这是与 merge 子代理同批次的收尾步骤——索引滞后会误导后续会话的 codegraph 查询。索引本身不提交（`.codegraph/` 是外部符号链接）。
 
 ## Postmortem Summary: `data-tool-call-id` Broke Tool Card Markdown
 
