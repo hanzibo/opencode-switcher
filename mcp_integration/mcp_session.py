@@ -135,8 +135,13 @@ class MCPSession:
         str
             Server 描述信息，如 "filesystem v0.1.0"。
         """
+        # 协议版本：优先与底层传输层配置的版本保持一致（如 HttpTransport 的 MCP-Protocol-Version 头），
+        # 避免 HTTP 请求头与 JSON body 中的协议版本冲突导致服务端拒绝会话。
+        transport_proto = getattr(getattr(self._jrpc, "_transport", None), "protocol_version", None)
+        init_version = transport_proto if transport_proto in SUPPORTED_MCP_VERSIONS else "2025-11-25"
+
         result = await self._jrpc.request("initialize", {
-            "protocolVersion": SUPPORTED_MCP_VERSIONS[0],
+            "protocolVersion": init_version,
             "capabilities": {},
             "clientInfo": self._client_info,
         })

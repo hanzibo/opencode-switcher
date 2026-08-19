@@ -178,6 +178,7 @@ class HttpTransport(BaseTransport):
 
         # 响应缓冲：_reader() 从 queue 中读，send_line() 将响应压入
         self._response_queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+        self._active_sse_tasks: set[asyncio.Task] = set()
         self._closed = False
 
     # ── 生命周期 ─────────────────────────────────────────────────
@@ -227,6 +228,12 @@ class HttpTransport(BaseTransport):
     async def disconnect(self) -> None:
         """关闭连接池。"""
         self._closed = True
+        # 取消所有正在进行的 SSE 消费任务
+        for task in list(self._active_sse_tasks):
+            if not task.done():
+                task.cancel()
+        self._active_sse_tasks.clear()
+
         if self._session:
             await self._session.close()
             self._session = None
@@ -295,74 +302,90 @@ class HttpTransport(BaseTransport):
                     raise HttpTransportAuthError(f"认证凭据获取失败: {e}")
 
             try:
-                async with self._session.post(
+                resp = await self._session.post(
                     self._url,
                     data=payload.encode("utf-8"),
                     headers=request_headers or None,
-                ) as resp:
-                    status = resp.status
+                )
+                status = resp.status
 
-                    # ── OAuth challenge：尝试自动重认证并重试一次 ──
-                    if (
-                        status in (401, 403)
-                        and self._auth_provider is not None
-                        and retry_count < max_auth_retries
-                    ):
-                        www_authenticate = resp.headers.get("WWW-Authenticate", "")
-                        body = await resp.read()  # 消费 body，释放连接
-                        try:
-                            new_headers = await self._auth_provider.handle_challenge(
-                                www_authenticate
-                            )
-                        except Exception as e:
-                            raise HttpTransportAuthError(
-                                f"自动认证失败: {e}"
-                            )
-                        if new_headers:
-                            retry_count += 1
-                            logger.info(
-                                "自动认证完成，重试请求: %s (attempt %d)",
-                                self._url, retry_count,
-                            )
-                            continue
+                # ── OAuth challenge：尝试自动重认证并重试一次 ──
+                if (
+                    status in (401, 403)
+                    and self._auth_provider is not None
+                    and retry_count < max_auth_retries
+                ):
+                    www_authenticate = resp.headers.get("WWW-Authenticate", "")
+                    body = await resp.read()  # 消费 body，释放连接
+                    resp.close()
+                    try:
+                        new_headers = await self._auth_provider.handle_challenge(
+                            www_authenticate
+                        )
+                    except Exception as e:
                         raise HttpTransportAuthError(
-                            f"HTTP {status}: "
-                            f"{body.decode('utf-8', errors='replace')[:200]}"
+                            f"自动认证失败: {e}"
                         )
-
-                    # ── 认证错误（最终） ──
-                    if status in (401, 403):
-                        body = await resp.read()
-                        raise HttpTransportAuthError(
-                            f"HTTP {status}: {body.decode('utf-8', errors='replace')[:200]}"
+                    if new_headers:
+                        retry_count += 1
+                        logger.info(
+                            "自动认证完成，重试请求: %s (attempt %d)",
+                            self._url, retry_count,
                         )
+                        continue
+                    raise HttpTransportAuthError(
+                        f"HTTP {status}: "
+                        f"{body.decode('utf-8', errors='replace')[:200]}"
+                    )
 
-                    # ── 非预期错误 ──
-                    if status >= 400:
-                        body = await resp.read()
-                        raise HttpTransportStatusError(
-                            status, body.decode("utf-8", errors="replace")
-                        )
+                # ── 认证错误（最终） ──
+                if status in (401, 403):
+                    body = await resp.read()
+                    resp.close()
+                    raise HttpTransportAuthError(
+                        f"HTTP {status}: {body.decode('utf-8', errors='replace')[:200]}"
+                    )
 
-                    # ── Notification（202 Accepted，无响应体） ──
-                    if status == 202 and is_notification:
-                        # 无响应需要读取，直接返回
-                        return
+                # ── 非预期错误 ──
+                if status >= 400:
+                    body = await resp.read()
+                    resp.close()
+                    raise HttpTransportStatusError(
+                        status, body.decode("utf-8", errors="replace")
+                    )
 
-                    # ── 读取响应 ──
-                    content_type = resp.headers.get("Content-Type", "").lower()
-
-                    # 从响应头提取 session ID（2025-11-25 协议）
-                    resp_session_id = resp.headers.get("Mcp-Session-Id", "")
-                    if resp_session_id and not self._session_id:
-                        self._session_id = resp_session_id
-                        logger.debug("HttpTransport 收到 session_id: %s", resp_session_id)
-
-                    if "text/event-stream" in content_type:
-                        await self._handle_sse_response(resp)
-                    else:
-                        await self._handle_json_response(resp)
+                # ── Notification（202 Accepted，无响应体） ──
+                if status == 202 and is_notification:
+                    resp.close()
+                    # 无响应需要读取，直接返回
                     return
+
+                # ── 读取响应 ──
+                content_type = resp.headers.get("Content-Type", "").lower()
+
+                # 从响应头提取 session ID（2025-11-25 协议）
+                resp_session_id = resp.headers.get("Mcp-Session-Id", "")
+                if resp_session_id and not self._session_id:
+                    self._session_id = resp_session_id
+                    logger.debug("HttpTransport 收到 session_id: %s", resp_session_id)
+
+                if "text/event-stream" in content_type:
+                    # 异步消费 SSE 流，避免阻塞 send_line 并保持流存活
+                    async def _consume_sse(r):
+                        try:
+                            await self._handle_sse_response(r)
+                        finally:
+                            r.close()
+
+                    task = asyncio.create_task(_consume_sse(resp))
+                    self._active_sse_tasks.add(task)
+                    task.add_done_callback(self._active_sse_tasks.discard)
+                else:
+                    try:
+                        await self._handle_json_response(resp)
+                    finally:
+                        resp.close()
+                return
 
             except (HttpTransportAuthError, HttpTransportStatusError):
                 raise
