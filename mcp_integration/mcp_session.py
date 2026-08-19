@@ -10,10 +10,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from mcp_integration.json_rpc import JsonRpcSession
 
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════
 
 # 按从新到旧排列，协商时取双方支持的最新版本
-SUPPORTED_MCP_VERSIONS = ["2025-11-25", "2025-03-26"]
+SUPPORTED_MCP_VERSIONS = ["2026-07-28", "2025-11-25", "2025-03-26", "2024-11-05"]
 
 DEFAULT_CLIENT_INFO = {
     "name": "opencode-switcher",
@@ -106,6 +107,14 @@ class MCPSession:
         self.server_info: MCPServerInfo = MCPServerInfo()
         self._negotiated_version: Optional[str] = None
         self._tools_cache: Optional[List[dict]] = None
+        self._on_tools_changed_callbacks: List[Callable[[], Any]] = []
+
+        # 订阅服务端工具变更通知
+        if hasattr(self._jrpc, "register_notification_handler"):
+            self._jrpc.register_notification_handler(
+                "notifications/tools/list_changed",
+                self._on_tools_list_changed_notification,
+            )
 
     # ── 生命周期 ────────────────────────────────────────────────
 
@@ -159,26 +168,65 @@ class MCPSession:
 
     async def close(self) -> None:
         """关闭会话。"""
+        if hasattr(self._jrpc, "unregister_notification_handler"):
+            self._jrpc.unregister_notification_handler(
+                "notifications/tools/list_changed",
+                self._on_tools_list_changed_notification,
+            )
         await self._jrpc.close()
 
     @property
     def is_connected(self) -> bool:
         return self._jrpc.is_connected
 
+    # ── 工具变更通知订阅 ────────────────────────────────────────
+
+    def add_tools_changed_callback(self, cb: Callable[[], Any]) -> None:
+        """注册工具列表变更回调。"""
+        if cb not in self._on_tools_changed_callbacks:
+            self._on_tools_changed_callbacks.append(cb)
+
+    def remove_tools_changed_callback(self, cb: Callable[[], Any]) -> None:
+        """注销工具列表变更回调。"""
+        if cb in self._on_tools_changed_callbacks:
+            self._on_tools_changed_callbacks.remove(cb)
+
+    def _on_tools_list_changed_notification(self, params: Dict[str, Any]) -> None:
+        """处理服务端 notifications/tools/list_changed 通知。"""
+        logger.info("收到 MCP Server (%s) 工具变更通知，清空工具缓存", self.server_info.name)
+        self._tools_cache = None
+        for cb in list(self._on_tools_changed_callbacks):
+            try:
+                res = cb()
+                if asyncio.iscoroutine(res):
+                    asyncio.create_task(res)
+            except Exception as e:
+                logger.warning("执行 tools_changed 回调异常: %s", e)
+
     # ── 工具发现 ────────────────────────────────────────────────
 
     async def list_tools(self) -> List[dict]:
-        """获取工具列表。
+        """获取工具列表（支持 cursor 分页遍历）。
 
         Returns
         -------
         list of dict
             每个工具包含 name, description, inputSchema 等字段。
         """
-        result = await self._jrpc.request("tools/list")
-        tools = result.get("tools", [])
-        self._tools_cache = tools
-        return tools
+        all_tools: List[dict] = []
+        cursor: Optional[str] = None
+        while True:
+            params: Dict[str, Any] = {}
+            if cursor:
+                params["cursor"] = cursor
+            result = await self._jrpc.request("tools/list", params or None)
+            tools = result.get("tools", [])
+            all_tools.extend(tools)
+            cursor = result.get("nextCursor")
+            if not cursor:
+                break
+        self._tools_cache = all_tools
+        return all_tools
 
     # ── 工具调用 ────────────────────────────────────────────────
 
@@ -252,25 +300,36 @@ class MCPSession:
         """获取缓存的工具列表（若存在）。"""
         return self._tools_cache
 
-    # ── 预留：资源 ──────────────────────────────────────────────
+    # ── 资源与 Prompts ──────────────────────────────────────────
 
     async def list_resources(self) -> List[dict]:
-        """获取资源列表（预留）。
+        """获取资源列表（支持 cursor 分页遍历）。
 
         Returns
         -------
         list of dict
             资源列表，若 Server 不支持则返回空列表。
         """
-        try:
-            result = await self._jrpc.request("resources/list")
-            return result.get("resources", [])
-        except Exception as e:
-            logger.debug("resources/list 不可用（Server 可能不支持）: %s", e)
-            return []
+        all_resources: List[dict] = []
+        cursor: Optional[str] = None
+        while True:
+            try:
+                params: Dict[str, Any] = {}
+                if cursor:
+                    params["cursor"] = cursor
+                result = await self._jrpc.request("resources/list", params or None)
+                resources = result.get("resources", [])
+                all_resources.extend(resources)
+                cursor = result.get("nextCursor")
+                if not cursor:
+                    break
+            except Exception as e:
+                logger.debug("resources/list 不可用（Server 可能不支持）: %s", e)
+                break
+        return all_resources
 
     async def read_resource(self, uri: str) -> Optional[str]:
-        """读取资源内容（预留）。
+        """读取资源内容。
 
         Parameters
         ----------
@@ -295,3 +354,29 @@ class MCPSession:
         except Exception as e:
             logger.debug("resources/read 不可用: %s", e)
             return None
+
+    async def list_prompts(self) -> List[dict]:
+        """获取 Prompt 模板列表（支持 cursor 分页遍历）。
+
+        Returns
+        -------
+        list of dict
+            Prompt 模板列表，若 Server 不支持则返回空列表。
+        """
+        all_prompts: List[dict] = []
+        cursor: Optional[str] = None
+        while True:
+            try:
+                params: Dict[str, Any] = {}
+                if cursor:
+                    params["cursor"] = cursor
+                result = await self._jrpc.request("prompts/list", params or None)
+                prompts = result.get("prompts", [])
+                all_prompts.extend(prompts)
+                cursor = result.get("nextCursor")
+                if not cursor:
+                    break
+            except Exception as e:
+                logger.debug("prompts/list 不可用（Server 可能不支持）: %s", e)
+                break
+        return all_prompts
