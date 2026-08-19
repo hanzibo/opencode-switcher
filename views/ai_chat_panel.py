@@ -750,6 +750,7 @@ class AIChatPanel(Gtk.Box):
         self._mcp_bridge = GtkAsyncioBridge.get()
         self._mcp_bridge.start()
         self._mcp_client_mgr = MCPClientManager(self._mcp_bridge)
+        self._mcp_client_mgr.add_tools_changed_callback(self._on_mcp_server_tools_changed)
 
         # 从设置加载配置并 auto_connect
         if self._ai_settings_store is not None:
@@ -757,6 +758,11 @@ class AIChatPanel(Gtk.Box):
 
         self._mcp_initialized = True
         print(f"[MCP] 初始化完成，已连接 {self._mcp_client_mgr.get_server_count()} 个 Server", flush=True)
+
+    def _on_mcp_server_tools_changed(self, server_name: str) -> None:
+        """MCP Server 发出 notifications/tools/list_changed 时的通知处理。"""
+        print(f"[MCP] 收到来自 {server_name} 的工具变更通知，正在刷新工具缓存...", flush=True)
+        self._refresh_mcp_tools()
 
     def _load_and_connect_mcp_servers(self) -> None:
         """从 AISettingsStore 加载 MCP Server 配置并自动连接。"""

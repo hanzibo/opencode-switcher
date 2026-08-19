@@ -10,10 +10,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from mcp_integration.json_rpc import JsonRpcSession
 
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════
 
 # 按从新到旧排列，协商时取双方支持的最新版本
-SUPPORTED_MCP_VERSIONS = ["2025-11-25", "2025-03-26"]
+SUPPORTED_MCP_VERSIONS = ["2026-07-28", "2025-11-25", "2025-03-26", "2024-11-05"]
 
 DEFAULT_CLIENT_INFO = {
     "name": "opencode-switcher",
@@ -34,6 +35,9 @@ DEFAULT_CLIENT_INFO = {
 # 工具调用默认超时（有界默认，秒）：覆盖底层 JsonRpcSession.request_timeout，
 # 防止服务器挂起时工具调用无限等待。
 MCP_TOOL_CALL_TIMEOUT_SEC = 60.0
+
+# 游标分页最大页数上限（防御恶意或故障服务端的无限循环）
+_MAX_PAGINATION_PAGES = 100
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -106,6 +110,15 @@ class MCPSession:
         self.server_info: MCPServerInfo = MCPServerInfo()
         self._negotiated_version: Optional[str] = None
         self._tools_cache: Optional[List[dict]] = None
+        self._on_tools_changed_callbacks: List[Callable[[], Any]] = []
+        self._background_tasks: set[asyncio.Task] = set()
+
+        # 订阅服务端工具变更通知
+        if hasattr(self._jrpc, "register_notification_handler"):
+            self._jrpc.register_notification_handler(
+                "notifications/tools/list_changed",
+                self._on_tools_list_changed_notification,
+            )
 
     # ── 生命周期 ────────────────────────────────────────────────
 
@@ -126,8 +139,13 @@ class MCPSession:
         str
             Server 描述信息，如 "filesystem v0.1.0"。
         """
+        # 协议版本：优先与底层传输层配置的版本保持一致（如 HttpTransport 的 MCP-Protocol-Version 头），
+        # 避免 HTTP 请求头与 JSON body 中的协议版本冲突导致服务端拒绝会话。
+        transport_proto = getattr(getattr(self._jrpc, "_transport", None), "protocol_version", None)
+        init_version = transport_proto if transport_proto in SUPPORTED_MCP_VERSIONS else "2025-11-25"
+
         result = await self._jrpc.request("initialize", {
-            "protocolVersion": SUPPORTED_MCP_VERSIONS[0],
+            "protocolVersion": init_version,
             "capabilities": {},
             "clientInfo": self._client_info,
         })
@@ -159,26 +177,79 @@ class MCPSession:
 
     async def close(self) -> None:
         """关闭会话。"""
+        if hasattr(self._jrpc, "unregister_notification_handler"):
+            self._jrpc.unregister_notification_handler(
+                "notifications/tools/list_changed",
+                self._on_tools_list_changed_notification,
+            )
+        # 取消所有未完成的后台任务
+        for task in list(self._background_tasks):
+            if not task.done():
+                task.cancel()
+        self._background_tasks.clear()
+
         await self._jrpc.close()
 
     @property
     def is_connected(self) -> bool:
         return self._jrpc.is_connected
 
+    # ── 工具变更通知订阅 ────────────────────────────────────────
+
+    def add_tools_changed_callback(self, cb: Callable[[], Any]) -> None:
+        """注册工具列表变更回调。"""
+        if cb not in self._on_tools_changed_callbacks:
+            self._on_tools_changed_callbacks.append(cb)
+
+    def remove_tools_changed_callback(self, cb: Callable[[], Any]) -> None:
+        """注销工具列表变更回调。"""
+        if cb in self._on_tools_changed_callbacks:
+            self._on_tools_changed_callbacks.remove(cb)
+
+    def _on_tools_list_changed_notification(self, params: Dict[str, Any]) -> None:
+        """处理服务端 notifications/tools/list_changed 通知。"""
+        logger.info("收到 MCP Server (%s) 工具变更通知，清空工具缓存", self.server_info.name)
+        self._tools_cache = None
+        for cb in list(self._on_tools_changed_callbacks):
+            try:
+                res = cb()
+                if asyncio.iscoroutine(res):
+                    task = asyncio.create_task(res)
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
+            except Exception as e:
+                logger.warning("执行 tools_changed 回调异常: %s", e)
+
     # ── 工具发现 ────────────────────────────────────────────────
 
     async def list_tools(self) -> List[dict]:
-        """获取工具列表。
+        """获取工具列表（支持 cursor 分页遍历与死循环熔断保护）。
 
         Returns
         -------
         list of dict
             每个工具包含 name, description, inputSchema 等字段。
         """
-        result = await self._jrpc.request("tools/list")
-        tools = result.get("tools", [])
-        self._tools_cache = tools
-        return tools
+        all_tools: List[dict] = []
+        cursor: Optional[str] = None
+        seen_cursors: set[str] = set()
+        page_count = 0
+
+        while page_count < _MAX_PAGINATION_PAGES:
+            page_count += 1
+            params: Dict[str, Any] = {}
+            if cursor:
+                params["cursor"] = cursor
+            result = await self._jrpc.request("tools/list", params or None)
+            tools = result.get("tools", [])
+            all_tools.extend(tools)
+            cursor = result.get("nextCursor")
+            if not cursor or cursor in seen_cursors:
+                break
+            seen_cursors.add(cursor)
+
+        self._tools_cache = all_tools
+        return all_tools
 
     # ── 工具调用 ────────────────────────────────────────────────
 
@@ -252,25 +323,41 @@ class MCPSession:
         """获取缓存的工具列表（若存在）。"""
         return self._tools_cache
 
-    # ── 预留：资源 ──────────────────────────────────────────────
+    # ── 资源与 Prompts ──────────────────────────────────────────
 
     async def list_resources(self) -> List[dict]:
-        """获取资源列表（预留）。
+        """获取资源列表（支持 cursor 分页遍历与死循环熔断保护）。
 
         Returns
         -------
         list of dict
             资源列表，若 Server 不支持则返回空列表。
         """
-        try:
-            result = await self._jrpc.request("resources/list")
-            return result.get("resources", [])
-        except Exception as e:
-            logger.debug("resources/list 不可用（Server 可能不支持）: %s", e)
-            return []
+        all_resources: List[dict] = []
+        cursor: Optional[str] = None
+        seen_cursors: set[str] = set()
+        page_count = 0
+
+        while page_count < _MAX_PAGINATION_PAGES:
+            page_count += 1
+            try:
+                params: Dict[str, Any] = {}
+                if cursor:
+                    params["cursor"] = cursor
+                result = await self._jrpc.request("resources/list", params or None)
+                resources = result.get("resources", [])
+                all_resources.extend(resources)
+                cursor = result.get("nextCursor")
+                if not cursor or cursor in seen_cursors:
+                    break
+                seen_cursors.add(cursor)
+            except Exception as e:
+                logger.debug("resources/list 不可用（Server 可能不支持）: %s", e)
+                break
+        return all_resources
 
     async def read_resource(self, uri: str) -> Optional[str]:
-        """读取资源内容（预留）。
+        """读取资源内容。
 
         Parameters
         ----------
@@ -295,3 +382,34 @@ class MCPSession:
         except Exception as e:
             logger.debug("resources/read 不可用: %s", e)
             return None
+
+    async def list_prompts(self) -> List[dict]:
+        """获取 Prompt 模板列表（支持 cursor 分页遍历与死循环熔断保护）。
+
+        Returns
+        -------
+        list of dict
+            Prompt 模板列表，若 Server 不支持则返回空列表。
+        """
+        all_prompts: List[dict] = []
+        cursor: Optional[str] = None
+        seen_cursors: set[str] = set()
+        page_count = 0
+
+        while page_count < _MAX_PAGINATION_PAGES:
+            page_count += 1
+            try:
+                params: Dict[str, Any] = {}
+                if cursor:
+                    params["cursor"] = cursor
+                result = await self._jrpc.request("prompts/list", params or None)
+                prompts = result.get("prompts", [])
+                all_prompts.extend(prompts)
+                cursor = result.get("nextCursor")
+                if not cursor or cursor in seen_cursors:
+                    break
+                seen_cursors.add(cursor)
+            except Exception as e:
+                logger.debug("prompts/list 不可用（Server 可能不支持）: %s", e)
+                break
+        return all_prompts

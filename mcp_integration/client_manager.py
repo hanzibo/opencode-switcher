@@ -35,6 +35,10 @@ logger = logging.getLogger(__name__)
 StatusCallback = Callable[[str, str], None]
 # str = server_name, str = 状态描述 ("connected" / "disconnected" / "error:xxx")
 
+# 工具列表变更回调类型
+ToolsChangedCallback = Callable[[str], None]
+# str = server_name
+
 
 class MCPClientManager:
     """管理多个 MCP Server 连接的生命周期与工具调用。"""
@@ -47,6 +51,8 @@ class MCPClientManager:
         self._configs: Dict[str, MCPServerConfig] = {}
         # 连接状态回调
         self._status_callbacks: List[StatusCallback] = []
+        # 工具变更回调
+        self._tools_changed_callbacks: List[ToolsChangedCallback] = []
         # 自动重连定时器
         self._reconnect_timers: Dict[str, asyncio.Task] = {}
         # list_all_tools 防重入锁（多个连接回调并发触发时避免重复抓取）
@@ -54,7 +60,7 @@ class MCPClientManager:
         # 净化工具名 → MCP 原始工具名 映射（LLM 看到的是净化名，调用需还原）
         self._tool_name_map: Dict[str, str] = {}
 
-    # ── 状态回调 ────────────────────────────────────────────────
+    # ── 状态与变更回调 ──────────────────────────────────────────
 
     def add_status_callback(self, callback: StatusCallback) -> None:
         """添加连接状态变化监听器。"""
@@ -73,6 +79,25 @@ class MCPClientManager:
             except Exception as e:
                 logger.warning("状态回调异常: %s", e)
 
+    def add_tools_changed_callback(self, callback: ToolsChangedCallback) -> None:
+        """添加工具列表变更监听器。"""
+        if callback not in self._tools_changed_callbacks:
+            self._tools_changed_callbacks.append(callback)
+
+    def remove_tools_changed_callback(self, callback: ToolsChangedCallback) -> None:
+        """移除工具列表变更监听器。"""
+        if callback in self._tools_changed_callbacks:
+            self._tools_changed_callbacks.remove(callback)
+
+    def _notify_tools_changed(self, server_name: str) -> None:
+        """通知所有监听器工具列表已变更。"""
+        logger.info("MCP Server (%s) 工具发生变更，广播通知", server_name)
+        for cb in list(self._tools_changed_callbacks):
+            try:
+                cb(server_name)
+            except Exception as e:
+                logger.warning("工具变更回调异常: %s", e)
+
     # ── 连接管理 ────────────────────────────────────────────────
 
     async def connect_stdio(self, config: MCPServerConfig) -> Tuple[bool, str]:
@@ -84,13 +109,21 @@ class MCPClientManager:
         from mcp_integration.mcp_session import MCPSession
         from mcp_integration.json_rpc import JsonRpcSession
 
-        transport = StdioTransport(config.command, config.args)
+        transport = StdioTransport(
+            config.command,
+            config.args,
+            cwd=config.cwd,
+            env=config.env,
+        )
         jrpc = JsonRpcSession(transport)
         session = MCPSession(jrpc)
 
         try:
             await session.connect()
             info = await session.initialize()
+            session.add_tools_changed_callback(
+                lambda name=config.name: self._notify_tools_changed(name)
+            )
             self._sessions[config.name] = session
             self._configs[config.name] = config
             self._notify_status(config.name, "connected")
@@ -143,6 +176,9 @@ class MCPClientManager:
         try:
             await session.connect()
             info = await session.initialize()
+            session.add_tools_changed_callback(
+                lambda name=config.name: self._notify_tools_changed(name)
+            )
 
             # session_id 已由 HttpTransport.send_line 自动从响应头提取，
             # 此处无需手动设置

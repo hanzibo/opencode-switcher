@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from mcp_integration.transport import BaseTransport
 
@@ -114,7 +114,7 @@ class JsonRpcResponse:
 class JsonRpcSession:
     """JSON-RPC 2.0 会话。
 
-    管理请求 ID 生成、挂起请求、超时控制、消息分发。
+    管理请求 ID 生成、挂起请求、超时控制、消息分发与服务端通知订阅。
     基于 BaseTransport 实现，与具体传输方式解耦。
 
     Parameters
@@ -134,7 +134,9 @@ class JsonRpcSession:
         self._request_timeout = request_timeout
         self._request_id = 0
         self._pending: Dict[int, asyncio.Future] = {}
+        self._notification_handlers: Dict[str, List[Callable[[Dict[str, Any]], Any]]] = {}
         self._reader_task: Optional[asyncio.Task] = None
+        self._background_tasks: set[asyncio.Task] = set()
         self._closed = False
 
     # ── 生命周期 ────────────────────────────────────────────────
@@ -146,7 +148,7 @@ class JsonRpcSession:
         self._closed = False
 
     async def close(self) -> None:
-        """关闭会话，取消所有挂起的请求。"""
+        """关闭会话，取消所有挂起的请求与后台任务。"""
         self._closed = True
         if self._reader_task:
             self._reader_task.cancel()
@@ -155,13 +157,59 @@ class JsonRpcSession:
             except asyncio.CancelledError:
                 pass
             self._reader_task = None
+
+        # 取消所有正在执行的后台协程
+        for task in list(self._background_tasks):
+            if not task.done():
+                task.cancel()
+        self._background_tasks.clear()
+
         await self._transport.disconnect()
         # 通知所有挂起请求连接已断开
         self._fail_all_pending(JsonRpcDisconnectedError())
 
+    def _create_background_task(self, coro) -> asyncio.Task:
+        """创建并在内部集合中维护强引用的后台异步任务，防止被 GC 提前回收。"""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
     @property
     def is_connected(self) -> bool:
         return not self._closed and self._transport.is_connected
+
+    # ── 通知监听 ────────────────────────────────────────────────
+
+    def register_notification_handler(
+        self,
+        method: str,
+        handler: Callable[[Dict[str, Any]], Any],
+    ) -> None:
+        """注册服务端通知处理器。
+
+        Parameters
+        ----------
+        method : str
+            通知方法名称（如 "notifications/tools/list_changed"）或 "*" 通配符。
+        handler : callable
+            接收通知 params (dict) 的回调函数，可为同步函数或异步协程函数。
+        """
+        handlers = self._notification_handlers.setdefault(method, [])
+        if handler not in handlers:
+            handlers.append(handler)
+
+    def unregister_notification_handler(
+        self,
+        method: str,
+        handler: Callable[[Dict[str, Any]], Any],
+    ) -> None:
+        """注销服务端通知处理器。"""
+        handlers = self._notification_handlers.get(method)
+        if handlers and handler in handlers:
+            handlers.remove(handler)
+            if not handlers:
+                self._notification_handlers.pop(method, None)
 
     # ── 消息收发 ────────────────────────────────────────────────
 
@@ -219,13 +267,16 @@ class JsonRpcSession:
             return response
         except asyncio.TimeoutError:
             self._pending.pop(req_id, None)
+            self._create_background_task(self._send_cancel_notification(req_id, "timeout"))
             raise JsonRpcTimeoutError(method, timeout_val)
         except asyncio.CancelledError:
             # 取消传播：外部取消（用户取消 / 会话关闭）到达此协程。
             # 主动取消内部 future（若在 wait_for 之前被取消，fut 仍挂起未取消；
-            # 对已完成的 future 为 no-op），并从挂起表移除对应请求后重新抛出。
+            # 对已完成的 future 为 no-op），从挂起表移除对应请求，
+            # 发送 notifications/cancelled 后重新抛出。
             fut.cancel()
             self._pending.pop(req_id, None)
+            self._create_background_task(self._send_cancel_notification(req_id, "cancelled"))
             raise
 
     async def notify(
@@ -245,6 +296,18 @@ class JsonRpcSession:
         """序列化并发送一行 JSON。"""
         data = json.dumps(obj, ensure_ascii=False) + "\n"
         await self._transport.send_line(data)
+
+    async def _send_cancel_notification(self, req_id: int, reason: str) -> None:
+        """异步发送 MCP 标准取消通知 (notifications/cancelled)。"""
+        try:
+            if self.is_connected:
+                msg = JsonRpcNotification("notifications/cancelled", {
+                    "requestId": req_id,
+                    "reason": reason,
+                })
+                await self._send_line(msg.to_dict())
+        except Exception as e:
+            logger.debug("发送 notifications/cancelled 异常 (req_id=%s): %s", req_id, e)
 
     async def _reader(self) -> None:
         """后台任务：持续读取并分发响应。"""
@@ -270,8 +333,13 @@ class JsonRpcSession:
             self._fail_all_pending(JsonRpcDisconnectedError())
 
     def _dispatch(self, msg: Dict[str, Any]) -> None:
-        """分发收到的 JSON-RPC 消息到对应的挂起请求。"""
-        # 处理错误响应
+        """分发收到的 JSON-RPC 消息到对应的挂起请求或通知监听器。"""
+        # 1. 服务端下发的 Notification（无 id 且有 method）
+        if "id" not in msg and "method" in msg:
+            self._dispatch_notification(msg["method"], msg.get("params"))
+            return
+
+        # 2. 处理错误响应
         if "error" in msg:
             err = msg["error"]
             error_obj = JsonRpcError(
@@ -282,8 +350,31 @@ class JsonRpcSession:
             self._resolve_pending(msg.get("id"), exc=error_obj)
             return
 
-        # 处理成功响应
+        # 3. 处理成功响应
         self._resolve_pending(msg.get("id"), result=msg.get("result", {}))
+
+    def _dispatch_notification(
+        self,
+        method: str,
+        params: Optional[Dict[str, Any]],
+    ) -> None:
+        """分发收到的 JSON-RPC 通知给已注册的监听器。"""
+        handlers = list(self._notification_handlers.get(method, []))
+        if "*" in self._notification_handlers:
+            handlers.extend(self._notification_handlers["*"])
+
+        if not handlers:
+            logger.debug("收到未监听的 JSON-RPC 通知: %s", method)
+            return
+
+        params_dict = params or {}
+        for handler in handlers:
+            try:
+                res = handler(params_dict)
+                if asyncio.iscoroutine(res):
+                    self._create_background_task(res)
+            except Exception as e:
+                logger.error("JSON-RPC 通知处理异常 (%s): %s", method, e)
 
     def _resolve_pending(
         self,

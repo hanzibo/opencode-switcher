@@ -178,6 +178,7 @@ class HttpTransport(BaseTransport):
 
         # 响应缓冲：_reader() 从 queue 中读，send_line() 将响应压入
         self._response_queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+        self._active_sse_tasks: set[asyncio.Task] = set()
         self._closed = False
 
     # ── 生命周期 ─────────────────────────────────────────────────
@@ -227,6 +228,12 @@ class HttpTransport(BaseTransport):
     async def disconnect(self) -> None:
         """关闭连接池。"""
         self._closed = True
+        # 取消所有正在进行的 SSE 消费任务
+        for task in list(self._active_sse_tasks):
+            if not task.done():
+                task.cancel()
+        self._active_sse_tasks.clear()
+
         if self._session:
             await self._session.close()
             self._session = None
@@ -295,11 +302,12 @@ class HttpTransport(BaseTransport):
                     raise HttpTransportAuthError(f"认证凭据获取失败: {e}")
 
             try:
-                async with self._session.post(
+                resp = await self._session.post(
                     self._url,
                     data=payload.encode("utf-8"),
                     headers=request_headers or None,
-                ) as resp:
+                )
+                try:
                     status = resp.status
 
                     # ── OAuth challenge：尝试自动重认证并重试一次 ──
@@ -346,7 +354,6 @@ class HttpTransport(BaseTransport):
 
                     # ── Notification（202 Accepted，无响应体） ──
                     if status == 202 and is_notification:
-                        # 无响应需要读取，直接返回
                         return
 
                     # ── 读取响应 ──
@@ -359,10 +366,24 @@ class HttpTransport(BaseTransport):
                         logger.debug("HttpTransport 收到 session_id: %s", resp_session_id)
 
                     if "text/event-stream" in content_type:
-                        await self._handle_sse_response(resp)
+                        # 异步消费 SSE 流，避免阻塞 send_line 并保持流存活
+                        async def _consume_sse(r):
+                            try:
+                                await self._handle_sse_response(r)
+                            finally:
+                                r.close()
+
+                        task = asyncio.create_task(_consume_sse(resp))
+                        self._active_sse_tasks.add(task)
+                        task.add_done_callback(self._active_sse_tasks.discard)
+                        # 将 resp 置为 None，交出所有权，防止 finally 块提前关闭它
+                        resp = None
                     else:
                         await self._handle_json_response(resp)
                     return
+                finally:
+                    if resp is not None:
+                        resp.close()
 
             except (HttpTransportAuthError, HttpTransportStatusError):
                 raise

@@ -1330,6 +1330,18 @@ class SettingsDialog:
 
         return self._make_tab_scrolled_window(vbox)
 
+    @staticmethod
+    def _parse_env_str(env_raw: str) -> Dict[str, str]:
+        """将 KEY=VAL, KEY2=VAL2 格式字符串解析为环境变量字典。"""
+        env_dict = {}
+        if env_raw:
+            for item in env_raw.split(","):
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    if k.strip():
+                        env_dict[k.strip()] = v.strip()
+        return env_dict
+
     def _add_mcp_server_card(self, data: Optional[dict] = None):
         """添加一个 MCP 服务器配置卡片，支持 stdio 和 http 两种模式。"""
         cfg = MCPServerConfig.from_dict(data or {})
@@ -1395,6 +1407,24 @@ class SettingsDialog:
         row2_stdio.pack_start(args_entry, True, True, 0)
 
         card_vbox.pack_start(row2_stdio, False, False, 0)
+
+        # ── Row 2.5: stdio: CWD + Env ──
+        row2_5_stdio = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
+
+        cwd_entry = Gtk.Entry.new()
+        cwd_entry.set_placeholder_text("工作目录 cwd（可选，如 ~/my-project）")
+        cwd_entry.set_text(cfg.cwd or "")
+        cwd_entry.set_hexpand(True)
+        row2_5_stdio.pack_start(cwd_entry, True, True, 0)
+
+        env_entry = Gtk.Entry.new()
+        env_entry.set_placeholder_text("环境变量（可选，KEY=VAL, KEY2=VAL2）")
+        env_entry.set_hexpand(True)
+        env_text = ", ".join(f"{k}={v}" for k, v in (cfg.env or {}).items())
+        env_entry.set_text(env_text)
+        row2_5_stdio.pack_start(env_entry, True, True, 0)
+
+        card_vbox.pack_start(row2_5_stdio, False, False, 0)
 
         # ── Row 3: http: URL + Auth Type + API Key ──
         row3_http = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 6)
@@ -1510,6 +1540,8 @@ class SettingsDialog:
             "transport": transport_combo,
             "command": cmd_entry,
             "args": args_entry,
+            "cwd": cwd_entry,
+            "env": env_entry,
             "url": url_entry,
             "api_key": api_key_entry,
             "auth_type": auth_combo,
@@ -1532,6 +1564,7 @@ class SettingsDialog:
         # ── 初始显隐 ──
         def _apply_visibility(is_http_mode: bool):
             row2_stdio.set_visible(not is_http_mode)
+            row2_5_stdio.set_visible(not is_http_mode)
             row3_http.set_visible(is_http_mode)
             row4_http_advanced.set_visible(is_http_mode)
             mode = auth_combo.get_active_id()
@@ -1618,8 +1651,9 @@ class SettingsDialog:
                         "<span foreground='green'>● 已授权 ✓</span>"
                     ))
                 except Exception as e:
-                    GLib.idle_add(lambda: oauth_status_label.set_markup(
-                        f"<span foreground='red'>● 授权失败: {e}</span>"
+                    err_msg = str(e)
+                    GLib.idle_add(lambda msg=err_msg: oauth_status_label.set_markup(
+                        f"<span foreground='red'>● 授权失败: {msg}</span>"
                     ))
 
             threading.Thread(target=_do_auth, daemon=True).start()
@@ -1683,20 +1717,26 @@ class SettingsDialog:
         api_key = api_key_entry.get_text().strip()
         auth_type = auth_combo.get_active_id()
 
-        # 读取 OAuth 配置（通过卡片 widgets 中保存的 entry）
-        oauth_cfg = next(
+        # 读取卡片配置（通过卡片 widgets 中保存的 entry）
+        card_cfg = next(
             (w for w in self._mcp_server_widgets if w["name"] is name_entry),
             None,
         )
+        cwd_val = None
+        env_dict = {}
         oauth_client_id = ""
         oauth_client_secret = ""
         oauth_token_url = ""
         oauth_scopes = ""
-        if oauth_cfg is not None:
-            oauth_client_id = oauth_cfg["oauth_client_id"].get_text().strip()
-            oauth_client_secret = oauth_cfg["oauth_client_secret"].get_text().strip()
-            oauth_token_url = oauth_cfg["oauth_token_url"].get_text().strip()
-            oauth_scopes = oauth_cfg["oauth_scopes"].get_text().strip()
+        if card_cfg is not None:
+            if card_cfg.get("cwd"):
+                cwd_val = card_cfg["cwd"].get_text().strip() or None
+            if card_cfg.get("env"):
+                env_dict = self._parse_env_str(card_cfg["env"].get_text().strip())
+            oauth_client_id = card_cfg["oauth_client_id"].get_text().strip() if card_cfg.get("oauth_client_id") else ""
+            oauth_client_secret = card_cfg["oauth_client_secret"].get_text().strip() if card_cfg.get("oauth_client_secret") else ""
+            oauth_token_url = card_cfg["oauth_token_url"].get_text().strip() if card_cfg.get("oauth_token_url") else ""
+            oauth_scopes = card_cfg["oauth_scopes"].get_text().strip() if card_cfg.get("oauth_scopes") else ""
 
         if not name:
             status_label.set_markup("<span foreground='red'>● 名称不能为空</span>")
@@ -1723,6 +1763,8 @@ class SettingsDialog:
                     transport=transport,
                     command=cmd,
                     args=args_list,
+                    cwd=cwd_val,
+                    env=env_dict,
                     url=url,
                     api_key=api_key,
                     auth_type=auth_type,
@@ -1754,9 +1796,10 @@ class SettingsDialog:
                 finally:
                     loop.close()
             except Exception as e:
+                err_msg = str(e)
                 GLib.idle_add(
-                    lambda: status_label.set_markup(
-                        f"<span foreground='red'>● 测试异常: {e}</span>"
+                    lambda msg=err_msg: status_label.set_markup(
+                        f"<span foreground='red'>● 测试异常: {msg}</span>"
                     )
                 )
 
@@ -1844,12 +1887,15 @@ class SettingsDialog:
             oauth_client_secret = w.get("oauth_client_secret").get_text().strip() if w.get("oauth_client_secret") else ""
             oauth_token_url = w.get("oauth_token_url").get_text().strip() if w.get("oauth_token_url") else ""
             oauth_scopes = w.get("oauth_scopes").get_text().strip() if w.get("oauth_scopes") else ""
+            cwd_val = w["cwd"].get_text().strip() or None if w.get("cwd") else None
+            env_dict = self._parse_env_str(w["env"].get_text().strip()) if w.get("env") else {}
             mcp_servers.append({
                 "name": name,
                 "transport": transport,
                 "command": w["command"].get_text().strip() if transport == "stdio" else "",
                 "args": args_list if transport == "stdio" else [],
-                "cwd": None,
+                "cwd": cwd_val if transport == "stdio" else None,
+                "env": env_dict if transport == "stdio" else {},
                 "url": url,
                 "api_key": api_key,
                 "auth_type": auth_type,

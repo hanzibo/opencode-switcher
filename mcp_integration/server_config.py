@@ -29,6 +29,7 @@ class MCPServerConfig:
     command: str = ""
     args: List[str] = field(default_factory=list)
     cwd: Optional[str] = None
+    env: Dict[str, str] = field(default_factory=dict)
 
     # ── http 模式参数 ──
     url: str = ""
@@ -58,6 +59,7 @@ class MCPServerConfig:
             "command": self.command,
             "args": self.args,
             "cwd": self.cwd,
+            "env": dict(self.env),
             "url": self.url,
             "api_key": self.api_key,
             "auth_type": self.auth_type,
@@ -75,7 +77,7 @@ class MCPServerConfig:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "MCPServerConfig":
         valid_keys = {
-            "name", "transport", "command", "args", "cwd",
+            "name", "transport", "command", "args", "cwd", "env",
             "url", "api_key", "auth_type",
             "oauth_client_id", "oauth_client_secret", "oauth_token_url",
             "oauth_scopes",
@@ -84,6 +86,7 @@ class MCPServerConfig:
         }
         filtered = {k: v for k, v in d.items() if k in valid_keys}
         # 向后兼容：旧配置可能没有这些字段
+        filtered.setdefault("env", {})
         filtered.setdefault("auth_type", "bearer")
         filtered.setdefault("protocol_version", "2025-11-25")
         filtered.setdefault("enable_2026_headers", False)
@@ -103,6 +106,10 @@ class MCPServerConfig:
         if self.transport == "stdio":
             if not self.command.strip():
                 return "stdio 模式需要指定命令"
+            if self.cwd is not None and not isinstance(self.cwd, str):
+                return "stdio 模式 cwd 必须为路径字符串"
+            if not isinstance(self.env, dict):
+                return "stdio 模式 env 必须为键值对字典"
         elif self.transport == "http":
             if not self.url.strip():
                 return "http 模式需要指定 URL"
