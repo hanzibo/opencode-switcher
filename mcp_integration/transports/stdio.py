@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import List, Optional
+import os
+from typing import Dict, List, Optional
 
 from mcp_integration.transport import BaseTransport
 
@@ -17,21 +18,36 @@ class StdioTransport(BaseTransport):
     """基于 asyncio 子进程的 stdio 传输。
 
     启动 MCP Server 子进程，通过 stdin/stdout 通信。
+    支持自定义工作目录 cwd 和环境变量 env。
     """
 
-    def __init__(self, command: str, args: List[str]) -> None:
+    def __init__(
+        self,
+        command: str,
+        args: List[str],
+        cwd: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
+    ) -> None:
         self._command = command
         self._args = args
+        self._cwd = os.path.abspath(os.path.expanduser(cwd)) if cwd else None
+        self._env = dict(env) if env else None
         self._process: Optional[asyncio.subprocess.Process] = None
         # 强引用 stderr 排空任务，防止被 GC 回收导致管道不再被读取
         self._stderr_task: Optional[asyncio.Task] = None
 
     async def connect(self) -> None:
+        merged_env = os.environ.copy()
+        if self._env:
+            merged_env.update({str(k): str(v) for k, v in self._env.items()})
+
         self._process = await asyncio.create_subprocess_exec(
             self._command, *self._args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=self._cwd,
+            env=merged_env,
             limit=_STREAM_LIMIT,
         )
         # stderr 可能为 None（如子进程已退出或 stderr 未定向到管道），需容错

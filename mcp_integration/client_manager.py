@@ -109,7 +109,12 @@ class MCPClientManager:
         from mcp_integration.mcp_session import MCPSession
         from mcp_integration.json_rpc import JsonRpcSession
 
-        transport = StdioTransport(config.command, config.args)
+        transport = StdioTransport(
+            config.command,
+            config.args,
+            cwd=config.cwd,
+            env=config.env,
+        )
         jrpc = JsonRpcSession(transport)
         session = MCPSession(jrpc)
 
