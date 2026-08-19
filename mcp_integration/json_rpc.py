@@ -136,6 +136,7 @@ class JsonRpcSession:
         self._pending: Dict[int, asyncio.Future] = {}
         self._notification_handlers: Dict[str, List[Callable[[Dict[str, Any]], Any]]] = {}
         self._reader_task: Optional[asyncio.Task] = None
+        self._background_tasks: set[asyncio.Task] = set()
         self._closed = False
 
     # ── 生命周期 ────────────────────────────────────────────────
@@ -147,7 +148,7 @@ class JsonRpcSession:
         self._closed = False
 
     async def close(self) -> None:
-        """关闭会话，取消所有挂起的请求。"""
+        """关闭会话，取消所有挂起的请求与后台任务。"""
         self._closed = True
         if self._reader_task:
             self._reader_task.cancel()
@@ -156,9 +157,23 @@ class JsonRpcSession:
             except asyncio.CancelledError:
                 pass
             self._reader_task = None
+
+        # 取消所有正在执行的后台协程
+        for task in list(self._background_tasks):
+            if not task.done():
+                task.cancel()
+        self._background_tasks.clear()
+
         await self._transport.disconnect()
         # 通知所有挂起请求连接已断开
         self._fail_all_pending(JsonRpcDisconnectedError())
+
+    def _create_background_task(self, coro) -> asyncio.Task:
+        """创建并在内部集合中维护强引用的后台异步任务，防止被 GC 提前回收。"""
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
 
     @property
     def is_connected(self) -> bool:
@@ -252,7 +267,7 @@ class JsonRpcSession:
             return response
         except asyncio.TimeoutError:
             self._pending.pop(req_id, None)
-            asyncio.create_task(self._send_cancel_notification(req_id, "timeout"))
+            self._create_background_task(self._send_cancel_notification(req_id, "timeout"))
             raise JsonRpcTimeoutError(method, timeout_val)
         except asyncio.CancelledError:
             # 取消传播：外部取消（用户取消 / 会话关闭）到达此协程。
@@ -261,7 +276,7 @@ class JsonRpcSession:
             # 发送 notifications/cancelled 后重新抛出。
             fut.cancel()
             self._pending.pop(req_id, None)
-            asyncio.create_task(self._send_cancel_notification(req_id, "cancelled"))
+            self._create_background_task(self._send_cancel_notification(req_id, "cancelled"))
             raise
 
     async def notify(
@@ -357,7 +372,7 @@ class JsonRpcSession:
             try:
                 res = handler(params_dict)
                 if asyncio.iscoroutine(res):
-                    asyncio.create_task(res)
+                    self._create_background_task(res)
             except Exception as e:
                 logger.error("JSON-RPC 通知处理异常 (%s): %s", method, e)
 

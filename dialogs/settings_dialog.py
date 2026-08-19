@@ -1330,6 +1330,18 @@ class SettingsDialog:
 
         return self._make_tab_scrolled_window(vbox)
 
+    @staticmethod
+    def _parse_env_str(env_raw: str) -> Dict[str, str]:
+        """将 KEY=VAL, KEY2=VAL2 格式字符串解析为环境变量字典。"""
+        env_dict = {}
+        if env_raw:
+            for item in env_raw.split(","):
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    if k.strip():
+                        env_dict[k.strip()] = v.strip()
+        return env_dict
+
     def _add_mcp_server_card(self, data: Optional[dict] = None):
         """添加一个 MCP 服务器配置卡片，支持 stdio 和 http 两种模式。"""
         cfg = MCPServerConfig.from_dict(data or {})
@@ -1720,13 +1732,7 @@ class SettingsDialog:
             if card_cfg.get("cwd"):
                 cwd_val = card_cfg["cwd"].get_text().strip() or None
             if card_cfg.get("env"):
-                env_raw = card_cfg["env"].get_text().strip()
-                if env_raw:
-                    for item in env_raw.split(","):
-                        if "=" in item:
-                            k, v = item.split("=", 1)
-                            if k.strip():
-                                env_dict[k.strip()] = v.strip()
+                env_dict = self._parse_env_str(card_cfg["env"].get_text().strip())
             oauth_client_id = card_cfg["oauth_client_id"].get_text().strip() if card_cfg.get("oauth_client_id") else ""
             oauth_client_secret = card_cfg["oauth_client_secret"].get_text().strip() if card_cfg.get("oauth_client_secret") else ""
             oauth_token_url = card_cfg["oauth_token_url"].get_text().strip() if card_cfg.get("oauth_token_url") else ""
@@ -1882,15 +1888,7 @@ class SettingsDialog:
             oauth_token_url = w.get("oauth_token_url").get_text().strip() if w.get("oauth_token_url") else ""
             oauth_scopes = w.get("oauth_scopes").get_text().strip() if w.get("oauth_scopes") else ""
             cwd_val = w["cwd"].get_text().strip() or None if w.get("cwd") else None
-            env_dict = {}
-            if w.get("env"):
-                env_raw = w["env"].get_text().strip()
-                if env_raw:
-                    for item in env_raw.split(","):
-                        if "=" in item:
-                            k, v = item.split("=", 1)
-                            if k.strip():
-                                env_dict[k.strip()] = v.strip()
+            env_dict = self._parse_env_str(w["env"].get_text().strip()) if w.get("env") else {}
             mcp_servers.append({
                 "name": name,
                 "transport": transport,

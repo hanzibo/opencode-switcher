@@ -36,6 +36,9 @@ DEFAULT_CLIENT_INFO = {
 # 防止服务器挂起时工具调用无限等待。
 MCP_TOOL_CALL_TIMEOUT_SEC = 60.0
 
+# 游标分页最大页数上限（防御恶意或故障服务端的无限循环）
+_MAX_PAGINATION_PAGES = 100
+
 
 # ═══════════════════════════════════════════════════════════════════
 #  协议协商
@@ -108,6 +111,7 @@ class MCPSession:
         self._negotiated_version: Optional[str] = None
         self._tools_cache: Optional[List[dict]] = None
         self._on_tools_changed_callbacks: List[Callable[[], Any]] = []
+        self._background_tasks: set[asyncio.Task] = set()
 
         # 订阅服务端工具变更通知
         if hasattr(self._jrpc, "register_notification_handler"):
@@ -178,6 +182,12 @@ class MCPSession:
                 "notifications/tools/list_changed",
                 self._on_tools_list_changed_notification,
             )
+        # 取消所有未完成的后台任务
+        for task in list(self._background_tasks):
+            if not task.done():
+                task.cancel()
+        self._background_tasks.clear()
+
         await self._jrpc.close()
 
     @property
@@ -204,14 +214,16 @@ class MCPSession:
             try:
                 res = cb()
                 if asyncio.iscoroutine(res):
-                    asyncio.create_task(res)
+                    task = asyncio.create_task(res)
+                    self._background_tasks.add(task)
+                    task.add_done_callback(self._background_tasks.discard)
             except Exception as e:
                 logger.warning("执行 tools_changed 回调异常: %s", e)
 
     # ── 工具发现 ────────────────────────────────────────────────
 
     async def list_tools(self) -> List[dict]:
-        """获取工具列表（支持 cursor 分页遍历）。
+        """获取工具列表（支持 cursor 分页遍历与死循环熔断保护）。
 
         Returns
         -------
@@ -220,7 +232,11 @@ class MCPSession:
         """
         all_tools: List[dict] = []
         cursor: Optional[str] = None
-        while True:
+        seen_cursors: set[str] = set()
+        page_count = 0
+
+        while page_count < _MAX_PAGINATION_PAGES:
+            page_count += 1
             params: Dict[str, Any] = {}
             if cursor:
                 params["cursor"] = cursor
@@ -228,8 +244,10 @@ class MCPSession:
             tools = result.get("tools", [])
             all_tools.extend(tools)
             cursor = result.get("nextCursor")
-            if not cursor:
+            if not cursor or cursor in seen_cursors:
                 break
+            seen_cursors.add(cursor)
+
         self._tools_cache = all_tools
         return all_tools
 
@@ -308,7 +326,7 @@ class MCPSession:
     # ── 资源与 Prompts ──────────────────────────────────────────
 
     async def list_resources(self) -> List[dict]:
-        """获取资源列表（支持 cursor 分页遍历）。
+        """获取资源列表（支持 cursor 分页遍历与死循环熔断保护）。
 
         Returns
         -------
@@ -317,7 +335,11 @@ class MCPSession:
         """
         all_resources: List[dict] = []
         cursor: Optional[str] = None
-        while True:
+        seen_cursors: set[str] = set()
+        page_count = 0
+
+        while page_count < _MAX_PAGINATION_PAGES:
+            page_count += 1
             try:
                 params: Dict[str, Any] = {}
                 if cursor:
@@ -326,8 +348,9 @@ class MCPSession:
                 resources = result.get("resources", [])
                 all_resources.extend(resources)
                 cursor = result.get("nextCursor")
-                if not cursor:
+                if not cursor or cursor in seen_cursors:
                     break
+                seen_cursors.add(cursor)
             except Exception as e:
                 logger.debug("resources/list 不可用（Server 可能不支持）: %s", e)
                 break
@@ -361,7 +384,7 @@ class MCPSession:
             return None
 
     async def list_prompts(self) -> List[dict]:
-        """获取 Prompt 模板列表（支持 cursor 分页遍历）。
+        """获取 Prompt 模板列表（支持 cursor 分页遍历与死循环熔断保护）。
 
         Returns
         -------
@@ -370,7 +393,11 @@ class MCPSession:
         """
         all_prompts: List[dict] = []
         cursor: Optional[str] = None
-        while True:
+        seen_cursors: set[str] = set()
+        page_count = 0
+
+        while page_count < _MAX_PAGINATION_PAGES:
+            page_count += 1
             try:
                 params: Dict[str, Any] = {}
                 if cursor:
@@ -379,8 +406,9 @@ class MCPSession:
                 prompts = result.get("prompts", [])
                 all_prompts.extend(prompts)
                 cursor = result.get("nextCursor")
-                if not cursor:
+                if not cursor or cursor in seen_cursors:
                     break
+                seen_cursors.add(cursor)
             except Exception as e:
                 logger.debug("prompts/list 不可用（Server 可能不支持）: %s", e)
                 break
