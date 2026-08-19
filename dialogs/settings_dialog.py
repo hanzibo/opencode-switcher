@@ -1431,7 +1431,7 @@ class SettingsDialog:
                 self._mcp_stack.set_visible_child_name("empty")
 
     @staticmethod
-    def _parse_env_str(env_raw: str) -> Dict[str, str]:
+    def _parse_env_str(env_raw: str) -> dict[str, str]:
         """将 KEY=VAL, KEY2=VAL2 格式字符串解析为环境变量字典。"""
         env_dict = {}
         if env_raw:
@@ -1806,7 +1806,6 @@ class SettingsDialog:
 
             def _do_auth():
                 import asyncio
-                import threading
                 try:
                     from mcp_integration.oauth.provider import OAuth2AuthProvider
                     provider = OAuth2AuthProvider(
@@ -1831,7 +1830,6 @@ class SettingsDialog:
                         f"<span foreground='red'>● 授权失败: {msg}</span>"
                     ))
 
-            import threading
             threading.Thread(target=_do_auth, daemon=True).start()
 
         oauth_auth_btn.connect("clicked", _on_start_oauth_clicked)
@@ -1925,7 +1923,6 @@ class SettingsDialog:
 
         status_label.set_markup("<span foreground='orange'>● 测试中…</span>")
 
-        import threading
         def _do_test():
             import asyncio
             try:
@@ -1986,6 +1983,10 @@ class SettingsDialog:
 
         if not item:
             return
+
+        # 焦点安全防护：移除控件前先清除焦点，防止底层 C 对象销毁悬空
+        if self._dialog:
+            self._dialog.set_focus(None)
 
         server_id = item.get("server_id")
         row = item.get("row")

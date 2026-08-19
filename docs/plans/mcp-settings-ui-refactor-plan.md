@@ -18,9 +18,9 @@
 | 文件路径 | 涉及函数 / 类 / 组件 | 改动性质 | 改动说明 |
 |---|---|---|---|
 | `dialogs/settings_dialog.py` | `SettingsDialog._build_mcp_tab` | 重构 | 重建 MCP 标签页容器为左右水平分栏布局（左侧导航 + 右侧 Stack 详情容器 + 空状态页） |
-| `dialogs/settings_dialog.py` | `SettingsDialog._add_mcp_server_item` (原 `_add_mcp_server_card`) | 重构 | 创建左侧 `Gtk.ListBoxRow` 与右侧表单卡片，注册联动事件并装配入 `Gtk.Stack` |
+| `dialogs/settings_dialog.py` | `SettingsDialog._add_mcp_server_card` | 重构 | 创建左侧 `Gtk.ListBoxRow` 与右侧表单卡片，注册联动事件并装配入 `Gtk.Stack` |
 | `dialogs/settings_dialog.py` | `SettingsDialog._update_mcp_list_row` | 新增 | 根据表单当前值（名称、启用状态、传输类型）实时刷新对应左侧行的 UI 标签与 Badge |
-| `dialogs/settings_dialog.py` | `SettingsDialog._remove_mcp_server_item` | 重构 | 删除选中服务器，自动切换高亮相邻服务器或显示空状态页 |
+| `dialogs/settings_dialog.py` | `SettingsDialog._remove_mcp_server_card` | 重构 | 删除选中服务器，自动切换高亮相邻服务器或显示空状态页 |
 | `dialogs/settings_dialog.py` | `SettingsDialog._create_mcp_empty_view` | 新增 | 创建“无 MCP 服务器”时的优雅占位引导界面 |
 | `dialogs/settings_dialog.py` | `SettingsDialog._on_save` | 适配 | 保持遍历控件列表提取配置的逻辑，确保数据持久化无缝兼容 |
 | `tests/test_mcp_phase3.py` | `TestMCPSettingsConfigParsing` | 扩充 | 增加对多服务器配置聚合与空列表场景的数据测试用例 |
