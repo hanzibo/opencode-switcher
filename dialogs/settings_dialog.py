@@ -1694,6 +1694,7 @@ class SettingsDialog:
         else:
             status_label.set_markup("<span foreground='#888'>○ 未连接</span>")
         test_box.pack_start(status_label, False, False, 0)
+        detail_vbox.pack_start(test_frame, False, False, 0)
 
         # ── 3. 注册到 Stack 与组件引用列表 ──
         # 先对表单整体执行 show_all() 递归标记所有叶子控件为 visible

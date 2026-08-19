@@ -157,6 +157,13 @@ class TestMCPSettingsMasterDetailUI(unittest.TestCase):
         self.assertFalse(http_box.get_visible())
         self.assertTrue(item_stdio["command"].get_visible())
 
+        # Check test connection button & status label presence and visibility
+        self.assertTrue(item_stdio["status_label"].get_visible())
+        self.assertIsNotNone(item_stdio["status_label"].get_parent())
+        test_frame = item_stdio["status_label"].get_parent().get_parent()
+        self.assertTrue(test_frame.get_visible())
+        self.assertIsNotNone(test_frame.get_parent())
+
 
 if __name__ == "__main__":
     unittest.main()
