@@ -190,7 +190,9 @@ async def test_connection():
         tools = await mgr.list_tools("test-server")
         print(f"\n📋 可用工具 ({len(tools)}):")
         for t in tools:
-            print(f"   • {t.name}: {t.description}")
+            name = t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
+            desc = t.get("description", "") if isinstance(t, dict) else getattr(t, "description", "")
+            print(f"   • {name}: {desc}")
 
         print("\n🛠️  调用 echo...")
         result = await mgr.call_tool("test-server", "echo", {"message": "Hello MCP!"})
