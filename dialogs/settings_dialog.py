@@ -1639,8 +1639,9 @@ class SettingsDialog:
                         "<span foreground='green'>● 已授权 ✓</span>"
                     ))
                 except Exception as e:
-                    GLib.idle_add(lambda: oauth_status_label.set_markup(
-                        f"<span foreground='red'>● 授权失败: {e}</span>"
+                    err_msg = str(e)
+                    GLib.idle_add(lambda msg=err_msg: oauth_status_label.set_markup(
+                        f"<span foreground='red'>● 授权失败: {msg}</span>"
                     ))
 
             threading.Thread(target=_do_auth, daemon=True).start()
@@ -1789,9 +1790,10 @@ class SettingsDialog:
                 finally:
                     loop.close()
             except Exception as e:
+                err_msg = str(e)
                 GLib.idle_add(
-                    lambda: status_label.set_markup(
-                        f"<span foreground='red'>● 测试异常: {e}</span>"
+                    lambda msg=err_msg: status_label.set_markup(
+                        f"<span foreground='red'>● 测试异常: {msg}</span>"
                     )
                 )
 
