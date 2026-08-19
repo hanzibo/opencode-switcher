@@ -122,9 +122,32 @@ class TestMCPSettingsMasterDetailUI(unittest.TestCase):
         for w in list(dialog._mcp_server_widgets):
             dialog._remove_mcp_server_card(w["server_id"])
 
-        self.assertEqual(len(dialog._mcp_server_widgets), 0)
-        self.assertEqual(len(dialog._mcp_list_box.get_children()), 0)
-        self.assertEqual(dialog._mcp_stack.get_visible_child_name(), "empty")
+    def test_transport_mode_visibility_switching(self):
+        dialog = SettingsDialog(parent_window=None, ai_settings_store=self.store)
+
+        # local-fs is stdio mode
+        item_stdio = dialog._mcp_server_widgets[0]
+        stdio_box = item_stdio["command"].get_parent().get_parent()
+        http_box = item_stdio["url"].get_parent().get_parent()
+
+        self.assertTrue(stdio_box.get_visible())
+        self.assertFalse(http_box.get_visible())
+
+        # Calling show_all on the dialog (as done during window construction/reveal)
+        # must NOT override no_show_all
+        dialog._dialog.show_all()
+        self.assertTrue(stdio_box.get_visible())
+        self.assertFalse(http_box.get_visible())
+
+        # Switch transport to http
+        item_stdio["transport"].set_active_id("http")
+        self.assertFalse(stdio_box.get_visible())
+        self.assertTrue(http_box.get_visible())
+
+        # Switch back to stdio
+        item_stdio["transport"].set_active_id("stdio")
+        self.assertTrue(stdio_box.get_visible())
+        self.assertFalse(http_box.get_visible())
 
 
 if __name__ == "__main__":

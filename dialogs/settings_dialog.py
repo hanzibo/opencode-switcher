@@ -1698,6 +1698,11 @@ class SettingsDialog:
         detail_vbox.pack_start(test_frame, False, False, 0)
 
         # ── 3. 注册到 Stack 与组件引用列表 ──
+        stdio_box.set_no_show_all(True)
+        http_box.set_no_show_all(True)
+        api_key_entry.set_no_show_all(True)
+        row5_oauth.set_no_show_all(True)
+
         self._mcp_stack.add_named(detail_scrolled, server_id)
         detail_scrolled.show_all()
 
@@ -1738,8 +1743,12 @@ class SettingsDialog:
             api_key_entry.set_visible(is_http_mode and mode == "bearer")
             row5_oauth.set_visible(is_http_mode and mode == "oauth2")
 
-        is_http = cfg.transport == "http"
+        is_http = (cfg.transport == "http")
         _apply_visibility(is_http)
+
+        detail_scrolled.connect("map", lambda *_: _apply_visibility(
+            transport_combo.get_active_id() == "http"
+        ))
 
         # ── 5. 交互事件与双向联动 ──
         name_entry.connect("changed", lambda e: self._update_mcp_list_row(
@@ -1774,11 +1783,11 @@ class SettingsDialog:
                 oauth_status_label.set_markup("<span foreground='#888'>未授权</span>")
 
         def _on_auth_changed(combo):
+            is_http_mode = (transport_combo.get_active_id() == "http")
             mode = combo.get_active_id()
-            is_bearer = (mode == "bearer")
-            api_key_entry.set_visible(is_bearer)
-            row5_oauth.set_visible(mode == "oauth2")
-            if mode == "oauth2":
+            api_key_entry.set_visible(is_http_mode and mode == "bearer")
+            row5_oauth.set_visible(is_http_mode and mode == "oauth2")
+            if is_http_mode and mode == "oauth2":
                 _update_oauth_status()
 
         auth_combo.connect("changed", _on_auth_changed)
