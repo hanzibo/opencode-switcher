@@ -130,24 +130,32 @@ class TestMCPSettingsMasterDetailUI(unittest.TestCase):
         stdio_box = item_stdio["command"].get_parent().get_parent()
         http_box = item_stdio["url"].get_parent().get_parent()
 
+        # Check container visibility
         self.assertTrue(stdio_box.get_visible())
         self.assertFalse(http_box.get_visible())
+
+        # Check leaf entries visibility
+        self.assertTrue(item_stdio["command"].get_visible())
+        self.assertTrue(item_stdio["args"].get_visible())
 
         # Calling show_all on the dialog (as done during window construction/reveal)
         # must NOT override no_show_all
         dialog._dialog.show_all()
         self.assertTrue(stdio_box.get_visible())
         self.assertFalse(http_box.get_visible())
+        self.assertTrue(item_stdio["command"].get_visible())
 
         # Switch transport to http
         item_stdio["transport"].set_active_id("http")
         self.assertFalse(stdio_box.get_visible())
         self.assertTrue(http_box.get_visible())
+        self.assertTrue(item_stdio["url"].get_visible())
 
         # Switch back to stdio
         item_stdio["transport"].set_active_id("stdio")
         self.assertTrue(stdio_box.get_visible())
         self.assertFalse(http_box.get_visible())
+        self.assertTrue(item_stdio["command"].get_visible())
 
 
 if __name__ == "__main__":

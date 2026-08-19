@@ -1695,16 +1695,17 @@ class SettingsDialog:
             status_label.set_markup("<span foreground='#888'>○ 未连接</span>")
         test_box.pack_start(status_label, False, False, 0)
 
-        detail_vbox.pack_start(test_frame, False, False, 0)
-
         # ── 3. 注册到 Stack 与组件引用列表 ──
+        # 先对表单整体执行 show_all() 递归标记所有叶子控件为 visible
+        detail_scrolled.show_all()
+
+        # 再对动态互斥的子容器设置 no_show_all，防止顶层 dialog.show_all() 强制将它们同时展开
         stdio_box.set_no_show_all(True)
         http_box.set_no_show_all(True)
         api_key_entry.set_no_show_all(True)
         row5_oauth.set_no_show_all(True)
 
         self._mcp_stack.add_named(detail_scrolled, server_id)
-        detail_scrolled.show_all()
 
         widget_item = {
             "server_id": server_id,
