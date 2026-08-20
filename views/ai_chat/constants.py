@@ -25,6 +25,21 @@ AI_BTN_LABEL_STOP = "暂停"
 # 面板标题常量：ai_html_template.py 的 #ai-header-title 内联同名文本
 _AI_HEADER_TITLE = "AI 助手看盘"
 
+# Slash commands available in the AI chat input box (command, description)
+_AI_COMMANDS = [
+    ("/new", "新对话"),
+    ("/delete", "删除并新建"),
+    ("/fork", "建立当前对话的分支 (Fork)"),
+    ("/retry", "回滚到上一轮"),
+    ("/rollback", "回滚到任意轮"),
+    ("/title", "设置/生成标题"),
+    ("/model", "切换模型"),
+    ("/cd", "切换 bash 工作路径"),
+    ("/summary", "压缩上下文（/summary keep=N，保留最近N条，默认50）"),
+    ("/skill", "查看与手动触发 AI Skill"),
+    ("/ai-polish", "扩展润色提问，去除歧义与不严谨"),
+]
+
 
 def _to_chat_messages(msgs: List[Dict]) -> List[ChatMessage]:
     return [ChatMessage(role=m["role"], content=m["content"], 

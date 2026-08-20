@@ -139,6 +139,17 @@ class WebViewMixin:
         if hasattr(self, "_ai_webview") and self._ai_webview:
             self._ai_webview.run_javascript(js_code, None, None)
 
+    def append_html_to_webview(self, html_snippet: str):
+        """Insert HTML snippet before end of content div and scroll to bottom."""
+        escaped = json.dumps(html_snippet)
+        if hasattr(self, "_ai_webview") and self._ai_webview:
+            self._ai_webview.run_javascript(
+                f"document.getElementById('content').insertAdjacentHTML('beforeend', {escaped});"
+                f"_wrapTables(document.getElementById('content'));"
+                f"_scrollToBottom();",
+                None, None
+            )
+
     def _get_turn_messages(self) -> List[Dict]:
         """Get messages for the current active turn (from last user msg onward)."""
         last_user_idx = -1
