@@ -20,6 +20,7 @@ from .streaming_mixin import StreamingMixin
 from .webview_mixin import WebViewMixin
 from .runner_mixin import RunnerMixin
 from .session_mixin import SessionMixin
+from .panel import AIChatPanel
 
 __all__ = [
     "_AI_HEADER_TITLE",
@@ -40,4 +41,5 @@ __all__ = [
     "WebViewMixin",
     "RunnerMixin",
     "SessionMixin",
+    "AIChatPanel",
 ]
