@@ -19,7 +19,7 @@ OpenCode Switcher 是一个专为 Linux GTK3 桌面环境设计的系统托盘�
   - Prompts Config 弹窗提供快捷置入 `+ ${&}` 按钮。
 - **🖥️ Wayland 原生支持**：通过配套的 **GNOME Shell 扩展** 实时监听剪切板变动（`owner-changed` 信号），通过系统级 Unix 套接字监听快捷键触发，通过文件共享机制安全请求窗口聚焦。
 - **🔧 智能终端拉起**：自动探知系统中安装的终端（按优先级：`Ptyxis` → `GNOME Terminal` → `Console/kgx` → `Black Box`），并在对应的终端里拉起指定的 OpenCode 会话。
-- **🤖 AI 助手侧栏**：内嵌 WebKit2 WebView 的多轮 LLM 对话面板，支持流式输出、Markdown/代码高亮/KaTeX 数学渲染、图片附件、模型切换，以及基于 ReAct 循环的 9 种工具调用（网页搜索、文件操作等）。
+- **🤖 AI 助手侧栏**：内嵌 WebKit2 WebView 的多轮 LLM 对话面板，支持流式输出、Markdown/代码高亮/KaTeX 数学渲染、图片附件、模型切换，以及基于 ReAct 循环的 28 种工具调用（网页搜索、文件操作等）。
 - **🔁 对话回滚与重试**：支持回滚到任意历史轮次（`/rollback`），重试上一轮响应（`/retry`），以及完整的对话历史管理。
 
 ---
@@ -68,11 +68,15 @@ sudo apt install gir1.2-ayatanaappindicator3-0.1 python3-gi python3-gi-cairo pyt
 ├── views/                      # 主 UI 视图
 │   ├── panel.py                # 搜索面板：会话搜索、斜杠命令、CSS 主题
 │   ├── clipboard_panel.py      # 剪贴板面板容器：组装子组件 + 事件路由
-│   ├── ai_chat_panel.py        # AI 助手侧栏：WebView、LLM 对话、流式输出
+│   ├── ai_chat/                # AI 助手面板包（流式/WebView/状态机/Subagent/MCP Mixin）
+│   ├── ai_chat_panel.py        # AI 助手向后兼容门面 (Facade)
 │   └── ai_popovers.py          # AI 命令自动补全 + 历史对话弹窗
-├── dialogs/                    # GTK 对话框（设置/提示词/回收站/排序/记忆管理等）
+├── dialogs/                    # GTK 对话框
+│   ├── settings/               # 设置窗口包（8 个 Tab Mixin 模块化）
+│   ├── settings_dialog.py      # 设置窗口向后兼容门面 (Facade)
+│   └── ...                     # 提示词/回收站/排序/记忆管理等对话框
 ├── stores/                     # 数据持久化层
-│   ├── clipboard_store.py      # 剪贴板去重/分类、自定义分类、对话存储
+│   ├── clipboard_store.py      # 剪贴板历史 FIFO、自定义分类、对话存储
 │   ├── session_store.py        # OpenCode SQLite 数据库读取 + 进程活体检测
 │   ├── skill_store.py          # AI Skill 存储
 │   └── theme_config.py         # 主题配置
@@ -81,7 +85,7 @@ sudo apt install gir1.2-ayatanaappindicator3-0.1 python3-gi python3-gi-cairo pyt
 │   ├── ai_tool_loop.py         # ReAct 工具调用循环
 │   ├── ai_html_template.py     # WebView HTML 模板 + KaTeX 内联
 │   └── render_pipeline.py      # 渲染管线
-├── ai_text_utils/              # 纯文本/Markdown/数学/图像工具（零 GTK 依赖）
+├── ai_text_utils/              # 纯文本/Markdown/数学/图像/分类工具（零 GTK 依赖，6 模块）
 ├── mcp_integration/            # MCP 协议层（JSON-RPC over stdio/http、GTK asyncio 桥）
 ├── tool_registry/              # AI 工具执行器（28 个工具：bash/web/文件/子代理等）
 ├── html_templates/             # WebView 前端资源（chat.js / chat.css）

@@ -44,6 +44,7 @@ def write_json_private(path: str, data: dict, indent: int = 2) -> None:
     os.chmod(path, 0o600)
 
 
+CONFIG_DIR = os.path.expanduser("~/.config/opencode-switcher")
 CACHE_DIR = os.path.expanduser("~/.cache/opencode-switcher")
 CONVERSATIONS_DIR = os.path.join(CACHE_DIR, "conversations")
 PANEL_WIDTH = 1320

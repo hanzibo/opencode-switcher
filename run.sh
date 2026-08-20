@@ -15,5 +15,11 @@ export NVM_DIR="$HOME/.nvm"
 # Disable JIT for WebKit JavaScriptCore — reduces memory footprint
 export JSC_useJIT=false
 
+# Suppress redundant "Not loading module atk-bridge" warning in GTK3/WebKit
+export NO_ATK_BRIDGE=1
+if [ -n "${GTK_MODULES:-}" ]; then
+    export GTK_MODULES="$(echo "$GTK_MODULES" | sed -E 's/(^|:)gail:atk-bridge//g; s/(^|:)atk-bridge//g; s/^://; s/:$//')"
+fi
+
 echo "=== $(date) ===" >> "$LOG"
 exec "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/main.py" >> "$LOG" 2>&1

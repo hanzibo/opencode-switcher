@@ -36,6 +36,18 @@ class TestClipboardClassification(unittest.TestCase):
         self.assertEqual(detect_language_name("#!/bin/bash\necho hello"), "Shell")
         self.assertEqual(detect_language_name('{"key": "value"}'), "JSON")
 
+    def test_ai_text_utils_direct_import(self):
+        from ai_text_utils import classify_text as direct_classify, detect_language_name as direct_detect
+        from ai_text_utils.classifier import classify_text as mod_classify, detect_language_name as mod_detect
+        self.assertIs(direct_classify, mod_classify)
+        self.assertIs(direct_detect, mod_detect)
+        self.assertEqual(direct_classify(""), "text")
+        self.assertIsNone(direct_detect(""))
+        self.assertEqual(direct_classify("<html><body>hello</body></html>"), "code")
+        self.assertEqual(direct_detect("<html><body>hello</body></html>"), "HTML")
+        self.assertEqual(direct_detect("SELECT id, name FROM users;"), "SQL")
+
+
 
 class TestClipboardStore(unittest.TestCase):
     """Test ClipboardStore FIFO eviction, deduplication, and persistence."""
