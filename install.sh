@@ -224,8 +224,8 @@ OpenCode Switcher v${VERSION} - 安装/卸载/状态检查
 用法: $0 [command]
 
 命令:
-  install    安装到 \${INSTALL_DIR:-~/.local/share/opencode-switcher}（默认）
-  uninstall  卸载
+  install    安装到 ${INSTALL_DIR:-~/.local/share/opencode-switcher}（默认）
+  uninstall  卸载（支持 --keep-venv, --purge, --keep-data 选项）
   status     检查安装状态
   help       显示本帮助
 
@@ -515,6 +515,18 @@ cmd_install() {
 
 # ── Uninstall ─────────────────────────────────
 cmd_uninstall() {
+    local opt_keep_venv=""
+    local opt_keep_data=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --keep-venv) opt_keep_venv="y" ;;
+            --purge|--all) opt_keep_venv="n"; opt_keep_data="n" ;;
+            --keep-data) opt_keep_data="y" ;;
+            *) warn "未知卸载选项: $1（已忽略）" ;;
+        esac
+        shift
+    done
+
     echo "=========================================="
     echo " 卸载 OpenCode Switcher"
     echo "=========================================="
@@ -565,10 +577,6 @@ cmd_uninstall() {
     rm -f "$SYSD_DIR/opencode-switcher.service"
     rm -f "$BIN_DIR/opencode-switcher"
     rm -f "$BIN_DIR/opencode-switcher-toggle"
-    if [ -d "$INSTALL_DIR" ]; then
-        rm -rf "$INSTALL_DIR"
-        info "删除: $INSTALL_DIR"
-    fi
     if [ -d "$EXT_DIR" ]; then
         if command -v gnome-extensions &>/dev/null; then
             gnome-extensions disable clipboard-monitor@opencode-switcher 2>/dev/null && \
@@ -581,13 +589,54 @@ cmd_uninstall() {
     # Remove lock file
     rm -f "$HOME/.config/opencode-switcher/lock"
 
+    # Remove application files / handle venv preservation
+    if [ -d "$INSTALL_DIR" ]; then
+        local keep_venv="$opt_keep_venv"
+        if [ -z "$keep_venv" ]; then
+            if [ -d "$INSTALL_DIR/venv" ]; then
+                echo ""
+                warn "是否保留 Python 虚拟环境 (venv)？(保留后重新安装无需重新下载依赖)"
+                echo -n "  输入 y 保留, n 删除 [y]: "
+                # EOF（无输入）默认保留 venv：set -e 下裸 read 遇 EOF 返回非零会中止卸载
+                read -r keep_venv || keep_venv="y"
+            else
+                keep_venv="n"
+            fi
+        fi
+
+        if [ "$keep_venv" = "n" ] || [ "$keep_venv" = "N" ]; then
+            rm -rf "$INSTALL_DIR"
+            info "删除: $INSTALL_DIR"
+        else
+            rm -rf "$INSTALL_DIR/views" \
+                "$INSTALL_DIR/dialogs" \
+                "$INSTALL_DIR/stores" \
+                "$INSTALL_DIR/ai_engine" \
+                "$INSTALL_DIR/system" \
+                "$INSTALL_DIR/tool_registry" \
+                "$INSTALL_DIR/ai_text_utils" \
+                "$INSTALL_DIR/mcp_integration" \
+                "$INSTALL_DIR/html_templates" \
+                "$INSTALL_DIR/katex" \
+                "$INSTALL_DIR/__pycache__"
+            rm -f "$INSTALL_DIR/main.py" \
+                "$INSTALL_DIR/run.sh" \
+                "$INSTALL_DIR/opencode-switcher-toggle" \
+                "$INSTALL_DIR/opencode-switcher.png"
+            info "已清理应用文件，Python 虚拟环境已保留 ($INSTALL_DIR/venv)"
+        fi
+    fi
+
     # Remove config and cache directories (user data)
     if [ -d "$HOME/.config/opencode-switcher" ] || [ -d "$HOME/.cache/opencode-switcher" ]; then
-        echo ""
-        warn "是否保留剪切板历史等用户数据？"
-        echo -n "  输入 y 保留, n 删除 [y]: "
-        # EOF（无输入）默认保留数据：set -e 下裸 read 遇 EOF 返回非零会中止卸载
-        read -r keep_data || keep_data="y"
+        local keep_data="$opt_keep_data"
+        if [ -z "$keep_data" ]; then
+            echo ""
+            warn "是否保留剪切板历史等用户数据？"
+            echo -n "  输入 y 保留, n 删除 [y]: "
+            # EOF（无输入）默认保留数据：set -e 下裸 read 遇 EOF 返回非零会中止卸载
+            read -r keep_data || keep_data="y"
+        fi
         if [ "$keep_data" = "n" ] || [ "$keep_data" = "N" ]; then
             rm -rf "$HOME/.config/opencode-switcher" 2>/dev/null
             rm -rf "$HOME/.cache/opencode-switcher" 2>/dev/null
@@ -750,13 +799,15 @@ cmd_status() {
 }
 
 # ── Main ──────────────────────────────────────
-case "${1:-install}" in
-    install)   validate_install_dir; cmd_install ;;
-    uninstall) validate_install_dir; cmd_uninstall ;;
-    status)    cmd_status ;;
+cmd="${1:-install}"
+shift || true
+case "$cmd" in
+    install)   validate_install_dir; cmd_install "$@" ;;
+    uninstall) validate_install_dir; cmd_uninstall "$@" ;;
+    status)    cmd_status "$@" ;;
     help|--help|-h) usage ;;
     *)
-        error "未知命令: $1"
+        error "未知命令: $cmd"
         usage
         exit 1
         ;;

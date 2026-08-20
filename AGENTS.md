@@ -12,7 +12,7 @@ Linux GTK3 desktop tray app for switching between OpenCode (CLI) sessions, clipb
 | Test (single) | `venv/bin/python3 -m unittest tests.test_mcp_integration` | Also works: `tests/test_mcp_integration.py` |
 | Venv setup | `python3 -m venv --system-site-packages venv && venv/bin/pip install -r requirements.txt` | `--system-site-packages` required for system PyGObject |
 | Install | `./install.sh install` | Copies to `~/.local/share/opencode-switcher/`, enables systemd, GNOME ext |
-| Uninstall | `./install.sh uninstall` | Interactive — asks about keeping user data |
+| Uninstall | `./install.sh uninstall` | Interactive — asks about keeping venv and user data (supports `--keep-venv`, `--purge`, `--keep-data`) |
 | Status | `./install.sh status` | Checks install, desktop entry, service, opencode CLI, GNOME ext |
 | DB inspect | `venv/bin/python3 -m system.inspect_db` | Lists session table schema + latest rows |
 

@@ -1283,6 +1283,34 @@ class TestUninstallKeepDataPrompt(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
 
 
+class TestUninstallKeepVenvPrompt(unittest.TestCase):
+    """The uninstall keep-venv prompt must not abort on EOF and must support flags."""
+
+    def test_read_venv_guarded_for_eof(self):
+        body = _function_body("cmd_uninstall")
+        self.assertNotEqual(body, "", "cmd_uninstall() must exist")
+        read_lines = [line for line in body.splitlines() if "read -r keep_venv" in line]
+        self.assertEqual(
+            len(read_lines),
+            1,
+            "cmd_uninstall must read keep_venv exactly once",
+        )
+        self.assertIn(
+            "||", read_lines[0], f"read must be EOF-guarded: {read_lines[0]!r}"
+        )
+        self.assertIn(
+            'keep_venv="y"',
+            read_lines[0],
+            "EOF must default to keeping venv",
+        )
+
+    def test_uninstall_flags_supported(self):
+        body = _function_body("cmd_uninstall")
+        self.assertIn("--keep-venv", body)
+        self.assertIn("--purge", body)
+        self.assertIn("--keep-data", body)
+
+
 class TestInstallerSyntax(unittest.TestCase):
     """Syntax guards: bash -n always, shellcheck when available."""
 
