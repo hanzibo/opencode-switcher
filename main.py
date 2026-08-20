@@ -7,6 +7,16 @@ import sys
 import threading
 import time
 from typing import Optional
+
+# Suppress redundant "Not loading module atk-bridge" warning in GTK3/WebKit
+os.environ.setdefault("NO_ATK_BRIDGE", "1")
+if "GTK_MODULES" in os.environ:
+    _mods = [m for m in os.environ["GTK_MODULES"].split(":") if m and m not in ("atk-bridge", "gail:atk-bridge")]
+    if _mods:
+        os.environ["GTK_MODULES"] = ":".join(_mods)
+    else:
+        os.environ.pop("GTK_MODULES", None)
+
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("AyatanaAppIndicator3", "0.1")
