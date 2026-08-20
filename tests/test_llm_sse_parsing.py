@@ -62,6 +62,36 @@ class TestToolCallAccumulator(unittest.TestCase):
         self.assertEqual([c["function"]["name"] for c in calls], ["bash", "read_file"])
         self.assertEqual(calls[0]["function"]["arguments"], '{"cmd":"ls"}')
 
+    def test_sequential_tools_same_index_muse_spark_style(self):
+        """某些模型（如 muse-spark）多工具调用均使用 index=0，在新 id 出现时应正确切分为多个独立调用。"""
+        acc = _ToolCallAccumulator()
+        # Tool Call 1
+        acc.add_delta({"index": 0, "id": "fc_1", "type": "function", "function": {"name": "github__get_file_contents", "arguments": ""}})
+        acc.add_delta({"index": 0, "function": {"arguments": '{"path":"a.txt"}'}})
+        # Tool Call 2 (same index 0, new id fc_2)
+        acc.add_delta({"index": 0, "id": "fc_2", "type": "function", "function": {"name": "github__get_file_contents", "arguments": ""}})
+        acc.add_delta({"index": 0, "function": {"arguments": '{"path":"b.txt"}'}})
+        # Tool Call 3 (same index 0, new id fc_3)
+        acc.add_delta({"index": 0, "id": "fc_3", "type": "function", "function": {"name": "github__get_file_contents", "arguments": ""}})
+        acc.add_delta({"index": 0, "function": {"arguments": '{"path":"c.txt"}'}})
+
+        calls = acc.get_calls()
+        self.assertEqual(len(calls), 3)
+        self.assertEqual([c["id"] for c in calls], ["fc_1", "fc_2", "fc_3"])
+        self.assertEqual([c["function"]["name"] for c in calls], ["github__get_file_contents"] * 3)
+        self.assertEqual([c["function"]["arguments"] for c in calls], ['{"path":"a.txt"}', '{"path":"b.txt"}', '{"path":"c.txt"}'])
+
+    def test_repeated_tool_name_chunks_not_duplicated(self):
+        """服务端每 chunk 重复发送完整 name 时，不发生字符串连缀拼接。"""
+        acc = _ToolCallAccumulator()
+        acc.add_delta({"index": 0, "id": "fc_10", "type": "function", "function": {"name": "get_current_time", "arguments": ""}})
+        acc.add_delta({"index": 0, "function": {"name": "get_current_time", "arguments": '{"tz":'}})
+        acc.add_delta({"index": 0, "function": {"name": "get_current_time", "arguments": '"UTC"}'}})
+        calls = acc.get_calls()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["function"]["name"], "get_current_time")
+        self.assertEqual(calls[0]["function"]["arguments"], '{"tz":"UTC"}')
+
 
 class TestParseSSEEvents(unittest.TestCase):
 

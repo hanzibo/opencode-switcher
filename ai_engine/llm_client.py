@@ -146,40 +146,81 @@ class _ToolCallAccumulator:
     """
     def __init__(self):
         self._calls: Dict[int, dict] = {}
+        self._current_index_map: Dict[int, int] = {}
 
     def add_delta(self, delta: dict) -> None:
         """Accumulate a tool_calls delta chunk from the SSE stream.
 
-        兼容两种 chunk 风格（修复 Ling-3.0-flash 等兼容实现的流中断）：
-        - OpenAI 标准：后续 chunk 省略 id/name/arguments 键
-        - 部分兼容实现：显式发送 null 值（{"id": null, "name": null}）
-        两种情况下均须跳过 None/非 str 值，避免 str + None 的 TypeError
-        中断整个流。非 dict 元素（如 tool_calls 数组中的 null）整体跳过。
+        兼容多种 chunk 风格：
+        - OpenAI 标准：后续 chunk 省略 id/name，按 index 分组（index=0, 1, ...）
+        - 某些开源模型/网关（如 muse-spark 等）：多个 tool_calls 均发送 index=0，
+          但在新工具调用开始时携带新的独立 id；
+        - 部分兼容实现：每个 chunk 重复发送完整 name 或显式发送 null 值。
         """
         if not isinstance(delta, dict):
             return
-        index = delta.get("index")
-        if index is None:
-            return
-        if index not in self._calls:
-            self._calls[index] = {
+        incoming_idx = delta.get("index")
+        if incoming_idx is None:
+            incoming_idx = 0
+
+        val_id = delta.get("id")
+        if not isinstance(val_id, str) or not val_id:
+            val_id = None
+
+        fn = delta.get("function")
+        fn_name = None
+        fn_args = None
+        if isinstance(fn, dict):
+            name = fn.get("name")
+            if isinstance(name, str) and name:
+                fn_name = name
+            args = fn.get("arguments")
+            if isinstance(args, str) and args:
+                fn_args = args
+
+        # 检查该 incoming_idx 当前映射的内部槽位
+        target_idx = self._current_index_map.get(incoming_idx)
+
+        # 若当前槽位已有非空 id，且收到一个不同的非空新 id，
+        # 说明模型在复用同一个 incoming_idx（如 0）发送下一个工具调用，
+        # 应开启一个全新的内部槽位。
+        if target_idx is not None and val_id:
+            current_call = self._calls.get(target_idx)
+            if current_call and current_call["id"] and current_call["id"] != val_id:
+                target_idx = len(self._calls)
+                self._current_index_map[incoming_idx] = target_idx
+
+        if target_idx is None:
+            target_idx = len(self._calls)
+            self._current_index_map[incoming_idx] = target_idx
+
+        if target_idx not in self._calls:
+            self._calls[target_idx] = {
                 "id": "",
                 "type": "function",
                 "function": {"name": "", "arguments": ""},
             }
-        call = self._calls[index]
-        # 值判空 + 类型守卫：{"id": null} 或非 str 值均跳过拼接（🟡-1/🟡-2）
-        val = delta.get("id")
-        if isinstance(val, str) and val:
-            call["id"] += val
-        fn = delta.get("function")
-        if isinstance(fn, dict):
-            name = fn.get("name")
-            if isinstance(name, str) and name:
-                call["function"]["name"] += name
-            args = fn.get("arguments")
-            if isinstance(args, str) and args:
-                call["function"]["arguments"] += args
+
+        call = self._calls[target_idx]
+
+        if val_id:
+            if not call["id"]:
+                call["id"] = val_id
+            elif call["id"] != val_id and not val_id.startswith(call["id"]):
+                call["id"] = val_id
+
+        if fn_name:
+            if not call["function"]["name"]:
+                call["function"]["name"] = fn_name
+            elif call["function"]["name"] == fn_name:
+                pass  # 服务端每个 chunk 都在重复完整工具名，忽略
+            elif fn_name.startswith(call["function"]["name"]):
+                call["function"]["name"] = fn_name
+            else:
+                call["function"]["name"] += fn_name
+
+        if fn_args:
+            call["function"]["arguments"] += fn_args
 
     def get_calls(self) -> List[dict]:
         """Return all accumulated tool calls, ordered by index, filtering out incomplete ones."""
@@ -189,6 +230,7 @@ class _ToolCallAccumulator:
     def clear(self) -> None:
         """Clear all accumulated tool calls."""
         self._calls.clear()
+        self._current_index_map.clear()
 
     @property
     def has_calls(self) -> bool:
