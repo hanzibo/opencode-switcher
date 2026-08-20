@@ -14,7 +14,7 @@
                     height: 100vh;
                     overflow: hidden;
                 }
-                /* 消息区独立滚动（header 固定不随内容滚动） */
+                /* 消息区独立滚动（header 固定不随内容滚动，硬件加速图层隔离） */
                 #content {
                     flex: 1;
                     overflow-y: auto;
@@ -25,17 +25,21 @@
                     border-bottom: none;              /* 新增：底部不亮 */
                     transition: border-color .3s, box-shadow .3s;  /* 新增：0.3s 渐隐 */
                     box-shadow: inset 0 0 0 {orbit};  /* 新增：0 光晕同属性桥接（消除 none 类型切换跳变） */
+                    transform: translateZ(0);
+                    will-change: scroll-position;
                 }
                 /* 回复中三边框呼吸灯（左/右/上，底不亮）；class 由 chat.js setStreamingGlow 切换 */
                 #content.streaming-glow {
                     border-color: {glow};
                     box-shadow: inset 0 0 6px {orbit};
                     animation: breathing-glow 2.4s ease-in-out infinite;  /* 2.4s 周期 */
+                    will-change: box-shadow, border-color;
                 }
                 /* 回复完成淡出：动画内渐隐（不依赖 transition——WebKit 对运行中动画移除的过渡不可靠），
                    由 chat.js setStreamingGlow(false) 添加本 class，350ms 后移除 */
                 #content.glow-fading {
                     animation: glow-fadeout 350ms ease-out forwards;
+                    will-change: box-shadow, border-color;
                 }
                 @keyframes glow-fadeout {
                     from { box-shadow: inset 0 0 28px {orbit}; border-color: {glow}; }
@@ -46,7 +50,7 @@
                     50%  { box-shadow: inset 0 0 28px {orbit}; }
                     100% { box-shadow: inset 0 0 6px {orbit}; }
                 }
-                /* ── AI header（WebView 内固定装饰区，原 GTK ai_hdr 迁移） ── */
+                /* ── AI header（WebView 内固定装饰区，独立硬件加速合成层） ── */
                 #ai-header {
                     flex: none;
                     display: flex;
@@ -58,6 +62,7 @@
                     background-color: {bg_color};
                     position: relative;
                     z-index: 50;
+                    transform: translateZ(0);
                 }
                 #ai-header-left {
                     flex: 1;
@@ -140,6 +145,9 @@
                     display: inline-flex;
                     align-items: center;
                     flex: none;
+                    transform: translateZ(0);
+                    will-change: transform;
+                    contain: paint;
                 }
                 /* ── 历史对话下拉面板（星云紫悬浮面板） ── */
                 #ai-history-dropdown {

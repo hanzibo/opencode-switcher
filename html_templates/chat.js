@@ -428,7 +428,7 @@ function _renderMath(element) {
                         container.className = ''; // Remove container styling for split layout
                         container.innerHTML = html;
                         _wrapTables(container);
-                        addCopyButtons();
+                        addCopyButtons(container);
                         _debouncedRenderMath(container);
                     } else {
                         const div = document.getElementById(msgId + '-bubble') || container;
@@ -453,22 +453,23 @@ function _renderMath(element) {
                                 if (typing) typing.remove();
                                 regions[2].innerHTML = answer.innerHTML;
                             }
-                            addCopyButtons();
+                            addCopyButtons(div);
                             _wrapTables(div);   // 覆盖全部三个区域（幂等），与 isSplit/旧结构分支一致
                             _debouncedRenderMath(div);
                         } else {
                             // 旧结构：向后兼容
                             div.innerHTML = html;
                             _wrapTables(div);
-                            addCopyButtons();
+                            addCopyButtons(div);
                             _debouncedRenderMath(div);
                         }
                     }
                     _throttledWindowing();
                     _scrollToBottom();
                 }
-                function addCopyButtons() {
-                    document.querySelectorAll('pre:not(.has-copy-btn)').forEach(function(pre) {
+                function addCopyButtons(root) {
+                    var target = (root && root.querySelectorAll) ? root : document;
+                    target.querySelectorAll('pre:not(.has-copy-btn)').forEach(function(pre) {
                         if (pre.classList.contains('tool-result-content')) return;
                         
                         const code = pre.querySelector('code');
@@ -608,6 +609,24 @@ function _renderMath(element) {
                         _lastTotal = 0;
                         return;
                     }
+
+                    // 性能优化：在流式输出中且处于底部自动滚动时，当前轮次天然为最新一轮 total，
+                    // 跳过所有 msg-row 的 getBoundingClientRect 几何计算，彻底避免 forced reflow (layout thrashing)
+                    if (window._isStreaming && _autoScroll) {
+                        if (_lastTotal === total && _lastRound === total) return;
+                        _currentRound = total;
+                        _lastRound = total;
+                        _lastTotal = total;
+                        nav.style.display = 'flex';
+                        var indicator = document.getElementById('round-indicator');
+                        if (indicator) indicator.textContent = total + '/' + total;
+                        var prevBtn = document.getElementById('round-prev');
+                        var nextBtn = document.getElementById('round-next');
+                        if (prevBtn) prevBtn.disabled = total <= 1;
+                        if (nextBtn) nextBtn.disabled = true;
+                        return;
+                    }
+
                     var el = _content();
                     var scrollTop = el ? el.scrollTop : 0;
                     // content 在视口中的偏移（header 高度等），用于换算文档坐标：
