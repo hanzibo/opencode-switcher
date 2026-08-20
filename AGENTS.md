@@ -44,15 +44,15 @@ systemd/.desktop → run.sh → main.py (flock lock)
 | Module | Lines | Role |
 |--------|-------|------|
 | `main.py` | 416 | Entrypoint: flock lock, App(), Gtk.main(), MCP shutdown on quit |
-| `views/` | ~9230 | Main UI views (`panel.py`, `clipboard_panel.py`, `ai_chat_panel.py`, `ai_popovers.py`). `ai_chat_panel.py` is the largest file in the repo (~4600 lines, streaming + suspend/resume logic) |
-| `dialogs/` | ~4550 | GTK dialogs (`settings_dialog.py`, `prompts_config_dialog.py`, `memory_manager_dialog.py`, etc.) |
-| `stores/` | ~2810 | Data persistence & state (`clipboard_store.py`, `session_store.py`, `session_refresh.py`, `skill_store.py`, `theme_config.py`, `delete_queue.py`) |
+| `views/` | ~9230 | Main UI views (`panel.py`, `clipboard_panel.py`, `ai_popovers.py`, and modularized `ai_chat/` package [9 files, streaming + suspend/resume] with `ai_chat_panel.py` facade) |
+| `dialogs/` | ~4550 | GTK dialogs (`settings/` package [9 files, 8 tab mixins] with `settings_dialog.py` facade, `prompts_config_dialog.py`, `memory_manager_dialog.py`, etc.) |
+| `stores/` | ~2530 | Data persistence & state (`clipboard_store.py`, `session_store.py`, `session_refresh.py`, `skill_store.py`, `theme_config.py`, `delete_queue.py`) |
 | `ai_engine/` | ~1630 | AI LLM engine & rendering (`llm_client.py`, `ai_tool_loop.py`, `ai_html_template.py`, `render_pipeline.py`) |
 | `system/` | ~620 | System IPC & utilities (`hotkey.py`, `launcher.py`, `event_types.py`, `migrate_history.py`, `utils.py`, `inspect_db.py`) |
 | `mcp_integration/` | ~4260 | MCP protocol layer (JSON-RPC over stdio/http transports in `transports/`, OAuth 2.1 client auth in `oauth/`, `client_manager.py`, GTK asyncio bridge) |
 | `tool_registry/` | ~6330 | AI tool executors — 28 tools across 13 schema modules (+`display.py`/`_state.py` helpers, no schemas) |
 | `html_templates/` | ~1910 | Web assets (`chat.js`, `chat.css`) for WebKit WebView rendering |
-| `ai_text_utils/` | ~1310 | Pure text/markdown/math helpers (zero GTK dep) |
+| `ai_text_utils/` | ~1590 | Pure text/markdown/math/classifier helpers (zero GTK dep, 6 domain modules) |
 | `deploy/` | — | Templated `opencode-switcher.{service,desktop}` + icon; `install.sh` substitutes `__INSTALL_DIR__` via `sed` |
 
 ### Tool Registry (`tool_registry/`)

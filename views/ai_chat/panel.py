@@ -91,19 +91,7 @@ from ai_engine.ai_tool_loop import run_llm_react_loop, ToolLoopContext
 
 class AIChatPanel(Gtk.Box, MCPMixin, SubagentMixin, StreamingMixin, WebViewMixin, RunnerMixin, SessionMixin):
     # Slash commands available in the AI chat input box (command, description)
-    _AI_COMMANDS = [
-        ("/new", "新对话"),
-        ("/delete", "删除并新建"),
-        ("/fork", "建立当前对话的分支 (Fork)"),
-        ("/retry", "回滚到上一轮"),
-        ("/rollback", "回滚到任意轮"),
-        ("/title", "设置/生成标题"),
-        ("/model", "切换模型"),
-        ("/cd", "切换 bash 工作路径"),
-        ("/summary", "压缩上下文（/summary keep=N，保留最近N条，默认50）"),
-        ("/skill", "查看与手动触发 AI Skill"),
-        ("/ai-polish", "扩展润色提问，去除歧义与不严谨"),
-    ]
+    _AI_COMMANDS = _AI_COMMANDS
     _SUSPEND_DELAY_SECONDS = 60
     # ── Streaming: Token batching ──
     _BATCH_FLUSH_MS = 60                    # 批处理窗口（ms）

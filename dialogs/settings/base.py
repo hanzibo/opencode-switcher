@@ -91,6 +91,26 @@ class SettingsDialog(
         self._gmail_store = GmailOAuthStore()
         self._ai_settings_store = ai_settings_store or AISettingsStore()
         self._dialog = None
+
+        # Tab widget references populated during UI construction
+        self._soft_spin = None
+        self._trim_spin = None
+        self._enable_summary_check = None
+        self._summary_thresh_spin = None
+        self._summary_max_spin = None
+        self._summary_prompt_view = None
+        self._system_prompt_view = None
+        self._polish_prompt_view = None
+        self._clip_max_spin = None
+        self._tool_iter_spin = None
+        self._incremental_tools_check = None
+        self._show_tool_details_check = None
+        self._code_highlight_check = None
+        self._enable_global_skills_check = None
+        self._skill_toggle_widgets = []
+        self._tool_toggle_widgets = []
+        self._mcp_server_widgets = []
+
         self.build_ui()
 
     # ── UI Construction ──────────────────────────────────────────────────
@@ -213,21 +233,24 @@ class SettingsDialog(
     def _on_save(self):
         """Persist all settings and close the dialog."""
         # QQ Mail credentials
-        self._qq_store.email = self._email_entry.get_text().strip()
-        self._qq_store.auth_code = self._auth_entry.get_text().strip()
-        self._qq_store.max_body_chars = int(self._body_chars_spin.get_value())
-        self._qq_store.save()
+        if getattr(self, "_email_entry", None) is not None:
+            self._qq_store.email = self._email_entry.get_text().strip()
+            self._qq_store.auth_code = self._auth_entry.get_text().strip()
+            self._qq_store.max_body_chars = int(self._body_chars_spin.get_value())
+            self._qq_store.save()
 
         # AI 对话设置
-        self._ai_settings_store.soft_limit = int(self._soft_spin.get_value())
-        self._ai_settings_store.trim_target = int(self._trim_spin.get_value())
-        self._ai_settings_store.enable_summary = self._enable_summary_check.get_active()
-        self._ai_settings_store.summary_threshold = int(self._summary_thresh_spin.get_value())
-        self._ai_settings_store.summary_max_chars = int(self._summary_max_spin.get_value())
-        buf = self._summary_prompt_view.get_buffer()
-        self._ai_settings_store.summary_prompt_template = buf.get_text(
-            buf.get_start_iter(), buf.get_end_iter(), False
-        )
+        if self._soft_spin is not None:
+            self._ai_settings_store.soft_limit = int(self._soft_spin.get_value())
+            self._ai_settings_store.trim_target = int(self._trim_spin.get_value())
+            self._ai_settings_store.enable_summary = self._enable_summary_check.get_active()
+            self._ai_settings_store.summary_threshold = int(self._summary_thresh_spin.get_value())
+            self._ai_settings_store.summary_max_chars = int(self._summary_max_spin.get_value())
+            if self._summary_prompt_view is not None:
+                buf = self._summary_prompt_view.get_buffer()
+                self._ai_settings_store.summary_prompt_template = buf.get_text(
+                    buf.get_start_iter(), buf.get_end_iter(), False
+                )
         # 系统提示词（防御性判空：若标签页被移除/重排则不写入）
         sp_view = getattr(self, "_system_prompt_view", None)
         if sp_view is not None:
@@ -242,14 +265,17 @@ class SettingsDialog(
             self._ai_settings_store.polish_prompt_template = pp_buf.get_text(
                 pp_buf.get_start_iter(), pp_buf.get_end_iter(), False
             )
-        self._ai_settings_store.max_clipboard = int(self._clip_max_spin.get_value())
-        self._ai_settings_store.max_tool_iterations = int(self._tool_iter_spin.get_value())
+        if self._clip_max_spin is not None:
+            self._ai_settings_store.max_clipboard = int(self._clip_max_spin.get_value())
+        if self._tool_iter_spin is not None:
+            self._ai_settings_store.max_tool_iterations = int(self._tool_iter_spin.get_value())
         # 流式输出设置（始终为 full 模式，仅保留增量工具和详情选项）
-        self._ai_settings_store.enable_incremental_tools = self._incremental_tools_check.get_active()
-        self._ai_settings_store.show_tool_details = self._show_tool_details_check.get_active()
-        self._ai_settings_store.enable_code_highlight = self._code_highlight_check.get_active()
-        set_code_highlight(self._ai_settings_store.enable_code_highlight)
-        self._ai_settings_store.enable_global_skills = self._enable_global_skills_check.get_active()
+        if self._incremental_tools_check is not None:
+            self._ai_settings_store.enable_incremental_tools = self._incremental_tools_check.get_active()
+            self._ai_settings_store.show_tool_details = self._show_tool_details_check.get_active()
+            self._ai_settings_store.enable_code_highlight = self._code_highlight_check.get_active()
+            set_code_highlight(self._ai_settings_store.enable_code_highlight)
+            self._ai_settings_store.enable_global_skills = self._enable_global_skills_check.get_active()
 
         # 独立 Skill 使能开关
         disabled_skills = []
