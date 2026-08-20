@@ -428,7 +428,7 @@ function _renderMath(element) {
                         container.className = ''; // Remove container styling for split layout
                         container.innerHTML = html;
                         _wrapTables(container);
-                        addCopyButtons();
+                        addCopyButtons(container);
                         _debouncedRenderMath(container);
                     } else {
                         const div = document.getElementById(msgId + '-bubble') || container;
@@ -453,22 +453,23 @@ function _renderMath(element) {
                                 if (typing) typing.remove();
                                 regions[2].innerHTML = answer.innerHTML;
                             }
-                            addCopyButtons();
+                            addCopyButtons(div);
                             _wrapTables(div);   // 覆盖全部三个区域（幂等），与 isSplit/旧结构分支一致
                             _debouncedRenderMath(div);
                         } else {
                             // 旧结构：向后兼容
                             div.innerHTML = html;
                             _wrapTables(div);
-                            addCopyButtons();
+                            addCopyButtons(div);
                             _debouncedRenderMath(div);
                         }
                     }
                     _throttledWindowing();
                     _scrollToBottom();
                 }
-                function addCopyButtons() {
-                    document.querySelectorAll('pre:not(.has-copy-btn)').forEach(function(pre) {
+                function addCopyButtons(root) {
+                    var target = (root && root.querySelectorAll) ? root : document;
+                    target.querySelectorAll('pre:not(.has-copy-btn)').forEach(function(pre) {
                         if (pre.classList.contains('tool-result-content')) return;
                         
                         const code = pre.querySelector('code');
@@ -522,12 +523,13 @@ function _renderMath(element) {
                         document.body.removeChild(ta);
                         done();
                     }
-                    addMessageCopyButtons();
-                    addRetryButtons();
-                    addUserMessageCopyButtons();
+                    addMessageCopyButtons(target);
+                    addRetryButtons(target);
+                    addUserMessageCopyButtons(target);
                 }
-                function _addCopyButtonsForMarkers(selector, btnText, uriPrefix, idxPrefix) {
-                    document.querySelectorAll(selector).forEach(function(marker) {
+                function _addCopyButtonsForMarkers(selector, btnText, uriPrefix, idxPrefix, root) {
+                    var target = (root && root.querySelectorAll) ? root : document;
+                    target.querySelectorAll(selector).forEach(function(marker) {
                         var idx = marker.dataset.msgIndex;
                         var dataIdx = idxPrefix + idx;
                         if (marker.parentNode?.querySelector('.msg-btn-row[data-idx="' + dataIdx + '"]')) return;
@@ -545,18 +547,19 @@ function _renderMath(element) {
                         marker.parentNode.insertBefore(row, marker);
                     });
                 }
-                function addMessageCopyButtons() {
-                    _addCopyButtonsForMarkers('copy-marker:not(.user-copy-marker)', '📋 复制回答', 'opencode://copy-response', '');
+                function addMessageCopyButtons(root) {
+                    _addCopyButtonsForMarkers('copy-marker:not(.user-copy-marker)', '📋 复制回答', 'opencode://copy-response', '', root);
                 }
-                function addRetryButtons() {
-                    var markers = document.querySelectorAll('copy-marker:not(.user-copy-marker)');
+                function addRetryButtons(root) {
+                    var target = (root && root.querySelectorAll) ? root : document;
+                    var markers = target.querySelectorAll('copy-marker:not(.user-copy-marker)');
                     var lastIdx = -1;
                     markers.forEach(function(m) {
                         var idx = parseInt(m.dataset.msgIndex);
                         if (!isNaN(idx) && idx > lastIdx) lastIdx = idx;
                     });
                     if (lastIdx < 0) return;
-                    var row = document.querySelector('.msg-btn-row[data-idx="' + lastIdx + '"]');
+                    var row = target.querySelector('.msg-btn-row[data-idx="' + lastIdx + '"]') || document.querySelector('.msg-btn-row[data-idx="' + lastIdx + '"]');
                     if (!row || row.querySelector('.retry-btn')) return;
                     var btn = document.createElement('button');
                     btn.className = 'retry-btn';
@@ -567,8 +570,8 @@ function _renderMath(element) {
                     });
                     row.appendChild(btn);
                 }
-                function addUserMessageCopyButtons() {
-                    _addCopyButtonsForMarkers('copy-marker.user-copy-marker', '📋 复制输入', 'opencode://copy-input', 'u-');
+                function addUserMessageCopyButtons(root) {
+                    _addCopyButtonsForMarkers('copy-marker.user-copy-marker', '📋 复制输入', 'opencode://copy-input', 'u-', root);
                 }
 
                 /* ── Round Navigation ─────────────────────── */
@@ -608,6 +611,24 @@ function _renderMath(element) {
                         _lastTotal = 0;
                         return;
                     }
+
+                    // 性能优化：在流式输出中且处于底部自动滚动时，当前轮次天然为最新一轮 total，
+                    // 跳过所有 msg-row 的 getBoundingClientRect 几何计算，彻底避免 forced reflow (layout thrashing)
+                    if (window._isStreaming && _autoScroll) {
+                        if (_lastTotal === total && _lastRound === total) return;
+                        _currentRound = total;
+                        _lastRound = total;
+                        _lastTotal = total;
+                        nav.style.display = 'flex';
+                        var indicator = document.getElementById('round-indicator');
+                        if (indicator) indicator.textContent = total + '/' + total;
+                        var prevBtn = document.getElementById('round-prev');
+                        var nextBtn = document.getElementById('round-next');
+                        if (prevBtn) prevBtn.disabled = total <= 1;
+                        if (nextBtn) nextBtn.disabled = true;
+                        return;
+                    }
+
                     var el = _content();
                     var scrollTop = el ? el.scrollTop : 0;
                     // content 在视口中的偏移（header 高度等），用于换算文档坐标：

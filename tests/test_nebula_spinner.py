@@ -84,6 +84,17 @@ class TestHeaderShell(unittest.TestCase):
         self.assertIn('class="dust', self.shell)
         self.assertIn("@keyframes nebula-spin", self.shell)
 
+    def test_spinner_hardware_acceleration(self):
+        # 硬件加速独立合成图层与静态中心点断言
+        spinner_rule = _block("#ai-header-spinner", self.shell)
+        self.assertIn("transform: translateZ(0)", spinner_rule)
+        self.assertIn("will-change: transform", spinner_rule)
+        self.assertIn("contain: paint", spinner_rule)
+        crescent_rule = _block(".crescent", self.shell)
+        self.assertIn("transform-origin: 24px 24px", crescent_rule)
+        self.assertIn("will-change: transform", crescent_rule)
+        self.assertNotIn("transform-box: fill-box", crescent_rule)
+
     def test_spinner_vars_injected(self):
         # dark-moon 紫月星云正式配色已注入（无残留占位符）
         self.assertIn("#e9d5ff", self.shell)                       # crescent_a

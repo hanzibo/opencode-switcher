@@ -129,23 +129,26 @@ for _asset in (_KATEX_INLINE_CSS, _KATEX_INLINE_JS, _KATEX_AUTO_RENDER_JS,
 # stores.theme_config.get_ai_spinner_vars().
 
 _NEBULA_CSS = """
-  /* 紫月星云 spinner（#ai-header 内联） */
-  #ai-header-spinner { width: 36px; height: 36px; flex: none; }
+  /* 紫月星云 spinner（#ai-header 内联，主题滤镜注入） */
+  #ai-header-spinner {
+    filter: drop-shadow(0 0 3px {glow});
+  }
   #ai-header-spinner svg { width: 100%; height: 100%; display: block; }
   .crescent {
     animation: nebula-spin 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-    transform-box: fill-box; transform-origin: center;
-    filter: drop-shadow(0 0 3px {glow});
+    transform-origin: 24px 24px;
+    will-change: transform;
   }
   .orbit {
     animation: nebula-spin-rev 4.2s linear infinite;
-    transform-box: fill-box; transform-origin: center;
+    transform-origin: 24px 24px;
+    will-change: transform;
   }
   .orbit-ring {
     stroke: {orbit}; fill: none; stroke-width: 1.2;
     stroke-dasharray: 2.6 3.4; stroke-linecap: round;
     animation: nebula-pulse 2.4s ease-in-out infinite;
-    transform-box: fill-box; transform-origin: center;
+    transform-origin: 24px 24px;
   }
   .dust { fill: {dust}; animation: nebula-flicker 2.4s ease-in-out infinite; }
   .d2 { animation-delay: 0.6s; }
