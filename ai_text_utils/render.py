@@ -13,7 +13,9 @@ import html
 import json
 from typing import Optional, List, Dict
 
-import tool_registry
+_TOOL_CANCELLED = "工具调用已被用户取消"
+_ERROR_PREFIXES = ("❌", "⚠️", "错误：", "执行工具「", "搜索失败", "获取页面失败", "子代理")
+
 from .markdown import _markdown_to_html_safe
 from .cleanup import (
     _strip_ai_markup, _preserve_newlines,
@@ -116,9 +118,9 @@ def _render_tool_step(tool_call: dict, tool_result_msg: Optional[dict] = None,
 
     if tool_result_msg:
         content = tool_result_msg.get("content", "")
-        if content.strip() == tool_registry.TOOL_CANCELLED:
+        if content.strip() == _TOOL_CANCELLED:
             status_icon = "⚠️"
-        elif content.strip().startswith(tool_registry.ERROR_PREFIXES):
+        elif content.strip().startswith(_ERROR_PREFIXES):
             status_icon = "❌"
     else:
         status_icon = '<span class="tool-step-status running">🔄</span>'

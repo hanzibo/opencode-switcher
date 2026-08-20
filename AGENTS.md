@@ -115,7 +115,7 @@ All theme colors live in `stores/theme_config.py`: `_THEMES = {"light", "dark", 
 Global default lives in `AISettingsStore().system_prompt` (`ai_settings.json`). On new conversation creation, the current global value is snapshotted into `conv.system_prompt` (`_snapshot_system_prompt()` in `views/ai_chat_panel.py`). Later edits to the global setting do **not** affect existing conversations — each conversation keeps the prompt it was started with, persisted in the conversation JSON. Test coverage: `tests/test_system_prompt.py`.
 
 ### Clipboard Classification
-Heuristic regex scoring in `clipboard_store.py` (`classify_text()`, `detect_language_name()`). **Duplicated in `gnome-extension/extension.js`** — ~150 lines of scoring in both Python and JS. Must update both for any classification change.
+Heuristic regex scoring in `ai_text_utils/classifier.py` (`classify_text()`, `detect_language_name()`, re-exported in `stores/clipboard_store.py`). **Duplicated in `gnome-extension/extension.js`** — ~150 lines of scoring in both Python and JS. Must update both for any classification change.
 
 ### Template/Dynamic Copy
 - `${&}` embeds clipboard content. `\${&}` → literal `${&}`.

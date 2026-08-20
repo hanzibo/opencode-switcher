@@ -11,9 +11,10 @@ ai_text_utils submodules).
 
 import re
 import html
-from typing import Optional, List, Dict, Union
+from typing import Optional, List, Dict, Union, TYPE_CHECKING
 
-from stores.clipboard_store import ChatMessage
+if TYPE_CHECKING:
+    from stores.clipboard_store import ChatMessage
 
 
 USER_AVATAR_HTML = (
@@ -35,8 +36,10 @@ ASSISTANT_AVATAR_HTML = (
 _DIV_CLOSE_LEN = 6  # len('</div>')
 
 
-def _dict_to_chat_message(m: dict) -> ChatMessage:
+def _dict_to_chat_message(m: dict) -> "ChatMessage":
     """Convert an OpenAI-format message dict to a ChatMessage dataclass."""
+    from stores.clipboard_store import ChatMessage
+
     return ChatMessage(
         role=m.get("role", ""),
         content=m.get("content", ""),
