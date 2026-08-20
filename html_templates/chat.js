@@ -523,12 +523,13 @@ function _renderMath(element) {
                         document.body.removeChild(ta);
                         done();
                     }
-                    addMessageCopyButtons();
-                    addRetryButtons();
-                    addUserMessageCopyButtons();
+                    addMessageCopyButtons(target);
+                    addRetryButtons(target);
+                    addUserMessageCopyButtons(target);
                 }
-                function _addCopyButtonsForMarkers(selector, btnText, uriPrefix, idxPrefix) {
-                    document.querySelectorAll(selector).forEach(function(marker) {
+                function _addCopyButtonsForMarkers(selector, btnText, uriPrefix, idxPrefix, root) {
+                    var target = (root && root.querySelectorAll) ? root : document;
+                    target.querySelectorAll(selector).forEach(function(marker) {
                         var idx = marker.dataset.msgIndex;
                         var dataIdx = idxPrefix + idx;
                         if (marker.parentNode?.querySelector('.msg-btn-row[data-idx="' + dataIdx + '"]')) return;
@@ -546,18 +547,19 @@ function _renderMath(element) {
                         marker.parentNode.insertBefore(row, marker);
                     });
                 }
-                function addMessageCopyButtons() {
-                    _addCopyButtonsForMarkers('copy-marker:not(.user-copy-marker)', '📋 复制回答', 'opencode://copy-response', '');
+                function addMessageCopyButtons(root) {
+                    _addCopyButtonsForMarkers('copy-marker:not(.user-copy-marker)', '📋 复制回答', 'opencode://copy-response', '', root);
                 }
-                function addRetryButtons() {
-                    var markers = document.querySelectorAll('copy-marker:not(.user-copy-marker)');
+                function addRetryButtons(root) {
+                    var target = (root && root.querySelectorAll) ? root : document;
+                    var markers = target.querySelectorAll('copy-marker:not(.user-copy-marker)');
                     var lastIdx = -1;
                     markers.forEach(function(m) {
                         var idx = parseInt(m.dataset.msgIndex);
                         if (!isNaN(idx) && idx > lastIdx) lastIdx = idx;
                     });
                     if (lastIdx < 0) return;
-                    var row = document.querySelector('.msg-btn-row[data-idx="' + lastIdx + '"]');
+                    var row = target.querySelector('.msg-btn-row[data-idx="' + lastIdx + '"]') || document.querySelector('.msg-btn-row[data-idx="' + lastIdx + '"]');
                     if (!row || row.querySelector('.retry-btn')) return;
                     var btn = document.createElement('button');
                     btn.className = 'retry-btn';
@@ -568,8 +570,8 @@ function _renderMath(element) {
                     });
                     row.appendChild(btn);
                 }
-                function addUserMessageCopyButtons() {
-                    _addCopyButtonsForMarkers('copy-marker.user-copy-marker', '📋 复制输入', 'opencode://copy-input', 'u-');
+                function addUserMessageCopyButtons(root) {
+                    _addCopyButtonsForMarkers('copy-marker.user-copy-marker', '📋 复制输入', 'opencode://copy-input', 'u-', root);
                 }
 
                 /* ── Round Navigation ─────────────────────── */

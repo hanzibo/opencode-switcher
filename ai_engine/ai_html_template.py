@@ -129,14 +129,8 @@ for _asset in (_KATEX_INLINE_CSS, _KATEX_INLINE_JS, _KATEX_AUTO_RENDER_JS,
 # stores.theme_config.get_ai_spinner_vars().
 
 _NEBULA_CSS = """
-  /* 紫月星云 spinner（#ai-header 内联，硬件加速独立合成图层） */
+  /* 紫月星云 spinner（#ai-header 内联，主题滤镜注入） */
   #ai-header-spinner {
-    width: 36px;
-    height: 36px;
-    flex: none;
-    transform: translateZ(0);
-    will-change: transform;
-    contain: paint;
     filter: drop-shadow(0 0 3px {glow});
   }
   #ai-header-spinner svg { width: 100%; height: 100%; display: block; }

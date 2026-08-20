@@ -142,6 +142,8 @@
                     transform: scale(0.97);
                 }
                 #ai-header-spinner {
+                    width: 36px;
+                    height: 36px;
                     display: inline-flex;
                     align-items: center;
                     flex: none;
