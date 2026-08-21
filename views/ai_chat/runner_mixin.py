@@ -375,7 +375,30 @@ class RunnerMixin:
                 last_user_idx = idx
                 break
         start_idx = last_user_idx + 1
-        self._append_assistant_turn_to_cache()
+        # P0-1A: incremental cache update — reuse already-rendered turn HTML instead of
+        # second full _markdown_to_html_safe. Falls back to full rebuild on error.
+        try:
+            prev_html = getattr(self, "_last_rendered_html", "")
+            if prev_html and output.combined_html:
+                from ai_text_utils.cleanup import ASSISTANT_AVATAR_HTML
+                row_html = (
+                    f'<div class="msg-row assistant">\n'
+                    f'{ASSISTANT_AVATAR_HTML}\n'
+                    f'<div class="msg-bubble assistant">\n'
+                    f'{output.combined_html}\n'
+                    f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
+                    f'</div>\n'
+                    f'</div>\n'
+                )
+                self._last_rendered_html = prev_html + row_html
+                # Keep markdown source in sync (cheap, no markdown pass)
+                self._ai_markdown_text = self._rebuild_markdown_from_messages(getattr(self, "_ai_messages", []))
+                if getattr(self, "_ai_conversation_id", None):
+                    self._ai_html_cache[self._ai_conversation_id] = self._last_rendered_html
+            else:
+                self._append_assistant_turn_to_cache()
+        except Exception:
+            self._append_assistant_turn_to_cache()
 
         js_sync = (
             f"finishReasoning();"
