@@ -446,16 +446,21 @@ function _renderMath(element) {
                                     regions[0].innerHTML = reasoning.innerHTML;
                                 }
                             }
-                            if (tools && regions[1]) regions[1].innerHTML = tools.innerHTML;
+                            if (tools && regions[1]) {
+                                regions[1].innerHTML = tools.innerHTML;
+                                _wrapTables(regions[1]);
+                                addCopyButtons(regions[1]);
+                                _debouncedRenderMath(regions[1]);
+                            }
                             if (answer && regions[2]) {
                                 // 移除 typing-indicator（如果存在）
                                 var typing = regions[2].querySelector('.typing-indicator');
                                 if (typing) typing.remove();
                                 regions[2].innerHTML = answer.innerHTML;
+                                _wrapTables(regions[2]);
+                                addCopyButtons(regions[2]);
+                                _debouncedRenderMath(regions[2]);
                             }
-                            addCopyButtons(div);
-                            _wrapTables(div);   // 覆盖全部三个区域（幂等），与 isSplit/旧结构分支一致
-                            _debouncedRenderMath(div);
                         } else {
                             // 旧结构：向后兼容
                             div.innerHTML = html;
@@ -921,8 +926,8 @@ function _renderMath(element) {
                     const newDetails = document.querySelector('[data-tool-call-id="' + toolCallId + '"]');
                     if (newDetails) {
                         _debouncedRenderMath(newDetails);
-                        addCopyButtons();
-                        _wrapTables(newDetails);  // 工具卡片内表格同样包裹成横向滚动
+                        addCopyButtons(newDetails);
+                        _wrapTables(newDetails);  // 工具卡片内表格同样包裹成横向滚动，局部扫描
                     }
 
                     _scrollToBottom();
