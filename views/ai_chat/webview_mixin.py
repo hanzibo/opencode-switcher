@@ -1,5 +1,6 @@
 """WebKit WebView controller, lifecycle, memory management and rendering mixin for AIChatPanel."""
 
+import concurrent.futures
 import json
 import re
 import threading
@@ -32,6 +33,13 @@ from .constants import (
     _should_full_reload_webview,
     _AI_HEADER_TITLE,
 )
+
+# P3: async thresholds (主线程零增长 50ms 目标，见 optimization-phases.md)
+_ASYNC_MARKDOWN_CHARS = 5000  # 全量对话 markdown
+_ASYNC_TURN_CHARS = 3000      # 流式轮 answer
+_ASYNC_TURN_TOOL_CARDS = 6    # 工具卡密集也视为 heavy
+
+_RENDER_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="ai-render")
 
 
 class WebViewMixin:
@@ -132,7 +140,7 @@ class WebViewMixin:
             f"<hr><pre><code>{text}</code></pre>"
         )
         # P3: large full-conversation markdown off main thread
-        if len(text) > 5000 and hasattr(self, "_ai_webview") and self._ai_webview:
+        if len(text) > _ASYNC_MARKDOWN_CHARS and hasattr(self, "_ai_webview") and self._ai_webview:
             conv_id = getattr(self, "_ai_conversation_id", None)
             snapshot = text
             fb = fallback_msg
@@ -153,7 +161,7 @@ class WebViewMixin:
                     GLib.idle_add(_apply)
                 except Exception as e:
                     print(f"[render] _render_markdown bg error: {e}", flush=True)
-            threading.Thread(target=_bg, daemon=True).start()
+            _RENDER_EXECUTOR.submit(_bg)
             return
         rendered_html = _markdown_to_html_safe(text, fallback_content=fallback_msg)
         self._last_rendered_html = rendered_html
@@ -267,10 +275,9 @@ class WebViewMixin:
                 print(f"[render] _render_current_assistant_message bg error: {e}", flush=True)
 
         # small turn fast path: keep sync to avoid thread churn / keep tests deterministic
-        # Only large streaming content (>3k) offloads; tool_calls alone remain sync
-        heavy = len(snapshot_content) > 3000
+        heavy = len(snapshot_content) > _ASYNC_TURN_CHARS or len(snapshot_turn) > _ASYNC_TURN_TOOL_CARDS
         if heavy:
-            threading.Thread(target=_bg_render, daemon=True).start()
+            _RENDER_EXECUTOR.submit(_bg_render)
         else:
             # keep original sync path for tiny turns
             output = render_turn(TurnRenderInput(

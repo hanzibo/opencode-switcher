@@ -209,8 +209,9 @@ const KATEX_DELIMITERS = [
 function _renderMath(element) {
                     if (window._isStreaming) return;
                     var target = element || document.body;
-                    var txt = target.textContent || "";
-                    if (txt.indexOf('$') === -1 && txt.indexOf('\\') === -1) return;
+                    // fast-skip without full textContent serialization for long code blocks
+                    var html = target.innerHTML || "";
+                    if (html.indexOf('$') === -1 && html.indexOf('\\') === -1) return;
                     if (typeof renderMathInElement === 'function') {
                         renderMathInElement(target, {
                             delimiters: KATEX_DELIMITERS,
@@ -317,14 +318,11 @@ function _renderMath(element) {
                         node.classList.remove('msg-windowed');
                     }
                     while (_virtualPool.length < desiredPoolSize) {
-                        // detach head of attachedRows
-                        // find first attached row that should be hidden
-                        var poolIdx = _virtualPool.length;
-                        var rowToHide = totalRows[poolIdx];
-                        if (!rowToHide || !rowToHide.parentNode) break;
-                        if (rowToHide.classList.contains('user')) _virtualUserCount++;
-                        _virtualPool.push(rowToHide);
-                        rowToHide.remove();
+                        var firstAttached = content.querySelector(':scope > .msg-row');
+                        if (!firstAttached) break;
+                        if (firstAttached.classList.contains('user')) _virtualUserCount++;
+                        _virtualPool.push(firstAttached);
+                        firstAttached.remove();
                     }
                     // ensure visible rows have no windowed class
                     Array.from(content.querySelectorAll(':scope > .msg-row')).forEach(function(r){ r.classList.remove('msg-windowed'); });
@@ -535,6 +533,8 @@ function _renderMath(element) {
                                 addCopyButtons(regions[2]);
                                 _debouncedRenderMath(regions[2]);
                             }
+                            addMessageCopyButtons(div);
+                            addRetryButtons(div);
                         } else {
                             // 旧结构：向后兼容
                             div.innerHTML = html;

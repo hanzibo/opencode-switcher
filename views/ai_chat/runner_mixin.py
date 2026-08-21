@@ -188,6 +188,19 @@ class RunnerMixin:
         if getattr(self, "_ai_conversation_id", None):
             self._ai_html_cache[self._ai_conversation_id] = self._last_rendered_html
 
+    def _build_assistant_row_html(self, combined_html: str, start_idx: int) -> str:
+        """单点维护 assistant 行 wrapper（与 render_pipeline 解耦）。"""
+        from ai_text_utils.cleanup import ASSISTANT_AVATAR_HTML
+        return (
+            f'<div class="msg-row assistant">\n'
+            f'{ASSISTANT_AVATAR_HTML}\n'
+            f'<div class="msg-bubble assistant">\n'
+            f'{combined_html}\n'
+            f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
+            f'</div>\n'
+            f'</div>\n'
+        )
+
     def _finalize_after_tool_loop(self, req_id: int):
         """Finalize after tool loop ends (used when tool iteration limit hit)."""
         conv_id = None
@@ -390,25 +403,17 @@ class RunnerMixin:
         # second full _markdown_to_html_safe. Falls back to full rebuild on error.
         try:
             prev_html = getattr(self, "_last_rendered_html", "")
-            if prev_html and output.combined_html:
-                from ai_text_utils.cleanup import ASSISTANT_AVATAR_HTML
-                row_html = (
-                    f'<div class="msg-row assistant">\n'
-                    f'{ASSISTANT_AVATAR_HTML}\n'
-                    f'<div class="msg-bubble assistant">\n'
-                    f'{output.combined_html}\n'
-                    f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
-                    f'</div>\n'
-                    f'</div>\n'
-                )
+            cur_conv = getattr(self, "_ai_conversation_id", None)
+            if prev_html and output.combined_html and cur_conv is not None:
+                row_html = self._build_assistant_row_html(output.combined_html, start_idx)
                 self._last_rendered_html = prev_html + row_html
                 # Keep markdown source in sync (cheap, no markdown pass)
                 self._ai_markdown_text = self._rebuild_markdown_from_messages(getattr(self, "_ai_messages", []))
-                if getattr(self, "_ai_conversation_id", None):
-                    self._ai_html_cache[self._ai_conversation_id] = self._last_rendered_html
+                self._ai_html_cache[cur_conv] = self._last_rendered_html
             else:
                 self._append_assistant_turn_to_cache()
-        except Exception:
+        except Exception as e:
+            print(f"[perf] finalize incremental cache fallback: {e}", flush=True)
             self._append_assistant_turn_to_cache()
 
         js_sync = (
