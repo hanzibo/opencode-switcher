@@ -208,14 +208,17 @@ const KATEX_DELIMITERS = [
 
 function _renderMath(element) {
                     if (window._isStreaming) return;
+                    var target = element || document.body;
+                    var txt = target.textContent || "";
+                    if (txt.indexOf('$') === -1 && txt.indexOf('\\') === -1) return;
                     if (typeof renderMathInElement === 'function') {
-                        renderMathInElement(element || document.body, {
+                        renderMathInElement(target, {
                             delimiters: KATEX_DELIMITERS,
                             throwOnError: false,
                             errorColor: 'transparent'
                         });
                     }
-                    (element || document.body).querySelectorAll('.katex-error').forEach(function(el) {
+                    target.querySelectorAll('.katex-error').forEach(function(el) {
                         if (el.closest('.math-fallback')) return;
                         var wrapper = document.createElement('code');
                         wrapper.className = 'math-fallback';
@@ -364,7 +367,8 @@ function _renderMath(element) {
                     if (bar) content.insertBefore(bar, content.firstChild);
                     _wrapTables(content);
                     addCopyButtons();
-                    _renderMath(content);
+                    // P1-2B: KaTeX 异步化，避免首帧阻塞；无公式时 _renderMath 内部 fast-skip 直接返回
+                    requestAnimationFrame(function() { _renderMath(content); });
                     // 同步执行折叠（切换对话/内容替换后立即恢复"保留最近 10 轮"），
                     // 不依赖 RAF 防抖——防抖可能被流式/重建路径吞掉导致折叠失效
                     applyWindowing();
