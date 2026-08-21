@@ -208,14 +208,18 @@ const KATEX_DELIMITERS = [
 
 function _renderMath(element) {
                     if (window._isStreaming) return;
+                    var target = element || document.body;
+                    // fast-skip without full textContent serialization for long code blocks
+                    var html = target.innerHTML || "";
+                    if (html.indexOf('$') === -1 && html.indexOf('\\') === -1) return;
                     if (typeof renderMathInElement === 'function') {
-                        renderMathInElement(element || document.body, {
+                        renderMathInElement(target, {
                             delimiters: KATEX_DELIMITERS,
                             throwOnError: false,
                             errorColor: 'transparent'
                         });
                     }
-                    (element || document.body).querySelectorAll('.katex-error').forEach(function(el) {
+                    target.querySelectorAll('.katex-error').forEach(function(el) {
                         if (el.closest('.math-fallback')) return;
                         var wrapper = document.createElement('code');
                         wrapper.className = 'math-fallback';
@@ -227,6 +231,25 @@ function _renderMath(element) {
                 const MAX_VISIBLE_ROUNDS = 10;
                 const REVEAL_BATCH_ROUNDS = 3;
                 let _showAllMessages = false;
+                let _virtualPool = []; // P4: detached hidden msg-row Elements (head segment)
+                let _virtualUserCount = 0;
+                function _clearVirtualPool() { _virtualPool = []; _virtualUserCount = 0; }
+                function _flushVirtualPool() {
+                    var content = _content();
+                    var bar = content ? document.getElementById('show-older-bar') : null;
+                    var anchor = bar ? bar.nextSibling : (content ? content.firstChild : null);
+                    while (_virtualPool.length) {
+                        var node = _virtualPool.shift();
+                        node.classList.remove('msg-windowed');
+                        if (content) {
+                            if (anchor) content.insertBefore(node, anchor);
+                            else content.appendChild(node);
+                            anchor = node.nextSibling;
+                        }
+                        if (node.classList.contains('user')) _virtualUserCount--;
+                    }
+                    _virtualUserCount = 0;
+                }
 
                 const SCROLL_THRESHOLD = 20;
                 let _autoScroll = true;
@@ -256,41 +279,87 @@ function _renderMath(element) {
                     }
                 }
 
-                // ── DOM Windowing functions ──
+                // ── DOM Windowing functions (P4: true virtualization) ──
                 function applyWindowing() {
-                    if (_showAllMessages) return;
-                    var content = document.getElementById('content');
-                    if (!content) return;
-                    var allRows = content.querySelectorAll(':scope > .msg-row');
-                    var userRows = content.querySelectorAll(':scope > .msg-row.user');
-                    // 按轮次：每轮 = 一条 user 消息及其后的 AI 回复
-                    if (userRows.length <= MAX_VISIBLE_ROUNDS) {
-                        for (var i = 0; i < allRows.length; i++) {
-                            allRows[i].classList.remove('msg-windowed');
-                        }
+                    if (_showAllMessages) {
+                        if (_virtualPool.length) _flushVirtualPool();
                         updateShowOlderBar();
                         return;
                     }
-                    // 找出倒数第 MAX_VISIBLE_ROUNDS 条 user 消息的 DOM 索引
-                    var keepFromUser = userRows[userRows.length - MAX_VISIBLE_ROUNDS];
-                    var keepFromIndex = -1;
-                    for (var i = 0; i < allRows.length; i++) {
-                        if (allRows[i] === keepFromUser) {
-                            keepFromIndex = i;
-                            break;
-                        }
+                    var content = document.getElementById('content');
+                    if (!content) return;
+                    var attachedRows = Array.from(content.querySelectorAll(':scope > .msg-row'));
+                    var attachedUserRows = attachedRows.filter(function(r){ return r.classList.contains('user'); });
+                    var totalUser = attachedUserRows.length + _virtualUserCount;
+                    if (totalUser <= MAX_VISIBLE_ROUNDS) {
+                        if (_virtualPool.length) _flushVirtualPool();
+                        attachedRows.forEach(function(r){ r.classList.remove('msg-windowed'); });
+                        updateShowOlderBar();
+                        return;
                     }
-                    // 保留该 user 消息及之后的所有内容（含工具调用等）
-                    for (var i = 0; i < keepFromIndex; i++) {
-                        allRows[i].classList.add('msg-windowed');
+                    // totalRows = pooled + attached (ordered)
+                    var totalRows = _virtualPool.concat(attachedRows);
+                    var totalUserRows = totalRows.filter(function(r){ return r.classList.contains('user'); });
+                    var keepFromUser = totalUserRows[totalUserRows.length - MAX_VISIBLE_ROUNDS];
+                    var keepFromIdx = totalRows.indexOf(keepFromUser);
+                    // pool should contain rows [0, keepFromIdx), attached should be [keepFromIdx, end)
+                    var desiredPoolSize = keepFromIdx;
+                    // shrink or grow pool to match
+                    while (_virtualPool.length > desiredPoolSize) {
+                        // need to reattach head of attached is actually tail of pool
+                        var node = _virtualPool.pop();
+                        if (node.classList.contains('user')) _virtualUserCount--;
+                        var bar = document.getElementById('show-older-bar');
+                        var firstRow = content.querySelector(':scope > .msg-row');
+                        if (bar && firstRow) content.insertBefore(node, firstRow);
+                        else if (bar) content.insertBefore(node, bar.nextSibling);
+                        else if (firstRow) content.insertBefore(node, firstRow);
+                        else content.appendChild(node);
+                        node.classList.remove('msg-windowed');
                     }
-                    for (var i = keepFromIndex; i < allRows.length; i++) {
-                        allRows[i].classList.remove('msg-windowed');
+                    while (_virtualPool.length < desiredPoolSize) {
+                        var firstAttached = content.querySelector(':scope > .msg-row');
+                        if (!firstAttached) break;
+                        if (firstAttached.classList.contains('user')) _virtualUserCount++;
+                        _virtualPool.push(firstAttached);
+                        firstAttached.remove();
                     }
+                    // ensure visible rows have no windowed class
+                    Array.from(content.querySelectorAll(':scope > .msg-row')).forEach(function(r){ r.classList.remove('msg-windowed'); });
                     updateShowOlderBar();
                 }
 
                 function showOlderBatch() {
+                    // P4: true virtualization path
+                    if (_virtualPool.length) {
+                        var revealUser = Math.min(_virtualUserCount, REVEAL_BATCH_ROUNDS);
+                        if (revealUser <= 0) return;
+                        var countUser = 0;
+                        var startIdx = _virtualPool.length;
+                        for (var i = _virtualPool.length - 1; i >= 0; i--) {
+                            if (_virtualPool[i].classList.contains('user')) {
+                                countUser++;
+                                if (countUser === revealUser) { startIdx = i; break; }
+                            }
+                        }
+                        // also include any non-user after last hidden user? startIdx already is first user of batch
+                        // extend to include trailing non-user of that batch's last round? Actually tail beyond startIdx includes all, so fine
+                        var toReveal = _virtualPool.splice(startIdx);
+                        toReveal.forEach(function(n){ if (n.classList.contains('user')) _virtualUserCount--; });
+                        var content = _content();
+                        var bar = document.getElementById('show-older-bar');
+                        var anchor = bar ? bar.nextSibling : (content ? content.firstChild : null);
+                        toReveal.forEach(function(node){
+                            node.classList.remove('msg-windowed');
+                            if (anchor) content.insertBefore(node, anchor);
+                            else content.appendChild(node);
+                            _wrapTables(node);
+                            addCopyButtons(node);
+                        });
+                        updateShowOlderBar();
+                        _updateRoundNav();
+                        return;
+                    }
                     var allRows = document.querySelectorAll('#content > .msg-row');
                     var userRows = document.querySelectorAll('#content > .msg-row.user');
                     // 找到第一个当前可见的 user 行
@@ -321,6 +390,7 @@ function _renderMath(element) {
 
                 function showAllMessages() {
                     _showAllMessages = true;
+                    if (_virtualPool.length) _flushVirtualPool();
                     var hidden = document.querySelectorAll('#content > .msg-windowed');
                     for (var i = 0; i < hidden.length; i++) {
                         hidden[i].classList.remove('msg-windowed');
@@ -332,7 +402,7 @@ function _renderMath(element) {
 
                 function updateShowOlderBar() {
                     var userRows = document.querySelectorAll('#content > .msg-row.user');
-                    var hiddenRounds = 0;
+                    var hiddenRounds = _virtualUserCount;
                     for (var i = 0; i < userRows.length; i++) {
                         if (userRows[i].classList.contains('msg-windowed')) hiddenRounds++;
                     }
@@ -350,6 +420,7 @@ function _renderMath(element) {
                 function updateContent(html) {
                     window._isStreaming = false;
                     _showAllMessages = false;
+                    _clearVirtualPool();
                     resetReasoning();
                     // 内容替换（切换对话/重新渲染）后默认贴底：
                     // _autoScroll 是跨对话全局状态，若用户上次在顶部（如点过 ⤴）
@@ -364,7 +435,8 @@ function _renderMath(element) {
                     if (bar) content.insertBefore(bar, content.firstChild);
                     _wrapTables(content);
                     addCopyButtons();
-                    _renderMath(content);
+                    // P1-2B: KaTeX 异步化，避免首帧阻塞；无公式时 _renderMath 内部 fast-skip 直接返回
+                    requestAnimationFrame(function() { _renderMath(content); });
                     // 同步执行折叠（切换对话/内容替换后立即恢复"保留最近 10 轮"），
                     // 不依赖 RAF 防抖——防抖可能被流式/重建路径吞掉导致折叠失效
                     applyWindowing();
@@ -446,16 +518,23 @@ function _renderMath(element) {
                                     regions[0].innerHTML = reasoning.innerHTML;
                                 }
                             }
-                            if (tools && regions[1]) regions[1].innerHTML = tools.innerHTML;
+                            if (tools && regions[1]) {
+                                regions[1].innerHTML = tools.innerHTML;
+                                _wrapTables(regions[1]);
+                                addCopyButtons(regions[1]);
+                                _debouncedRenderMath(regions[1]);
+                            }
                             if (answer && regions[2]) {
                                 // 移除 typing-indicator（如果存在）
                                 var typing = regions[2].querySelector('.typing-indicator');
                                 if (typing) typing.remove();
                                 regions[2].innerHTML = answer.innerHTML;
+                                _wrapTables(regions[2]);
+                                addCopyButtons(regions[2]);
+                                _debouncedRenderMath(regions[2]);
                             }
-                            addCopyButtons(div);
-                            _wrapTables(div);   // 覆盖全部三个区域（幂等），与 isSplit/旧结构分支一致
-                            _debouncedRenderMath(div);
+                            addMessageCopyButtons(div);
+                            addRetryButtons(div);
                         } else {
                             // 旧结构：向后兼容
                             div.innerHTML = html;
@@ -882,6 +961,30 @@ function _renderMath(element) {
                     window._isStreaming = false;
                 }
 
+                function appendToolCalls(msgId, cardsHtml) {
+                    if (!msgId || !cardsHtml) return;
+                    const container = document.getElementById(msgId);
+                    if (!container) return;
+                    const bubble = document.getElementById(msgId + '-bubble') || container;
+                    const toolRegion = bubble.querySelector('.bubble-region.tool-region');
+                    if (!toolRegion) return;
+                    let stepsContainer = toolRegion.querySelector('.tool-steps-container');
+                    if (!stepsContainer) {
+                        stepsContainer = document.createElement('div');
+                        stepsContainer.className = 'tool-steps-container';
+                        toolRegion.appendChild(stepsContainer);
+                    }
+                    const temp = document.createElement('div');
+                    temp.innerHTML = cardsHtml;
+                    while (temp.firstChild) {
+                        stepsContainer.appendChild(temp.firstChild);
+                    }
+                    _wrapTables(stepsContainer);
+                    addCopyButtons(stepsContainer);
+                    _debouncedRenderMath(stepsContainer);
+                    _throttledWindowing();
+                    _scrollToBottom();
+                }
                 /**
                  * updateToolCard - 增量更新工具卡片的内容。
                  * 在工具结果到达时调用，只更新指定卡片，不触发全量渲染。
@@ -897,8 +1000,8 @@ function _renderMath(element) {
                     const newDetails = document.querySelector('[data-tool-call-id="' + toolCallId + '"]');
                     if (newDetails) {
                         _debouncedRenderMath(newDetails);
-                        addCopyButtons();
-                        _wrapTables(newDetails);  // 工具卡片内表格同样包裹成横向滚动
+                        addCopyButtons(newDetails);
+                        _wrapTables(newDetails);  // 工具卡片内表格同样包裹成横向滚动，局部扫描
                     }
 
                     _scrollToBottom();

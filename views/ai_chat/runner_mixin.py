@@ -98,6 +98,8 @@ class RunnerMixin:
                              and (st.get("response_div_added", False) if st else False))
                 if msg.get("role") == "tool" and enable_inc and is_active_stream and dom_ready:
                     pass
+                elif msg.get("role") == "assistant" and msg.get("tool_calls") and enable_inc and is_active_stream and dom_ready:
+                    GLib.idle_add(self._append_tool_calls_incremental, msg.get("tool_calls"), req_id)
                 else:
                     GLib.idle_add(self._render_current_assistant_message, req_id)
 
@@ -185,6 +187,19 @@ class RunnerMixin:
         self._last_rendered_html = _markdown_to_html_safe(self._ai_markdown_text, fallback_content="")
         if getattr(self, "_ai_conversation_id", None):
             self._ai_html_cache[self._ai_conversation_id] = self._last_rendered_html
+
+    def _build_assistant_row_html(self, combined_html: str, start_idx: int) -> str:
+        """单点维护 assistant 行 wrapper（与 render_pipeline 解耦）。"""
+        from ai_text_utils.cleanup import ASSISTANT_AVATAR_HTML
+        return (
+            f'<div class="msg-row assistant">\n'
+            f'{ASSISTANT_AVATAR_HTML}\n'
+            f'<div class="msg-bubble assistant">\n'
+            f'{combined_html}\n'
+            f'<copy-marker data-msg-index="{start_idx}"></copy-marker>\n'
+            f'</div>\n'
+            f'</div>\n'
+        )
 
     def _finalize_after_tool_loop(self, req_id: int):
         """Finalize after tool loop ends (used when tool iteration limit hit)."""
@@ -343,10 +358,16 @@ class RunnerMixin:
         if getattr(self, "_reasoning_buffer", ""):
             js_code = f"_appendReasoningCacheOnly({json.dumps(self._reasoning_buffer)});"
             if hasattr(self, "_ai_webview") and self._ai_webview:
-                self._ai_webview.run_javascript(js_code, None, None)
+                if threading.current_thread() is threading.main_thread():
+                    self._ai_webview.run_javascript(js_code, None, None)
+                else:
+                    GLib.idle_add(lambda *a, _js=js_code: (self._ai_webview.run_javascript(_js, None, None), False)[1])
             self._reasoning_buffer = ""
         if getattr(self, "_token_buffer", ""):
-            self._flush_token_buffer(req_id)
+            if threading.current_thread() is threading.main_thread():
+                self._flush_token_buffer(req_id)
+            else:
+                GLib.idle_add(lambda *a, _rid=req_id: (self._flush_token_buffer(_rid), False)[1])
 
         if req_id is None:
             req_id = getattr(self, "_ai_request_id", 0)
@@ -366,7 +387,10 @@ class RunnerMixin:
             f"{build_update_js(msg_id, output)}"
         )
         if hasattr(self, "_ai_webview") and self._ai_webview:
-            self._ai_webview.run_javascript(js_final, None, None)
+            if threading.current_thread() is threading.main_thread():
+                self._ai_webview.run_javascript(js_final, None, None)
+            else:
+                GLib.idle_add(lambda *a, _js=js_final: (self._ai_webview.run_javascript(_js, None, None), False)[1])
 
         last_user_idx = -1
         messages = getattr(self, "_ai_messages", [])
@@ -375,7 +399,22 @@ class RunnerMixin:
                 last_user_idx = idx
                 break
         start_idx = last_user_idx + 1
-        self._append_assistant_turn_to_cache()
+        # P0-1A: incremental cache update — reuse already-rendered turn HTML instead of
+        # second full _markdown_to_html_safe. Falls back to full rebuild on error.
+        try:
+            prev_html = getattr(self, "_last_rendered_html", "")
+            cur_conv = getattr(self, "_ai_conversation_id", None)
+            if prev_html and output.combined_html and cur_conv is not None:
+                row_html = self._build_assistant_row_html(output.combined_html, start_idx)
+                self._last_rendered_html = prev_html + row_html
+                # Keep markdown source in sync (cheap, no markdown pass)
+                self._ai_markdown_text = self._rebuild_markdown_from_messages(getattr(self, "_ai_messages", []))
+                self._ai_html_cache[cur_conv] = self._last_rendered_html
+            else:
+                self._append_assistant_turn_to_cache()
+        except Exception as e:
+            print(f"[perf] finalize incremental cache fallback: {e}", flush=True)
+            self._append_assistant_turn_to_cache()
 
         js_sync = (
             f"finishReasoning();"
@@ -389,7 +428,10 @@ class RunnerMixin:
             f"_initRoundNav();"
         )
         if hasattr(self, "_ai_webview") and self._ai_webview:
-            self._ai_webview.run_javascript(js_sync, None, None)
+            if threading.current_thread() is threading.main_thread():
+                self._ai_webview.run_javascript(js_sync, None, None)
+            else:
+                GLib.idle_add(lambda *a, _js=js_sync: (self._ai_webview.run_javascript(_js, None, None), False)[1])
 
         self._token_buffer = ""
         self._flush_scheduled = False
