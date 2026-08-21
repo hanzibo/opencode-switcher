@@ -2,6 +2,7 @@
 
 import json
 import re
+import threading
 from typing import List, Dict, Optional
 from urllib.parse import urlparse, parse_qs
 
@@ -130,6 +131,30 @@ class WebViewMixin:
             "<pre><code>~/.local/share/opencode-switcher/venv/bin/pip install markdown pygments</code></pre>"
             f"<hr><pre><code>{text}</code></pre>"
         )
+        # P3: large full-conversation markdown off main thread
+        if len(text) > 5000 and hasattr(self, "_ai_webview") and self._ai_webview:
+            conv_id = getattr(self, "_ai_conversation_id", None)
+            snapshot = text
+            fb = fallback_msg
+            def _bg():
+                try:
+                    rendered_html = _markdown_to_html_safe(snapshot, fallback_content=fb)
+                    def _apply():
+                        # stale guard: if conversation switched, don't overwrite
+                        if conv_id is not None and getattr(self, "_ai_conversation_id", None) != conv_id:
+                            return False
+                        self._last_rendered_html = rendered_html
+                        if getattr(self, "_ai_conversation_id", None):
+                            self._ai_html_cache[self._ai_conversation_id] = rendered_html
+                        js_code = f"updateContent({json.dumps(rendered_html)});"
+                        if hasattr(self, "_ai_webview") and self._ai_webview:
+                            self._ai_webview.run_javascript(js_code, None, None)
+                        return False
+                    GLib.idle_add(_apply)
+                except Exception as e:
+                    print(f"[render] _render_markdown bg error: {e}", flush=True)
+            threading.Thread(target=_bg, daemon=True).start()
+            return
         rendered_html = _markdown_to_html_safe(text, fallback_content=fallback_msg)
         self._last_rendered_html = rendered_html
         if getattr(self, "_ai_conversation_id", None):
@@ -188,7 +213,8 @@ class WebViewMixin:
 
         if not st.get("response_div_added", False):
             js = f"appendMessageContainer('{msg_id}');"
-            self._ai_webview.run_javascript(js, None, None)
+            if hasattr(self, "_ai_webview") and self._ai_webview:
+                self._ai_webview.run_javascript(js, None, None)
             st["response_div_added"] = True
             if self._ai_conversation_id == conv_id:
                 self._ai_response_div_added = True
@@ -196,23 +222,68 @@ class WebViewMixin:
             if getattr(self, "_reseed_reasoning_on_container", False):
                 reasoning_text = st.get("current_reasoning_text", "")
                 if reasoning_text:
-                    self._ai_webview.run_javascript(
-                        f"appendStreamReasoning({json.dumps(reasoning_text)});", None, None
-                    )
+                    if hasattr(self, "_ai_webview") and self._ai_webview:
+                        self._ai_webview.run_javascript(
+                            f"appendStreamReasoning({json.dumps(reasoning_text)});", None, None
+                        )
                     if self._turn_has_tool_phase(turn_msgs):
-                        self._ai_webview.run_javascript("finishReasoning();", None, None)
+                        if hasattr(self, "_ai_webview") and self._ai_webview:
+                            self._ai_webview.run_javascript("finishReasoning();", None, None)
                 self._reseed_reasoning_on_container = False
 
-        output = render_turn(TurnRenderInput(
-            turn_messages=turn_msgs,
-            all_messages=getattr(self, "_ai_messages", []),
-            streaming_reasoning=st.get("current_reasoning_text", ""),
-            streaming_content=st.get("current_assistant_text", ""),
-            is_streaming=True,
-            show_tool_details=getattr(self, "_show_tool_details", True),
-        ))
-        js_update = build_update_js(msg_id, output)
-        self._ai_webview.run_javascript(js_update, None, None)
+        # P3: heavy render_turn (markdown+pygments) off main thread
+        snapshot_turn = list(turn_msgs)
+        snapshot_all = list(getattr(self, "_ai_messages", []))
+        snapshot_reasoning = st.get("current_reasoning_text", "")
+        snapshot_content = st.get("current_assistant_text", "")
+        snapshot_show_details = getattr(self, "_show_tool_details", True)
+        captured_req = req_id
+        captured_conv = conv_id
+        captured_msg = msg_id
+
+        def _bg_render():
+            try:
+                output = render_turn(TurnRenderInput(
+                    turn_messages=snapshot_turn,
+                    all_messages=snapshot_all,
+                    streaming_reasoning=snapshot_reasoning,
+                    streaming_content=snapshot_content,
+                    is_streaming=True,
+                    show_tool_details=snapshot_show_details,
+                ))
+                js_update = build_update_js(captured_msg, output)
+                def _apply():
+                    # re-validate before touching WebView
+                    if getattr(self, "_ai_conversation_id", None) != captured_conv:
+                        return False
+                    cur_st = self._ai_running_convs.get(captured_conv)
+                    if not cur_st or cur_st.get("req_id") != captured_req or not cur_st.get("streaming", False):
+                        return False
+                    if hasattr(self, "_ai_webview") and self._ai_webview:
+                        self._ai_webview.run_javascript(js_update, None, None)
+                    return False
+                GLib.idle_add(_apply)
+            except Exception as e:
+                print(f"[render] _render_current_assistant_message bg error: {e}", flush=True)
+
+        # small turn fast path: keep sync to avoid thread churn / keep tests deterministic
+        # Only large streaming content (>3k) offloads; tool_calls alone remain sync
+        heavy = len(snapshot_content) > 3000
+        if heavy:
+            threading.Thread(target=_bg_render, daemon=True).start()
+        else:
+            # keep original sync path for tiny turns
+            output = render_turn(TurnRenderInput(
+                turn_messages=snapshot_turn,
+                all_messages=snapshot_all,
+                streaming_reasoning=snapshot_reasoning,
+                streaming_content=snapshot_content,
+                is_streaming=True,
+                show_tool_details=snapshot_show_details,
+            ))
+            js_update = build_update_js(captured_msg, output)
+            if hasattr(self, "_ai_webview") and self._ai_webview:
+                self._ai_webview.run_javascript(js_update, None, None)
 
     def _history_summaries_json(self) -> str:
         """生成 WebView header 历史下拉的 JSON 列表（对齐原 HistoryPopover 格式）。"""

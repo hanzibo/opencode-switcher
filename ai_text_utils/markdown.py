@@ -15,9 +15,13 @@ Zero GTK dependency. Depends on math and cleanup modules.
 
 import re
 import html
+import threading
 from typing import Optional, List, Tuple
 
 from .math import _escape_math, _unescape_math, _fix_latex
+
+# P3: markdown 库非线程安全，简单串行化保护后台线程并发调用
+_MARKDOWN_LOCK = threading.Lock()
 
 # 代码高亮全局开关（由 set_code_highlight 控制）
 _code_highlight_enabled = True
@@ -82,7 +86,9 @@ def _markdown_to_html_safe(text: str, fallback_content: Optional[str] = None) ->
 
     md_lib = _get_markdown_lib()
     if md_lib is not None:
-        html_text = md_lib.markdown(escaped_text, extensions=_get_markdown_extensions())
+        # P3: 后台线程并发时串行化，避免 markdown 全局状态竞态
+        with _MARKDOWN_LOCK:
+            html_text = md_lib.markdown(escaped_text, extensions=_get_markdown_extensions())
     else:
         if fallback_content is not None:
             html_text = fallback_content

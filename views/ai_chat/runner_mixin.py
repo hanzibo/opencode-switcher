@@ -345,10 +345,16 @@ class RunnerMixin:
         if getattr(self, "_reasoning_buffer", ""):
             js_code = f"_appendReasoningCacheOnly({json.dumps(self._reasoning_buffer)});"
             if hasattr(self, "_ai_webview") and self._ai_webview:
-                self._ai_webview.run_javascript(js_code, None, None)
+                if threading.current_thread() is threading.main_thread():
+                    self._ai_webview.run_javascript(js_code, None, None)
+                else:
+                    GLib.idle_add(lambda *a, _js=js_code: (self._ai_webview.run_javascript(_js, None, None), False)[1])
             self._reasoning_buffer = ""
         if getattr(self, "_token_buffer", ""):
-            self._flush_token_buffer(req_id)
+            if threading.current_thread() is threading.main_thread():
+                self._flush_token_buffer(req_id)
+            else:
+                GLib.idle_add(lambda *a, _rid=req_id: (self._flush_token_buffer(_rid), False)[1])
 
         if req_id is None:
             req_id = getattr(self, "_ai_request_id", 0)
@@ -368,7 +374,10 @@ class RunnerMixin:
             f"{build_update_js(msg_id, output)}"
         )
         if hasattr(self, "_ai_webview") and self._ai_webview:
-            self._ai_webview.run_javascript(js_final, None, None)
+            if threading.current_thread() is threading.main_thread():
+                self._ai_webview.run_javascript(js_final, None, None)
+            else:
+                GLib.idle_add(lambda *a, _js=js_final: (self._ai_webview.run_javascript(_js, None, None), False)[1])
 
         last_user_idx = -1
         messages = getattr(self, "_ai_messages", [])
@@ -414,7 +423,10 @@ class RunnerMixin:
             f"_initRoundNav();"
         )
         if hasattr(self, "_ai_webview") and self._ai_webview:
-            self._ai_webview.run_javascript(js_sync, None, None)
+            if threading.current_thread() is threading.main_thread():
+                self._ai_webview.run_javascript(js_sync, None, None)
+            else:
+                GLib.idle_add(lambda *a, _js=js_sync: (self._ai_webview.run_javascript(_js, None, None), False)[1])
 
         self._token_buffer = ""
         self._flush_scheduled = False
