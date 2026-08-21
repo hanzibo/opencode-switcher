@@ -98,6 +98,8 @@ class RunnerMixin:
                              and (st.get("response_div_added", False) if st else False))
                 if msg.get("role") == "tool" and enable_inc and is_active_stream and dom_ready:
                     pass
+                elif msg.get("role") == "assistant" and msg.get("tool_calls") and enable_inc and is_active_stream and dom_ready:
+                    GLib.idle_add(self._append_tool_calls_incremental, msg.get("tool_calls"), req_id)
                 else:
                     GLib.idle_add(self._render_current_assistant_message, req_id)
 

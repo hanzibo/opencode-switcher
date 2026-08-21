@@ -882,6 +882,30 @@ function _renderMath(element) {
                     window._isStreaming = false;
                 }
 
+                function appendToolCalls(msgId, cardsHtml) {
+                    if (!msgId || !cardsHtml) return;
+                    const container = document.getElementById(msgId);
+                    if (!container) return;
+                    const bubble = document.getElementById(msgId + '-bubble') || container;
+                    const toolRegion = bubble.querySelector('.bubble-region.tool-region');
+                    if (!toolRegion) return;
+                    let stepsContainer = toolRegion.querySelector('.tool-steps-container');
+                    if (!stepsContainer) {
+                        stepsContainer = document.createElement('div');
+                        stepsContainer.className = 'tool-steps-container';
+                        toolRegion.appendChild(stepsContainer);
+                    }
+                    const temp = document.createElement('div');
+                    temp.innerHTML = cardsHtml;
+                    while (temp.firstChild) {
+                        stepsContainer.appendChild(temp.firstChild);
+                    }
+                    _wrapTables(stepsContainer);
+                    addCopyButtons(stepsContainer);
+                    _debouncedRenderMath(stepsContainer);
+                    _throttledWindowing();
+                    _scrollToBottom();
+                }
                 /**
                  * updateToolCard - 增量更新工具卡片的内容。
                  * 在工具结果到达时调用，只更新指定卡片，不触发全量渲染。

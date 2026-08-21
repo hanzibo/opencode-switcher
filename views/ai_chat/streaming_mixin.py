@@ -203,6 +203,39 @@ class StreamingMixin:
         js_code = f"updateToolCard({json.dumps(tool_call_id)}, {json.dumps(card_html)});"
         self._ai_webview.run_javascript(js_code, None, None)
 
+    def _append_tool_calls_incremental(self, tool_calls: List[dict], req_id: int):
+        """增量插入 assistant tool_calls 卡片（P0-1B），避免全量 render_turn."""
+        if not tool_calls or not hasattr(self, "_ai_webview") or not self._ai_webview:
+            GLib.idle_add(self._render_current_assistant_message, req_id)
+            return
+        conv_id = None
+        for cid, st in list(getattr(self, "_ai_running_convs", {}).items()):
+            if st.get("req_id") == req_id:
+                conv_id = cid
+                break
+        if not conv_id or conv_id != getattr(self, "_ai_conversation_id", None):
+            return
+        st = self._ai_running_convs.get(conv_id)
+        if not st or not st.get("streaming", False):
+            GLib.idle_add(self._render_current_assistant_message, req_id)
+            return
+        if not getattr(self, "_streaming_container_created", False) or not st.get("response_div_added", False):
+            GLib.idle_add(self._render_current_assistant_message, req_id)
+            return
+        try:
+            cards = []
+            for tc in tool_calls:
+                # running 状态，无结果
+                card_html = _render_tool_card_standalone(tc, "", "running",
+                                                          show_details=self._show_tool_details)
+                cards.append(card_html)
+            combined = "".join(cards)
+            msg_id = f"msg-{req_id}"
+            js_code = f"appendToolCalls({json.dumps(msg_id)}, {json.dumps(combined)});"
+            self._ai_webview.run_javascript(js_code, None, None)
+        except Exception:
+            GLib.idle_add(self._render_current_assistant_message, req_id)
+
     def _sanitize_tool_calls_schema(self, messages: list) -> bool:
         """防错兜底：校验并修复消息历史中未回应的 assistant tool_calls，防止发送新消息触发 400 错误。"""
         if not messages:
