@@ -230,6 +230,25 @@ function _renderMath(element) {
                 const MAX_VISIBLE_ROUNDS = 10;
                 const REVEAL_BATCH_ROUNDS = 3;
                 let _showAllMessages = false;
+                let _virtualPool = []; // P4: detached hidden msg-row Elements (head segment)
+                let _virtualUserCount = 0;
+                function _clearVirtualPool() { _virtualPool = []; _virtualUserCount = 0; }
+                function _flushVirtualPool() {
+                    var content = _content();
+                    var bar = content ? document.getElementById('show-older-bar') : null;
+                    var anchor = bar ? bar.nextSibling : (content ? content.firstChild : null);
+                    while (_virtualPool.length) {
+                        var node = _virtualPool.shift();
+                        node.classList.remove('msg-windowed');
+                        if (content) {
+                            if (anchor) content.insertBefore(node, anchor);
+                            else content.appendChild(node);
+                            anchor = node.nextSibling;
+                        }
+                        if (node.classList.contains('user')) _virtualUserCount--;
+                    }
+                    _virtualUserCount = 0;
+                }
 
                 const SCROLL_THRESHOLD = 20;
                 let _autoScroll = true;
@@ -259,41 +278,90 @@ function _renderMath(element) {
                     }
                 }
 
-                // ── DOM Windowing functions ──
+                // ── DOM Windowing functions (P4: true virtualization) ──
                 function applyWindowing() {
-                    if (_showAllMessages) return;
-                    var content = document.getElementById('content');
-                    if (!content) return;
-                    var allRows = content.querySelectorAll(':scope > .msg-row');
-                    var userRows = content.querySelectorAll(':scope > .msg-row.user');
-                    // 按轮次：每轮 = 一条 user 消息及其后的 AI 回复
-                    if (userRows.length <= MAX_VISIBLE_ROUNDS) {
-                        for (var i = 0; i < allRows.length; i++) {
-                            allRows[i].classList.remove('msg-windowed');
-                        }
+                    if (_showAllMessages) {
+                        if (_virtualPool.length) _flushVirtualPool();
                         updateShowOlderBar();
                         return;
                     }
-                    // 找出倒数第 MAX_VISIBLE_ROUNDS 条 user 消息的 DOM 索引
-                    var keepFromUser = userRows[userRows.length - MAX_VISIBLE_ROUNDS];
-                    var keepFromIndex = -1;
-                    for (var i = 0; i < allRows.length; i++) {
-                        if (allRows[i] === keepFromUser) {
-                            keepFromIndex = i;
-                            break;
-                        }
+                    var content = document.getElementById('content');
+                    if (!content) return;
+                    var attachedRows = Array.from(content.querySelectorAll(':scope > .msg-row'));
+                    var attachedUserRows = attachedRows.filter(function(r){ return r.classList.contains('user'); });
+                    var totalUser = attachedUserRows.length + _virtualUserCount;
+                    if (totalUser <= MAX_VISIBLE_ROUNDS) {
+                        if (_virtualPool.length) _flushVirtualPool();
+                        attachedRows.forEach(function(r){ r.classList.remove('msg-windowed'); });
+                        updateShowOlderBar();
+                        return;
                     }
-                    // 保留该 user 消息及之后的所有内容（含工具调用等）
-                    for (var i = 0; i < keepFromIndex; i++) {
-                        allRows[i].classList.add('msg-windowed');
+                    // totalRows = pooled + attached (ordered)
+                    var totalRows = _virtualPool.concat(attachedRows);
+                    var totalUserRows = totalRows.filter(function(r){ return r.classList.contains('user'); });
+                    var keepFromUser = totalUserRows[totalUserRows.length - MAX_VISIBLE_ROUNDS];
+                    var keepFromIdx = totalRows.indexOf(keepFromUser);
+                    // pool should contain rows [0, keepFromIdx), attached should be [keepFromIdx, end)
+                    var desiredPoolSize = keepFromIdx;
+                    // shrink or grow pool to match
+                    while (_virtualPool.length > desiredPoolSize) {
+                        // need to reattach head of attached is actually tail of pool
+                        var node = _virtualPool.pop();
+                        if (node.classList.contains('user')) _virtualUserCount--;
+                        var bar = document.getElementById('show-older-bar');
+                        var firstRow = content.querySelector(':scope > .msg-row');
+                        if (bar && firstRow) content.insertBefore(node, firstRow);
+                        else if (bar) content.insertBefore(node, bar.nextSibling);
+                        else if (firstRow) content.insertBefore(node, firstRow);
+                        else content.appendChild(node);
+                        node.classList.remove('msg-windowed');
                     }
-                    for (var i = keepFromIndex; i < allRows.length; i++) {
-                        allRows[i].classList.remove('msg-windowed');
+                    while (_virtualPool.length < desiredPoolSize) {
+                        // detach head of attachedRows
+                        // find first attached row that should be hidden
+                        var poolIdx = _virtualPool.length;
+                        var rowToHide = totalRows[poolIdx];
+                        if (!rowToHide || !rowToHide.parentNode) break;
+                        if (rowToHide.classList.contains('user')) _virtualUserCount++;
+                        _virtualPool.push(rowToHide);
+                        rowToHide.remove();
                     }
+                    // ensure visible rows have no windowed class
+                    Array.from(content.querySelectorAll(':scope > .msg-row')).forEach(function(r){ r.classList.remove('msg-windowed'); });
                     updateShowOlderBar();
                 }
 
                 function showOlderBatch() {
+                    // P4: true virtualization path
+                    if (_virtualPool.length) {
+                        var revealUser = Math.min(_virtualUserCount, REVEAL_BATCH_ROUNDS);
+                        if (revealUser <= 0) return;
+                        var countUser = 0;
+                        var startIdx = _virtualPool.length;
+                        for (var i = _virtualPool.length - 1; i >= 0; i--) {
+                            if (_virtualPool[i].classList.contains('user')) {
+                                countUser++;
+                                if (countUser === revealUser) { startIdx = i; break; }
+                            }
+                        }
+                        // also include any non-user after last hidden user? startIdx already is first user of batch
+                        // extend to include trailing non-user of that batch's last round? Actually tail beyond startIdx includes all, so fine
+                        var toReveal = _virtualPool.splice(startIdx);
+                        toReveal.forEach(function(n){ if (n.classList.contains('user')) _virtualUserCount--; });
+                        var content = _content();
+                        var bar = document.getElementById('show-older-bar');
+                        var anchor = bar ? bar.nextSibling : (content ? content.firstChild : null);
+                        toReveal.forEach(function(node){
+                            node.classList.remove('msg-windowed');
+                            if (anchor) content.insertBefore(node, anchor);
+                            else content.appendChild(node);
+                            _wrapTables(node);
+                            addCopyButtons(node);
+                        });
+                        updateShowOlderBar();
+                        _updateRoundNav();
+                        return;
+                    }
                     var allRows = document.querySelectorAll('#content > .msg-row');
                     var userRows = document.querySelectorAll('#content > .msg-row.user');
                     // 找到第一个当前可见的 user 行
@@ -324,6 +392,7 @@ function _renderMath(element) {
 
                 function showAllMessages() {
                     _showAllMessages = true;
+                    if (_virtualPool.length) _flushVirtualPool();
                     var hidden = document.querySelectorAll('#content > .msg-windowed');
                     for (var i = 0; i < hidden.length; i++) {
                         hidden[i].classList.remove('msg-windowed');
@@ -335,7 +404,7 @@ function _renderMath(element) {
 
                 function updateShowOlderBar() {
                     var userRows = document.querySelectorAll('#content > .msg-row.user');
-                    var hiddenRounds = 0;
+                    var hiddenRounds = _virtualUserCount;
                     for (var i = 0; i < userRows.length; i++) {
                         if (userRows[i].classList.contains('msg-windowed')) hiddenRounds++;
                     }
@@ -353,6 +422,7 @@ function _renderMath(element) {
                 function updateContent(html) {
                     window._isStreaming = false;
                     _showAllMessages = false;
+                    _clearVirtualPool();
                     resetReasoning();
                     // 内容替换（切换对话/重新渲染）后默认贴底：
                     // _autoScroll 是跨对话全局状态，若用户上次在顶部（如点过 ⤴）
